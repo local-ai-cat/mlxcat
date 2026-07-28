@@ -116,14 +116,20 @@ struct RegexGrammarMaskSnapshot: GrammarMaskSnapshot {
     fileprivate let nfa: RegexNFA
     let currentStates: Set<Int>
 
-    func allowedTokenIDs() -> [Int] {
+    func allowedTokenIDs(isCancelled: @Sendable () -> Bool) -> [Int]? {
         var allowed: [Int] = []
         for (firstCharacter, bucket) in vocabulary.tokensByFirstCharacter {
+            if isCancelled() { return nil }
             guard nfa.isViable(nfa.advance(currentStates, over: String(firstCharacter))) else {
                 continue
             }
-            for token in bucket where accepts(token: token) {
-                allowed.append(token.id)
+            var checked = 0
+            for token in bucket {
+                checked += 1
+                if checked % 256 == 0, isCancelled() { return nil }
+                if accepts(token: token) {
+                    allowed.append(token.id)
+                }
             }
         }
         if isComplete {

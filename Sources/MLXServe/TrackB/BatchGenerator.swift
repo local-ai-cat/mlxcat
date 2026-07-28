@@ -357,6 +357,9 @@ public final class ContinuousBatchGenerator {
             jsonGrammarMatchers.removeAll()
             regexGrammarMatchers.removeAll()
             gbnfGrammarMatchers.removeAll()
+            jsonGrammarMasks.forEach { $0?.invalidate() }
+            regexGrammarMasks.forEach { $0?.invalidate() }
+            gbnfGrammarMasks.forEach { $0?.invalidate() }
             jsonGrammarMasks.removeAll()
             regexGrammarMasks.removeAll()
             gbnfGrammarMasks.removeAll()
@@ -380,6 +383,12 @@ public final class ContinuousBatchGenerator {
         jsonGrammarMatchers = rows.map { jsonGrammarMatchers[$0] }
         regexGrammarMatchers = rows.map { regexGrammarMatchers[$0] }
         gbnfGrammarMatchers = rows.map { gbnfGrammarMatchers[$0] }
+        let keptRows = Set(rows)
+        for row in jsonGrammarMasks.indices where !keptRows.contains(row) {
+            jsonGrammarMasks[row]?.invalidate()
+            regexGrammarMasks[row]?.invalidate()
+            gbnfGrammarMasks[row]?.invalidate()
+        }
         jsonGrammarMasks = rows.map { jsonGrammarMasks[$0] }
         regexGrammarMasks = rows.map { regexGrammarMasks[$0] }
         gbnfGrammarMasks = rows.map { gbnfGrammarMasks[$0] }
