@@ -18,12 +18,14 @@ public final class NativeModelEngine: @unchecked Sendable {
     private let prefixStore: SessionPrefixKVStore
     private let cacheCapabilities: ModelCacheCapabilities
     private let eosTokenIds: Set<Int>
+    private let maxContextTokens: Int?
     private let grammarVocabularyLock = NSLock()
     private var cachedGrammarVocabulary: JSONGrammarVocabulary?
 
     init(
         context: ModelContext,
         modelID: String,
+        maxContextTokens: Int?,
         maxConcurrentRequests: Int,
         cacheCapabilities: ModelCacheCapabilities,
         serializedDecode: Bool,
@@ -31,6 +33,7 @@ public final class NativeModelEngine: @unchecked Sendable {
     ) {
         self.context = context
         self.modelID = modelID
+        self.maxContextTokens = maxContextTokens
         self.parameters = GenerateParameters(maxTokens: 16, temperature: 0)
         self.cacheCapabilities = cacheCapabilities
         self.prefixStore = SessionPrefixKVStore(maxBytes: Self.prefixCacheMaxBytes())
@@ -53,6 +56,11 @@ public final class NativeModelEngine: @unchecked Sendable {
     func startChatCompletion(_ request: OpenAIChatRequest) async throws -> OpenAIChatStream {
         let input = try await context.processor.prepare(input: try userInput(from: request))
         let promptTokens = try countPromptTokens(input)
+        try Self.validateContextWindow(
+            promptTokens: promptTokens,
+            maxTokens: request.maxTokens,
+            contextWindow: maxContextTokens
+        )
         let uid = "chat-\(UUID().uuidString)"
         let mlxRequest = Request(
             uid: uid,
@@ -71,6 +79,11 @@ public final class NativeModelEngine: @unchecked Sendable {
             throw NativeModelEngineError.invalidPrompt
         }
         let tokenIDs = context.tokenizer.encode(text: prompt, addSpecialTokens: true)
+        try Self.validateContextWindow(
+            promptTokens: tokenIDs.count,
+            maxTokens: request.maxTokens,
+            contextWindow: maxContextTokens
+        )
         let input = LMInput(tokens: MLXArray(tokenIDs))
         let uid = "cmpl-\(UUID().uuidString)"
         let mlxRequest = Request(
@@ -97,6 +110,19 @@ public final class NativeModelEngine: @unchecked Sendable {
             throw NativeModelEngineError.invalidPrompt
         }
         return context.tokenizer.encode(text: prompt, addSpecialTokens: true).count
+    }
+
+    static func validateContextWindow(
+        promptTokens: Int,
+        maxTokens: Int,
+        contextWindow: Int?
+    ) throws {
+        guard let contextWindow, promptTokens + maxTokens > contextWindow else { return }
+        throw OpenAIHTTPError(
+            status: 400,
+            message: "This model's maximum context length is \(contextWindow) tokens, but the request requires \(promptTokens + maxTokens) tokens (\(promptTokens) prompt + \(maxTokens) completion).",
+            code: "context_length_exceeded"
+        )
     }
 
     func estimatedKVCacheBytes(promptTokens: Int, maxGeneratedTokens: Int) -> Int64 {
@@ -536,6 +562,7 @@ public struct NativeModelLoader: EnginePoolModelLoader {
             NativeModelEngine(
                 context: context,
                 modelID: id,
+                maxContextTokens: try? contextWindow(in: modelURL),
                 maxConcurrentRequests: maxConcurrentRequests,
                 cacheCapabilities: Self.cacheCapabilities(for: modelConfiguration),
                 serializedDecode: isVLM && Self.requiresSerializedDecode(modelType: modelType),
@@ -552,6 +579,22 @@ public struct NativeModelLoader: EnginePoolModelLoader {
         let configURL = modelURL.appending(component: "config.json")
         let configData = try Data(contentsOf: configURL)
         return try JSONDecoder.json5().decode(ModelKindConfiguration.self, from: configData)
+    }
+
+    func contextWindow(in modelURL: URL) throws -> Int? {
+        let configURL = modelURL.appending(component: "config.json")
+        let data = try Data(contentsOf: configURL)
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        let textConfig = object["text_config"] as? [String: Any]
+        let candidates = [
+            object["max_position_embeddings"],
+            object["max_sequence_length"],
+            object["model_max_length"],
+            textConfig?["max_position_embeddings"],
+            textConfig?["max_sequence_length"],
+            textConfig?["model_max_length"],
+        ]
+        return candidates.compactMap { ($0 as? NSNumber)?.intValue }.first { $0 > 0 }
     }
 
     func cacheCapabilities(in modelURL: URL) throws -> ModelCacheCapabilities {
