@@ -13,7 +13,10 @@ private let harmonyControlMarkers = harmonyTerminators + [
     "<|start|>",
 ]
 
-public func extractThinking(_ text: String) -> (reasoning: String, content: String) {
+public func extractThinking(
+    _ text: String,
+    startInThinking: Bool = false
+) -> (reasoning: String, content: String) {
     guard !text.isEmpty else { return ("", "") }
 
     let normalized = text
@@ -25,6 +28,16 @@ public func extractThinking(_ text: String) -> (reasoning: String, content: Stri
         return (
             harmony.reasoning.trimmingCharacters(in: .whitespacesAndNewlines),
             harmony.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+    }
+
+    if startInThinking {
+        var parser = ThinkingParser(startInThinking: true)
+        let delta = parser.feed(normalized)
+        let final = parser.finish()
+        return (
+            (delta.reasoning + final.reasoning).trimmingCharacters(in: .whitespacesAndNewlines),
+            (delta.content + final.content).trimmingCharacters(in: .whitespacesAndNewlines)
         )
     }
 
@@ -66,6 +79,7 @@ public func extractThinking(_ text: String) -> (reasoning: String, content: Stri
 
 public struct ThinkingParser: Sendable {
     private var inThinking: Bool
+    private let startedInThinking: Bool
     private var buffer = ""
     private var closeSeen = false
     private var thinkingAccumulated: [String] = []
@@ -77,6 +91,7 @@ public struct ThinkingParser: Sendable {
 
     public init(startInThinking: Bool = false) {
         self.inThinking = startInThinking
+        self.startedInThinking = startInThinking
     }
 
     public mutating func feed(_ text: String) -> (reasoning: String, content: String) {
@@ -141,7 +156,7 @@ public struct ThinkingParser: Sendable {
         let partial = buffer
         buffer = ""
 
-        if inThinking && !closeSeen && !contentEmitted && !thinkingAccumulated.isEmpty {
+        if inThinking && !startedInThinking && !closeSeen && !contentEmitted && !thinkingAccumulated.isEmpty {
             contentEmitted = true
             return ("", thinkingAccumulated.joined() + partial)
         }

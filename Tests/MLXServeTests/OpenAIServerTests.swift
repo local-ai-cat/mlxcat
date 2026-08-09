@@ -218,6 +218,7 @@ final class OpenAIServerTests: XCTestCase {
         XCTAssertTrue(request.stream)
         XCTAssertTrue(request.includeUsage)
         XCTAssertEqual(request.enableThinking, false)
+        XCTAssertFalse(request.startInThinking)
         XCTAssertEqual(request.thinkingBudget, 24)
         XCTAssertEqual(request.cacheSession, "body-session")
         XCTAssertEqual(request.chatTemplateKwargs?["reasoning_effort"], .string("low"))
@@ -531,6 +532,7 @@ final class OpenAIServerTests: XCTestCase {
         XCTAssertFalse(request.stream)
         XCTAssertFalse(request.includeUsage)
         XCTAssertNil(request.enableThinking)
+        XCTAssertFalse(request.startInThinking)
         XCTAssertNil(request.chatTemplateKwargs)
         XCTAssertNil(request.tools)
         XCTAssertNil(request.toolChoice)
@@ -644,6 +646,124 @@ final class OpenAIServerTests: XCTestCase {
         }
         XCTAssertNotNil(rebound, "port \(port) was not released after stop()")
         rebound?.stop()
+    }
+
+    func testBufferedChatUsesEnableThinkingWhenOpeningTagWasConsumed() async throws {
+        let backend = ThinkingResponseBackend(chunks: [
+            OpenAIChatChunk(text: "unfinished private reasoning", tokenID: 1, finishReason: "length"),
+        ])
+        let server = try OpenAIServer(port: 0, backend: backend)
+        try await server.start()
+        defer { server.stop() }
+
+        let response = try await postChat(
+            to: try XCTUnwrap(server.boundPort),
+            stream: false,
+            enableThinking: true
+        )
+        let body = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: response) as? [String: Any]
+        )
+        let choices = try XCTUnwrap(body["choices"] as? [[String: Any]])
+        let message = try XCTUnwrap(choices.first?["message"] as? [String: Any])
+
+        XCTAssertEqual(message["reasoning_content"] as? String, "unfinished private reasoning")
+        XCTAssertEqual(message["content"] as? String, "")
+    }
+
+    func testStreamingChatUsesEnableThinkingWhenOpeningTagWasConsumed() async throws {
+        let backend = ThinkingResponseBackend(chunks: [
+            OpenAIChatChunk(text: "private reasoning", tokenID: 1),
+            OpenAIChatChunk(text: "</think>answer", tokenID: 2, finishReason: "stop"),
+        ])
+        let server = try OpenAIServer(port: 0, backend: backend)
+        try await server.start()
+        defer { server.stop() }
+
+        let response = try await postChat(
+            to: try XCTUnwrap(server.boundPort),
+            stream: true,
+            enableThinking: true
+        )
+        let events = String(decoding: response, as: UTF8.self)
+            .split(separator: "\n")
+            .compactMap { line -> [String: Any]? in
+                guard line.hasPrefix("data: "), line != "data: [DONE]" else { return nil }
+                let payload = line.dropFirst("data: ".count)
+                guard let data = String(payload).data(using: .utf8) else { return nil }
+                return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            }
+        let deltas = events.compactMap { event -> [String: Any]? in
+            guard let choices = event["choices"] as? [[String: Any]] else { return nil }
+            return choices.first?["delta"] as? [String: Any]
+        }
+
+        XCTAssertEqual(
+            deltas.compactMap { $0["reasoning_content"] as? String }.joined(),
+            "private reasoning"
+        )
+        XCTAssertEqual(deltas.compactMap { $0["content"] as? String }.joined(), "answer")
+    }
+
+    func testBufferedChatKeepsPlainOutputAsContentWhenThinkingIsDisabled() async throws {
+        let backend = ThinkingResponseBackend(chunks: [
+            OpenAIChatChunk(text: "plain answer", tokenID: 1, finishReason: "stop"),
+        ])
+        let server = try OpenAIServer(port: 0, backend: backend)
+        try await server.start()
+        defer { server.stop() }
+
+        let response = try await postChat(
+            to: try XCTUnwrap(server.boundPort),
+            stream: false,
+            enableThinking: false
+        )
+        let body = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: response) as? [String: Any]
+        )
+        let choices = try XCTUnwrap(body["choices"] as? [[String: Any]])
+        let message = try XCTUnwrap(choices.first?["message"] as? [String: Any])
+
+        XCTAssertNil(message["reasoning_content"])
+        XCTAssertEqual(message["content"] as? String, "plain answer")
+    }
+
+    private func postChat(
+        to port: UInt16,
+        stream: Bool,
+        enableThinking: Bool
+    ) async throws -> Data {
+        let url = try XCTUnwrap(URL(string: "http://127.0.0.1:\(port)/v1/chat/completions"))
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "model": "test-model",
+            "messages": [["role": "user", "content": "test"]],
+            "max_tokens": 16,
+            "stream": stream,
+            "enable_thinking": enableThinking,
+        ])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+        return data
+    }
+}
+
+private struct ThinkingResponseBackend: OpenAIChatBackend {
+    let chunks: [OpenAIChatChunk]
+    let models = [OpenAIModelInfo(id: "test-model")]
+
+    func startChatCompletion(_ request: OpenAIChatRequest) async throws -> OpenAIChatStream {
+        OpenAIChatStream(
+            promptTokens: 1,
+            chunks: AsyncThrowingStream { continuation in
+                for chunk in chunks {
+                    continuation.yield(chunk)
+                }
+                continuation.finish()
+            }
+        )
     }
 }
 

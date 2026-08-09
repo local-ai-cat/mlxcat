@@ -64,10 +64,13 @@ let gemma4CallMarker = "call:"
 /// - Parameter includeToolCalls: when `false` (tools not requested), tool
 ///   extraction is skipped and the result mirrors a plain `extractThinking`
 ///   split.
+/// - Parameter startInThinking: begin in the reasoning channel when the chat
+///   template consumed the opening `<think>` marker.
 public func parseModelOutput(
     _ text: String,
     model: String,
     includeToolCalls: Bool = true,
+    startInThinking: Bool = false,
     idGenerator: @escaping () -> String = defaultToolCallID
 ) -> ModelOutputParseResult {
     let family = toolCallModelFamily(forModel: model, output: text)
@@ -76,7 +79,7 @@ public func parseModelOutput(
         return parseHarmonyOutput(text, includeToolCalls: includeToolCalls, idGenerator: idGenerator)
     }
 
-    let extracted = extractThinking(text)
+    let extracted = extractThinking(text, startInThinking: startInThinking)
     guard includeToolCalls else {
         return ModelOutputParseResult(reasoning: extracted.reasoning, content: extracted.content, toolCalls: [])
     }

@@ -125,4 +125,26 @@ final class ThinkingParserTests: XCTestCase {
         XCTAssertEqual(final.reasoning, "")
         XCTAssertEqual(final.content, "unfinished")
     }
+
+    func testStreamingParserKeepsExternallyStartedUnfinishedThinkingOutOfContent() {
+        var parser = ThinkingParser(startInThinking: true)
+
+        let first = parser.feed("unfinished reasoning")
+        let final = parser.finish()
+
+        XCTAssertEqual(first.reasoning, "unfinished reasoning")
+        XCTAssertEqual(first.content, "")
+        XCTAssertEqual(final.reasoning, "")
+        XCTAssertEqual(final.content, "")
+    }
+
+    func testExtractThinkingSupportsConsumedOpeningTag() {
+        let result = extractThinking(
+            "reasoning</think>answer",
+            startInThinking: true
+        )
+
+        XCTAssertEqual(result.reasoning, "reasoning")
+        XCTAssertEqual(result.content, "answer")
+    }
 }

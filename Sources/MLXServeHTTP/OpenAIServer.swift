@@ -190,6 +190,10 @@ public struct OpenAIChatStream: Sendable {
 }
 
 public extension OpenAIChatRequest {
+    internal var startInThinking: Bool {
+        enableThinking ?? (thinkingBudget != nil)
+    }
+
     func withCacheSession(_ cacheSession: String?) -> OpenAIChatRequest {
         OpenAIChatRequest(
             model: model,
@@ -652,7 +656,7 @@ public final class OpenAIServer: @unchecked Sendable {
         // Stop matching runs on raw decoded model text before thinking tags are split,
         // matching omlx's output_text-level stop behavior.
         var stopMatcher = StreamingStopSequenceMatcher(stopSequences: request.stop)
-        var thinkingParser = ThinkingParser()
+        var thinkingParser = ThinkingParser(startInThinking: request.startInThinking)
         var stoppedByTextStop = false
         let header = "HTTP/1.1 200 OK\r\n"
             + "Content-Type: text/event-stream\r\n"
@@ -871,7 +875,11 @@ public final class OpenAIServer: @unchecked Sendable {
             }
         }
 
-        let result = parseModelOutput(text, model: request.model)
+        let result = parseModelOutput(
+            text,
+            model: request.model,
+            startInThinking: request.startInThinking
+        )
         let parsed = ToolCallParseResult(content: result.content, toolCalls: result.toolCalls)
         if parsed.toolCalls.isEmpty {
             try await sendParserDelta(
@@ -1014,7 +1022,8 @@ public final class OpenAIServer: @unchecked Sendable {
         let result = parseModelOutput(
             text,
             model: request.model,
-            includeToolCalls: toolsRequested(request)
+            includeToolCalls: toolsRequested(request),
+            startInThinking: request.startInThinking
         )
         let parsed = ToolCallParseResult(content: result.content, toolCalls: result.toolCalls)
         let message = buildAssistantMessageWithToolCalls(
