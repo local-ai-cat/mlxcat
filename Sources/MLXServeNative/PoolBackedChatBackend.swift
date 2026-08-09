@@ -261,8 +261,16 @@ where Loader.Engine == NativeModelEngine {
         return OpenAIHTTPError(
             status: poolError.httpStatus,
             message: poolError.message,
-            retryAfterSeconds: poolError.retryAfterSeconds
+            retryAfterSeconds: poolError.retryAfterSeconds,
+            code: poolError.modelNotFoundCode
         )
+    }
+}
+
+private extension EnginePoolError {
+    var modelNotFoundCode: String? {
+        if case .modelNotFound = self { return "model_not_found" }
+        return nil
     }
 }
 

@@ -1297,7 +1297,7 @@ private func errorResponse(for error: Error) -> HTTPJSONResponse {
     }
     return HTTPJSONResponse(
         status: httpError.status,
-        body: openAIErrorBody(message: httpError.message, status: httpError.status),
+        body: openAIErrorBody(message: httpError.message, status: httpError.status, code: httpError.code),
         headers: headers
     )
 }

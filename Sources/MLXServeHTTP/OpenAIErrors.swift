@@ -4,11 +4,13 @@ public struct OpenAIHTTPError: Error, CustomStringConvertible, Sendable, Equatab
     public let status: Int
     public let message: String
     public let retryAfterSeconds: Int?
+    public let code: String?
 
-    public init(status: Int, message: String, retryAfterSeconds: Int? = nil) {
+    public init(status: Int, message: String, retryAfterSeconds: Int? = nil, code: String? = nil) {
         self.status = status
         self.message = message
         self.retryAfterSeconds = retryAfterSeconds
+        self.code = code
     }
 
     public var description: String {
@@ -21,13 +23,13 @@ public struct OpenAIErrorResponse: Sendable, Equatable {
     public let body: [String: String?]
     public let retryAfterSeconds: Int?
 
-    public init(status: Int, message: String, retryAfterSeconds: Int? = nil) {
+    public init(status: Int, message: String, retryAfterSeconds: Int? = nil, code: String? = nil) {
         self.status = status
         self.body = [
             "message": message,
             "type": openAIErrorType(status: status),
             "param": nil,
-            "code": nil,
+            "code": code,
         ]
         self.retryAfterSeconds = retryAfterSeconds
     }
@@ -36,9 +38,10 @@ public struct OpenAIErrorResponse: Sendable, Equatable {
 public func openAIErrorResponse(
     message: String,
     status: Int,
-    retryAfterSeconds: Int? = nil
+    retryAfterSeconds: Int? = nil,
+    code: String? = nil
 ) -> OpenAIErrorResponse {
-    OpenAIErrorResponse(status: status, message: message, retryAfterSeconds: retryAfterSeconds)
+    OpenAIErrorResponse(status: status, message: message, retryAfterSeconds: retryAfterSeconds, code: code)
 }
 
 public func openAIErrorBody(
