@@ -79,6 +79,22 @@ final class ToolCallParserTests: XCTestCase {
         ])
     }
 
+    func testBareLlamaJSONObjectPreservesParametersAlias() {
+        let result = parseToolCalls(
+            from: #"{"name":"get_weather","parameters":{"city":"London","unit":"celsius"}}"#,
+            idGenerator: idGenerator()
+        )
+
+        XCTAssertEqual(result.content, "")
+        XCTAssertEqual(result.toolCalls, [
+            ParsedToolCall(
+                id: "call_0",
+                name: "get_weather",
+                arguments: #"{"city":"London","unit":"celsius"}"#
+            )
+        ])
+    }
+
     func testBareJSONArray() {
         let result = parseToolCalls(
             from: #"[{"name":"first","arguments":{"a":1}},{"name":"second","arguments":{"b":2}}]"#,

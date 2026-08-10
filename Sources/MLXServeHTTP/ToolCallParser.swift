@@ -255,7 +255,11 @@ private func parseToolCallPayload(from object: [String: Any]) -> ToolCallPayload
         return nil
     }
 
-    let arguments = argumentsJSONString(from: object["arguments"]) ?? "{}"
+    // Llama 3 emits the tool-input object under `parameters`, while the
+    // OpenAI/Hermes shape calls it `arguments`. Preserve either spelling in
+    // the broad bare-JSON parser; otherwise it claims the call before the
+    // Llama-specific fallback and silently replaces valid arguments with `{}`.
+    let arguments = argumentsJSONString(from: object["arguments"] ?? object["parameters"]) ?? "{}"
     return ToolCallPayload(name: name, arguments: arguments)
 }
 
