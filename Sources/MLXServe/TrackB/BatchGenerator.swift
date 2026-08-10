@@ -13,7 +13,7 @@ public struct SpeculativeDecodingConfiguration: Sendable, Equatable {
     public var minContextTokens: Int
 
     public init(
-        enabled: Bool = true,
+        enabled: Bool = false,
         maxProposalTokens: Int = 4,
         maxSuffixTokens: Int = 16,
         minContextTokens: Int = 8

@@ -87,6 +87,43 @@ final class SchedulerChunkedPrefillTests: XCTestCase {
         XCTAssertTrue(model.drainEvents().isEmpty)
     }
 
+    func testExactPrefixHitReevaluatesCompletePrompt() async throws {
+        let model = RecordingChunkedLanguageModel(vocabularySize: 16)
+        let store = SessionPrefixKVStore()
+        let engine = MLXServeEngine(
+            model: model,
+            parameters: GenerateParameters(maxTokens: 1, temperature: 0, prefillStepSize: 2),
+            maxConcurrentRequests: 1,
+            prefixStore: store
+        )
+        let input = tokenInput([10, 11, 12, 13])
+
+        _ = try await engine.generate([
+            Request(
+                uid: "first",
+                input: input,
+                maxTokens: 1,
+                sampling: SamplingParameters(temperature: 0),
+                cacheSession: "exact-prefix"
+            )
+        ])
+        _ = model.drainEvents()
+
+        _ = try await engine.generate([
+            Request(
+                uid: "second",
+                input: input,
+                maxTokens: 1,
+                sampling: SamplingParameters(temperature: 0),
+                cacheSession: "exact-prefix"
+            )
+        ])
+
+        XCTAssertEqual(model.drainEvents().map(\.shape), [[1, 4]])
+        XCTAssertEqual(store.stats.fetchHitCount, 1)
+        XCTAssertEqual(store.stats.releaseCount, 1)
+    }
+
     private func runSoloLongPrompt(parameters: GenerateParameters) async throws -> [Int] {
         let model = RecordingChunkedLanguageModel(vocabularySize: 16)
         let scheduler = Scheduler(
@@ -139,9 +176,11 @@ private final class RecordingChunkedLanguageModel: Module, LanguageModel {
         let sequence = input.tokens.shape.count > 1 ? input.tokens.dim(1) : 1
         cache?.forEach { layerCache in
             guard let simple = layerCache as? KVCacheSimple else { return }
+            let cachedSequence = simple.state.first?.dim(2) ?? 0
+            let totalSequence = cachedSequence + max(1, sequence)
             simple.state = [
-                MLXArray.zeros([batch, max(1, sequence), 1, 1]),
-                MLXArray.zeros([batch, max(1, sequence), 1, 1]),
+                MLXArray.zeros([batch, 1, totalSequence, 1]),
+                MLXArray.zeros([batch, 1, totalSequence, 1]),
             ]
         }
         return LMOutput(logits: MLXArray.zeros([batch, 1, vocabularySize]))

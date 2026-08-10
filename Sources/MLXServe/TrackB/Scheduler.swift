@@ -122,9 +122,14 @@ public actor Scheduler {
 
     public func step() throws -> [Response] {
         var processed = applyPendingCancellation()
-        processed.append(contentsOf: admitWaiting(allowPartialPrefill: !generator.isEmpty))
+        let generatorWasEmpty = generator.isEmpty
+        let admitted = admitWaiting(allowPartialPrefill: !generatorWasEmpty)
+        processed.append(contentsOf: admitted)
 
         guard !generator.isEmpty else { return processed }
+        if generatorWasEmpty, admitted.contains(where: { $0.token >= 0 }) {
+            return processed
+        }
 
         if pressurePolicy.shouldPreempt(pressureSnapshot()),
             preemptYoungestResumableRequest()
@@ -366,6 +371,8 @@ public actor Scheduler {
                 generatedTokensIncludedInPrompt: seededGeneratedTokens.count,
                 cachedTokenCount: 0
             )
+        } else {
+            storeCompletedAdmissionPrefix(row, request: request)
         }
 
         guard let initialTokenID else { return nil }
@@ -388,18 +395,27 @@ public actor Scheduler {
         let stepBudget: Int = allowPartialPrefill ? prefillStep : Int.max
         var remainingBudget = stepBudget
         while admission.nextPrefillIndex < admission.prefillRange.upperBound, remainingBudget > 0 {
-            let chunkLimit: Int = allowPartialPrefill
-                ? min(prefillStep, remainingBudget)
-                : prefillStep
-            let end = min(
-                admission.nextPrefillIndex + chunkLimit,
-                admission.prefillRange.upperBound
-            )
+            let end: Int
+            if allowPartialPrefill {
+                let chunkLimit = min(prefillStep, remainingBudget)
+                end = min(
+                    admission.nextPrefillIndex + chunkLimit,
+                    admission.prefillRange.upperBound
+                )
+            } else {
+                end = admission.prefillRange.upperBound
+            }
             let input = LMInput.Text(
                 tokens: admission.promptTokensArray[admission.nextPrefillIndex ..< end]
             )
             let output = model(input[text: .newAxis], cache: admission.cache, state: admission.state)
             admission.state = output.state
+            if end == admission.prefillRange.upperBound {
+                admission.initialGeneratedToken = sampledToken(
+                    from: output.logits,
+                    sampling: admission.sampling
+                )
+            }
             asyncEval(admission.cache)
             remainingBudget -= end - admission.nextPrefillIndex
             admission.nextPrefillIndex = end
@@ -411,12 +427,15 @@ public actor Scheduler {
         }
 
         eval(admission.cache)
+        guard let initialGeneratedToken = admission.initialGeneratedToken else {
+            preconditionFailure("completed prompt prefill without an initial generated token")
+        }
         return PreparedBatchRow(
             cache: admission.cache,
-            lastToken: admission.promptTokensArray[admission.promptTokens.count - 1],
+            lastToken: initialGeneratedToken.token,
             promptTokens: admission.storedPromptTokens,
             prefixHit: admission.prefixHit,
-            initialGeneratedToken: nil
+            initialGeneratedToken: initialGeneratedToken
         )
     }
 
@@ -477,6 +496,17 @@ public actor Scheduler {
             let prefixStore,
             let hit = prefixStore.fetch(tokens: promptTokens, sessionKey: request.cacheSession)
         {
+            if hit.matchedTokenCount == promptTokens.count {
+                prefixStore.release(hit)
+                return prefillMissRow(
+                    request: request,
+                    sampling: sampling,
+                    promptTokens: promptTokens,
+                    promptTokensArray: promptTokensArray,
+                    storedPromptTokens: promptTokens,
+                    rowCache: rowCache
+                )
+            }
             do {
                 let serialized = try prefixStore.reconstructCache(from: hit)
                 let reconstructedCache = try serialized.map {
@@ -519,19 +549,6 @@ public actor Scheduler {
             throw SchedulerError.invalidPrefixHit
         }
 
-        if matched == promptTokens.count {
-            for layerCache in reconstructedCache {
-                _ = layerCache.trim(1)
-            }
-            return .ready(PreparedBatchRow(
-                cache: reconstructedCache,
-                lastToken: promptTokensArray[promptTokens.count - 1],
-                promptTokens: promptTokens,
-                prefixHit: hit,
-                initialGeneratedToken: nil
-            ))
-        }
-
         return .pending(AdmissionInProgress(
             request: request,
             sampling: sampling,
@@ -540,9 +557,10 @@ public actor Scheduler {
             promptTokensArray: promptTokensArray,
             storedPromptTokens: promptTokens,
             prefixHit: hit,
-            prefillRange: matched ..< (promptTokens.count - 1),
+            prefillRange: matched ..< promptTokens.count,
             nextPrefillIndex: matched,
-            state: nil
+            state: nil,
+            initialGeneratedToken: nil
         ))
     }
 
@@ -562,9 +580,10 @@ public actor Scheduler {
             promptTokensArray: promptTokensArray,
             storedPromptTokens: storedPromptTokens,
             prefixHit: nil,
-            prefillRange: 0 ..< (promptTokens.count - 1),
+            prefillRange: 0 ..< promptTokens.count,
             nextPrefillIndex: 0,
-            state: nil
+            state: nil,
+            initialGeneratedToken: nil
         ))
     }
 
@@ -578,6 +597,32 @@ public actor Scheduler {
                 metaState: $0.metaState,
                 className: "KVCacheSimple"
             )
+        }
+    }
+
+    private func storeCompletedAdmissionPrefix(_ row: PreparedBatchRow, request: Request) {
+        guard prefixCacheEnabled,
+            let prefixStore,
+            !row.promptTokens.isEmpty
+        else {
+            return
+        }
+
+        let snapshot = row.cache.map {
+            SerializedKVLayer(
+                state: $0.state,
+                metaState: $0.metaState,
+                className: "KVCacheSimple"
+            )
+        }
+        do {
+            try prefixStore.store(
+                tokens: row.promptTokens,
+                sessionKey: request.cacheSession,
+                cache: snapshot
+            )
+        } catch {
+            logCacheFailure("completed admission prefix cache store failed", error)
         }
     }
 
@@ -749,6 +794,7 @@ private struct AdmissionInProgress {
     let prefillRange: Range<Int>
     var nextPrefillIndex: Int
     var state: LMOutput.State?
+    var initialGeneratedToken: PreparedGeneratedToken?
 }
 
 private struct PreparedBatchRow {

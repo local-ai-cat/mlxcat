@@ -1,11 +1,76 @@
 import MLXHuggingFace
 import MLXLLM
 import MLXLMCommon
+import MLXServe
 @testable import MLXServeHTTP
 import Tokenizers
 import XCTest
 
 final class M1ParityIntegrationTests: XCTestCase {
+    func testQwenSchedulerMatchesUpstreamGreedyForFocusedPrompt() async throws {
+        try MLXMetalRuntime.requireAvailable()
+        let environment = ProcessInfo.processInfo.environment
+        let prompt: String
+        if let inlinePrompt = environment["MLXSERVE_PARITY_PROMPT"] {
+            prompt = inlinePrompt
+        } else if let promptPath = environment["MLXSERVE_PARITY_PROMPT_FILE"] {
+            prompt = try String(contentsOfFile: promptPath, encoding: .utf8)
+        } else {
+            throw XCTSkip("Set MLXSERVE_PARITY_PROMPT or MLXSERVE_PARITY_PROMPT_FILE to run the focused scheduler parity gate.")
+        }
+        let resolution = try qwenResolution()
+        let container = try await LLMModelFactory.shared.loadContainer(
+            from: resolution.url,
+            using: #huggingFaceTokenizerLoader()
+        )
+
+        try await container.perform { context in
+            let tokenCount = 128
+            let parameters = GenerateParameters(maxTokens: tokenCount, temperature: 0)
+            let input = try await context.processor.prepare(
+                input: UserInput(
+                    chat: [.user(prompt)],
+                    additionalContext: ["enable_thinking": false]
+                )
+            )
+            let legacyStream = try MLXLMCommon.generateTokens(
+                input: input,
+                parameters: parameters,
+                context: context
+            )
+            var legacy: [Int] = []
+            for await event in legacyStream {
+                if case .token(let tokenID) = event {
+                    legacy.append(tokenID)
+                }
+            }
+            let engine = MLXServeEngine(
+                model: context.model,
+                parameters: parameters,
+                maxConcurrentRequests: 1
+            )
+            var eosTokenIds = context.configuration.eosTokenIds
+            if let tokenizerEosTokenId = context.tokenizer.eosTokenId {
+                eosTokenIds.insert(tokenizerEosTokenId)
+            }
+            let generated = try await engine.generate([
+                Request(
+                    uid: "focused-mmlu",
+                    input: input,
+                    maxTokens: tokenCount,
+                    sampling: SamplingParameters(temperature: 0),
+                    eosTokenIds: eosTokenIds
+                )
+            ])["focused-mmlu", default: []]
+
+            var schedulerTokens = generated
+            if let lastToken = schedulerTokens.last, eosTokenIds.contains(lastToken) {
+                schedulerTokens.removeLast()
+            }
+            XCTAssertEqual(schedulerTokens, legacy)
+        }
+    }
+
     func testQwenGeneratedOutputCanBeTruncatedByStopSequence() async throws {
         try MLXMetalRuntime.requireAvailable()
         let resolution = try qwenResolution()
