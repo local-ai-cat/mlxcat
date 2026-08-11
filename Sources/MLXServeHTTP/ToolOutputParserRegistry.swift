@@ -12,6 +12,7 @@ import Foundation
 
 public enum ToolCallModelFamily: String, Sendable, Equatable {
     case generic
+    case atem
     case harmony
     case gemma4
     case deepseek
@@ -40,10 +41,12 @@ public func defaultToolCallID() -> String {
 /// locally-renamed checkpoint still routes correctly).
 public func toolCallModelFamily(forModel model: String, output text: String = "") -> ToolCallModelFamily {
     let id = model.lowercased()
+    if id.contains("muse") || id.contains("glimmer") { return .atem }
     if id.contains("gpt-oss") || id.contains("gpt_oss") { return .harmony }
     if id.contains("gemma-4") || id.contains("gemma4") { return .gemma4 }
     if id.contains("deepseek") { return .deepseek }
 
+    if containsATEMChannels(text) { return .atem }
     if text.contains(harmonyChannelToken), text.contains(harmonyFunctionsRecipientPrefix) {
         return .harmony
     }
@@ -78,6 +81,9 @@ public func parseModelOutput(
     if family == .harmony {
         return parseHarmonyOutput(text, includeToolCalls: includeToolCalls, idGenerator: idGenerator)
     }
+    if family == .atem {
+        return parseATEMOutput(text, includeToolCalls: includeToolCalls, idGenerator: idGenerator)
+    }
 
     let extracted = extractThinking(text, startInThinking: startInThinking)
     guard includeToolCalls else {
@@ -102,6 +108,8 @@ private func extractContentToolCalls(
     idGenerator: @escaping () -> String
 ) -> ExtractedToolCallInformation {
     switch family {
+    case .atem:
+        if let info = runParser("atem", content, idGenerator), info.toolsCalled { return info }
     case .gemma4:
         if let info = runParser("gemma4", content, idGenerator), info.toolsCalled { return info }
     case .deepseek:
@@ -163,10 +171,64 @@ public func streamingToolCallParse(
             content: info.toolsCalled ? (info.content ?? "") : bufferedContent,
             toolCalls: info.toolCalls
         )
-    case .harmony, .gemma4, .deepseek:
+    case .atem, .harmony, .gemma4, .deepseek:
         let result = parseModelOutput(rawText, model: model, includeToolCalls: true, idGenerator: idGenerator)
         return ToolCallParseResult(content: result.content, toolCalls: result.toolCalls)
     }
+}
+
+// MARK: - ATEM (Muse) channel walk
+
+private func parseATEMOutput(
+    _ text: String,
+    includeToolCalls: Bool,
+    idGenerator: @escaping () -> String
+) -> ModelOutputParseResult {
+    var reasoning = ""
+    var content = ""
+    var toolCalls: [ParsedToolCall] = []
+    let messages = parseATEMMessages(text)
+
+    if messages.isEmpty {
+        let extracted = extractThinking(text)
+        guard includeToolCalls else {
+            return ModelOutputParseResult(
+                reasoning: extracted.reasoning,
+                content: extracted.content,
+                toolCalls: []
+            )
+        }
+        let info = genericExtract(extracted.content, idGenerator: idGenerator)
+        return ModelOutputParseResult(
+            reasoning: extracted.reasoning,
+            content: info.toolsCalled ? (info.content ?? "") : extracted.content,
+            toolCalls: info.toolCalls
+        )
+    }
+
+    for message in messages {
+        switch message.recipient {
+        case "self":
+            reasoning += message.body
+        case "user":
+            content += message.body
+        default:
+            if includeToolCalls,
+                let info = runParser("atem", message.body, idGenerator),
+                info.toolsCalled
+            {
+                toolCalls.append(contentsOf: info.toolCalls)
+            } else {
+                reasoning += message.body
+            }
+        }
+    }
+
+    return ModelOutputParseResult(
+        reasoning: reasoning.trimmingCharacters(in: .whitespacesAndNewlines),
+        content: content.trimmingCharacters(in: .whitespacesAndNewlines),
+        toolCalls: toolCalls
+    )
 }
 
 // MARK: - Harmony (gpt-oss) channel walk

@@ -8,6 +8,7 @@ final class ToolOutputParserRegistryTests: XCTestCase {
     // MARK: Family selection
 
     func testFamilySelectionByModelID() {
+        XCTAssertEqual(toolCallModelFamily(forModel: "mlx-community/Muse-Glimmer-30B-4bit"), .atem)
         XCTAssertEqual(toolCallModelFamily(forModel: "gpt-oss-20b"), .harmony)
         XCTAssertEqual(toolCallModelFamily(forModel: "mlx-community/gemma-4-E4B-it"), .gemma4)
         XCTAssertEqual(toolCallModelFamily(forModel: "deepseek-r1-distill-qwen-7b"), .deepseek)
@@ -15,6 +16,9 @@ final class ToolOutputParserRegistryTests: XCTestCase {
     }
 
     func testFamilySelectionByOutputMarkersWhenIDUnknown() {
+        let atem = "to=self<|message|>thinking<|eom|><|start|>assistant to=user<|message|>answer<|eot|>"
+        XCTAssertEqual(toolCallModelFamily(forModel: "mystery-model", output: atem), .atem)
+
         let harmony = "<|channel|>commentary to=functions.f<|message|>{}<|call|>"
         XCTAssertEqual(toolCallModelFamily(forModel: "mystery-model", output: harmony), .harmony)
 
@@ -23,6 +27,46 @@ final class ToolOutputParserRegistryTests: XCTestCase {
 
         let gemma = "<|tool_call>call:f{}<tool_call|>"
         XCTAssertEqual(toolCallModelFamily(forModel: "mystery-model", output: gemma), .gemma4)
+    }
+
+    // MARK: ATEM (Muse)
+
+    func testATEMReasoningAndFinal() {
+        let text = "to=self<|message|>Think briefly.<|eom|>"
+            + "<|start|>assistant to=user<|message|>The answer.<|eot|>"
+        let result = parseModelOutput(text, model: "Muse-Glimmer-30B-4bit", idGenerator: idGenerator())
+
+        XCTAssertEqual(result.reasoning, "Think briefly.")
+        XCTAssertEqual(result.content, "The answer.")
+        XCTAssertTrue(result.toolCalls.isEmpty)
+    }
+
+    func testATEMPlainTextFallsBackToVisibleContent() {
+        let result = parseModelOutput("A plain answer.", model: "Muse-Glimmer-30B-4bit")
+
+        XCTAssertEqual(result.reasoning, "")
+        XCTAssertEqual(result.content, "A plain answer.")
+        XCTAssertTrue(result.toolCalls.isEmpty)
+    }
+
+    func testATEMToolCall() {
+        let text = "to=self<|message|>I should check.<|eom|>"
+            + "<|start|>assistant to=weather.get_weather<|message|>"
+            + "<atem:function_calls><atem:invoke name=\"weather.get_weather\">"
+            + "<atem:parameter name=\"city\">New York</atem:parameter>"
+            + "<atem:parameter name=\"days\">3</atem:parameter>"
+            + "</atem:invoke></atem:function_calls><|eom|>"
+        let result = parseModelOutput(text, model: "Muse-Glimmer-30B-4bit", idGenerator: idGenerator())
+
+        XCTAssertEqual(result.reasoning, "I should check.")
+        XCTAssertEqual(result.content, "")
+        XCTAssertEqual(result.toolCalls, [
+            ParsedToolCall(
+                id: "call_0",
+                name: "weather.get_weather",
+                arguments: #"{"city":"New York","days":3}"#
+            )
+        ])
     }
 
     // MARK: Harmony (gpt-oss)
@@ -185,6 +229,24 @@ final class ToolOutputParserRegistryTests: XCTestCase {
 
         XCTAssertEqual(parsed.toolCalls, [
             ParsedToolCall(id: "call_0", name: "ping", arguments: #"{"n":1}"#)
+        ])
+    }
+
+    func testStreamingATEMRecoversToolCallFromRawText() {
+        let raw = "to=self<|message|>check<|eom|>"
+            + "<|start|>assistant to=tools.ping<|message|>"
+            + "<atem:function_calls><atem:invoke name=\"tools.ping\">"
+            + "<atem:parameter name=\"n\">1</atem:parameter>"
+            + "</atem:invoke></atem:function_calls><|eom|>"
+        let parsed = streamingToolCallParse(
+            model: "Muse-Glimmer-30B-4bit",
+            rawText: raw,
+            bufferedContent: "",
+            idGenerator: idGenerator()
+        )
+
+        XCTAssertEqual(parsed.toolCalls, [
+            ParsedToolCall(id: "call_0", name: "tools.ping", arguments: #"{"n":1}"#)
         ])
     }
 

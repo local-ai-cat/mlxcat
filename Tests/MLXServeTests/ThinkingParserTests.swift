@@ -18,6 +18,24 @@ final class ThinkingParserTests: XCTestCase {
         XCTAssertEqual(result.content, "answer")
     }
 
+    func testExtractThinkingSplitsMuseATEMReasoningAndFinalChannels() {
+        let result = extractThinking(
+            "to=self<|message|>Hello, muse. Can you hear me?\nI should answer directly."
+                + "<|eom|><|start|>assistant to=user<|message|>Hey! Yes, I can hear you."
+                + "<|eot|>"
+        )
+
+        XCTAssertEqual(result.reasoning, "Hello, muse. Can you hear me?\nI should answer directly.")
+        XCTAssertEqual(result.content, "Hey! Yes, I can hear you.")
+    }
+
+    func testExtractThinkingSupportsMuseDirectFinalChannel() {
+        let result = extractThinking("to=user<|message|>A direct answer.<|eot|>")
+
+        XCTAssertEqual(result.reasoning, "")
+        XCTAssertEqual(result.content, "A direct answer.")
+    }
+
     func testExtractThinkingRoutesHarmonyCommentaryAndUnknownChannelsToReasoning() {
         let result = extractThinking(
             "<|channel|>commentary to=functions.lookup<|message|>{}<|call|><|start|>assistant<|channel|>invented<|message|>hidden<|end|><|start|>assistant<|channel|>final<|message|>answer<|return|>"
@@ -100,6 +118,39 @@ final class ThinkingParserTests: XCTestCase {
         XCTAssertEqual(fourth.content, "answer")
         XCTAssertEqual(final.reasoning, "")
         XCTAssertEqual(final.content, "")
+    }
+
+    func testStreamingParserSplitsMuseATEMChannelsAcrossChunks() {
+        var parser = ThinkingParser()
+
+        let first = parser.feed(" to=se")
+        let second = parser.feed("lf<|mess")
+        let third = parser.feed("age|>reasoning<|eo")
+        let fourth = parser.feed("m|><|start|>assistant to=user<|message|>answer")
+        let final = parser.feed("<|eot|>")
+
+        XCTAssertEqual(first.reasoning, "")
+        XCTAssertEqual(first.content, "")
+        XCTAssertEqual(second.reasoning, "")
+        XCTAssertEqual(second.content, "")
+        XCTAssertEqual(third.reasoning, "reasoning")
+        XCTAssertEqual(third.content, "")
+        XCTAssertEqual(fourth.reasoning, "")
+        XCTAssertEqual(fourth.content, "answer")
+        XCTAssertEqual(final.reasoning, "")
+        XCTAssertEqual(final.content, "")
+    }
+
+    func testStreamingParserBuffersMuseDirectFinalHeaderAcrossChunks() {
+        var parser = ThinkingParser()
+
+        let first = parser.feed("to=us")
+        let second = parser.feed("er<|mess")
+        let third = parser.feed("age|>answer<|eot|>")
+
+        XCTAssertEqual(first.content, "")
+        XCTAssertEqual(second.content, "")
+        XCTAssertEqual(third.content, "answer")
     }
 
     func testStreamingParserRoutesHarmonyCommentaryAndUnknownChannelsToReasoning() {

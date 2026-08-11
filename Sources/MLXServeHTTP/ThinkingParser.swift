@@ -12,6 +12,16 @@ private let harmonyControlMarkers = harmonyTerminators + [
     harmonyMessageMarker,
     "<|start|>",
 ]
+let atemMessageMarker = "<|message|>"
+let atemAssistantStart = "<|start|>assistant"
+let atemSelfHeader = "to=self" + atemMessageMarker
+let atemTerminators = ["<|eom|>", "<|eot|>", "<|end_of_text|>"]
+private let atemControlMarkers = atemTerminators + ["<|start|>"]
+
+struct ATEMChannelMessage: Equatable {
+    let recipient: String
+    let body: String
+}
 
 public func extractThinking(
     _ text: String,
@@ -28,6 +38,14 @@ public func extractThinking(
         return (
             harmony.reasoning.trimmingCharacters(in: .whitespacesAndNewlines),
             harmony.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+    }
+
+    if containsATEMChannels(normalized) {
+        let atem = parseATEMChannels(normalized)
+        return (
+            atem.reasoning.trimmingCharacters(in: .whitespacesAndNewlines),
+            atem.content.trimmingCharacters(in: .whitespacesAndNewlines)
         )
     }
 
@@ -88,6 +106,10 @@ public struct ThinkingParser: Sendable {
     private var harmonyRaw = ""
     private var harmonyReasoningEmittedCount = 0
     private var harmonyContentEmittedCount = 0
+    private var atemActive = false
+    private var atemRaw = ""
+    private var atemReasoningEmittedCount = 0
+    private var atemContentEmittedCount = 0
 
     public init(startInThinking: Bool = false) {
         self.inThinking = startInThinking
@@ -99,8 +121,15 @@ public struct ThinkingParser: Sendable {
 
         let text = buffer + text
         buffer = ""
+        if atemActive || Self.couldBeATEM(text) {
+            return feedATEM(text)
+        }
         if harmonyActive || Self.couldBeHarmony(text) {
             return feedHarmony(text)
+        }
+        if Self.couldBeStructuredProtocolPrefix(text) {
+            buffer = text
+            return ("", "")
         }
 
         var thinkingOut = ""
@@ -147,6 +176,12 @@ public struct ThinkingParser: Sendable {
     }
 
     public mutating func finish() -> (reasoning: String, content: String) {
+        if atemActive {
+            atemRaw += buffer
+            buffer = ""
+            return atemDelta(holdingPartialMarkers: false)
+        }
+
         if harmonyActive {
             let finalDelta = feedHarmony(buffer)
             buffer = ""
@@ -202,9 +237,142 @@ public struct ThinkingParser: Sendable {
         return (reasoningDelta, contentDelta)
     }
 
-    private static func couldBeHarmony(_ text: String) -> Bool {
-        text.contains("<|") || "<|".hasPrefix(text)
+    private mutating func feedATEM(_ text: String) -> (reasoning: String, content: String) {
+        atemActive = true
+        atemRaw += text
+        return atemDelta(holdingPartialMarkers: true)
     }
+
+    private mutating func atemDelta(holdingPartialMarkers: Bool) -> (reasoning: String, content: String) {
+        let parsed = parseATEMChannels(atemRaw, holdingPartialMarkers: holdingPartialMarkers)
+        let reasoningDelta = parsed.reasoning.dropFirstCharacters(atemReasoningEmittedCount)
+        let contentDelta = parsed.content.dropFirstCharacters(atemContentEmittedCount)
+        atemReasoningEmittedCount += reasoningDelta.count
+        atemContentEmittedCount += contentDelta.count
+        if !reasoningDelta.isEmpty {
+            thinkingAccumulated.append(reasoningDelta)
+        }
+        if !contentDelta.isEmpty {
+            contentEmitted = true
+        }
+        return (reasoningDelta, contentDelta)
+    }
+
+    private static func couldBeATEM(_ text: String) -> Bool {
+        containsATEMChannels(text)
+    }
+
+    private static func couldBeHarmony(_ text: String) -> Bool {
+        if text.contains(harmonyChannelMarker) || harmonyChannelMarker.hasPrefix(text) {
+            return true
+        }
+        return (1..<harmonyChannelMarker.count).contains { length in
+            text.hasSuffix(String(harmonyChannelMarker.prefix(length)))
+        }
+    }
+
+    private static func couldBeStructuredProtocolPrefix(_ text: String) -> Bool {
+        let candidate = text.drop(while: { $0.isWhitespace })
+        guard !candidate.isEmpty else { return false }
+        if atemAssistantStart.hasPrefix(candidate) {
+            return true
+        }
+        if candidate.hasPrefix(atemAssistantStart) {
+            let tail = candidate.dropFirst(atemAssistantStart.count).drop(while: { $0.isWhitespace })
+            return isATEMRecipientHeaderPrefix(tail)
+        }
+        return isATEMRecipientHeaderPrefix(candidate)
+    }
+
+    private static func isATEMRecipientHeaderPrefix(_ text: Substring) -> Bool {
+        if "to=".hasPrefix(text) {
+            return true
+        }
+        guard text.hasPrefix("to=") else { return false }
+        let recipientAndMarker = text.dropFirst("to=".count)
+        if let markerStart = recipientAndMarker.firstIndex(of: "<") {
+            return atemMessageMarker.hasPrefix(recipientAndMarker[markerStart...])
+        }
+        return recipientAndMarker.allSatisfy { !$0.isWhitespace }
+    }
+}
+
+func containsATEMChannels(_ text: String) -> Bool {
+    !text.contains(harmonyChannelMarker) && !parseATEMMessages(text).isEmpty
+}
+
+func parseATEMMessages(
+    _ text: String,
+    holdingPartialMarkers: Bool = false
+) -> [ATEMChannelMessage] {
+    var messages: [ATEMChannelMessage] = []
+    var searchStart = text.startIndex
+
+    while let messageRange = text.range(of: atemMessageMarker, range: searchStart..<text.endIndex) {
+        let header = String(text[searchStart..<messageRange.lowerBound])
+        guard let recipientRange = header.range(of: "to=", options: .backwards) else {
+            searchStart = messageRange.upperBound
+            continue
+        }
+        let recipientTail = header[recipientRange.upperBound...]
+        let recipient = recipientTail.prefix { !$0.isWhitespace && $0 != "<" }
+        guard !recipient.isEmpty else {
+            searchStart = messageRange.upperBound
+            continue
+        }
+
+        let bodyStart = messageRange.upperBound
+        let boundary = firstATEMBoundary(in: text, from: bodyStart)
+        let bodyEnd = boundary?.lowerBound
+            ?? (holdingPartialMarkers ? atemSafeBodyEnd(in: text, from: bodyStart) : text.endIndex)
+        messages.append(
+            ATEMChannelMessage(recipient: String(recipient), body: String(text[bodyStart..<bodyEnd]))
+        )
+
+        guard let boundary else { break }
+        searchStart = boundary.upperBound
+    }
+    return messages
+}
+
+private func parseATEMChannels(
+    _ text: String,
+    holdingPartialMarkers: Bool = false
+) -> (reasoning: String, content: String) {
+    var reasoning = ""
+    var content = ""
+    for message in parseATEMMessages(text, holdingPartialMarkers: holdingPartialMarkers) {
+        switch message.recipient {
+        case "self":
+            reasoning += message.body
+        case "user":
+            content += message.body
+        default:
+            reasoning += message.body
+        }
+    }
+    return (reasoning, content)
+}
+
+private func firstATEMBoundary(in text: String, from index: String.Index) -> Range<String.Index>? {
+    (atemTerminators + [atemAssistantStart]).compactMap { text[index...].range(of: $0) }
+        .min { $0.lowerBound < $1.lowerBound }
+}
+
+private func atemSafeBodyEnd(in text: String, from index: String.Index) -> String.Index {
+    guard index < text.endIndex else { return text.endIndex }
+    let body = text[index...]
+    for marker in atemControlMarkers {
+        let maxPrefixLength = min(marker.count - 1, body.count)
+        guard maxPrefixLength > 0 else { continue }
+        for length in stride(from: maxPrefixLength, through: 1, by: -1) {
+            let suffixStart = body.index(body.endIndex, offsetBy: -length)
+            if marker.hasPrefix(String(body[suffixStart...])) {
+                return suffixStart
+            }
+        }
+    }
+    return text.endIndex
 }
 
 private func parseHarmonyChannels(_ text: String) -> (reasoning: String, content: String) {

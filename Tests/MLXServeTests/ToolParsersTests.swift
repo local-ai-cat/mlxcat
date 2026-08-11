@@ -8,7 +8,7 @@ final class ToolParsersTests: XCTestCase {
     // MARK: Manager
 
     func testManagerRegistersAllFamilies() {
-        for name in ["hermes", "llama3_json", "pythonic", "gemma4", "deepseek"] {
+        for name in ["hermes", "llama3_json", "pythonic", "gemma4", "deepseek", "atem"] {
             XCTAssertNotNil(ToolParserManager.makeParser(named: name), "missing \(name)")
         }
         XCTAssertNil(ToolParserManager.makeParser(named: "nope"))

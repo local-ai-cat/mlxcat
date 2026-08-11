@@ -132,6 +132,7 @@ private final class ToolParserStore: @unchecked Sendable {
         "pythonic": PythonicToolParser.self,
         "gemma4": Gemma4ToolParser.self,
         "deepseek": DeepSeekToolParser.self,
+        "atem": ATEMToolParser.self,
     ]
 
     func register(_ name: String, _ type: ToolParser.Type) {

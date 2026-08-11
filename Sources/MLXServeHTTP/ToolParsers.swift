@@ -4,6 +4,65 @@ import Foundation
 // off its native marker syntax; selection is by family name in
 // `ToolParserManager`. See `ToolParser.swift` for the base + registry.
 
+// MARK: - ATEM / Muse (`<atem:function_calls>`)
+
+/// Meta Muse's ATEM XML protocol. Parameter bodies are JSON fragments when
+/// possible and literal strings otherwise, matching the native MLXLM parser.
+public final class ATEMToolParser: ToolParser {
+    public override func extractToolCalls(_ modelOutput: String) -> ExtractedToolCallInformation {
+        guard
+            let invokeRegex = try? NSRegularExpression(
+                pattern: #"<atem:invoke\b[^>]*?\bname=\"([^\"]+)\">(.*?)</atem:invoke>"#,
+                options: [.dotMatchesLineSeparators]
+            ),
+            let parameterRegex = try? NSRegularExpression(
+                pattern: #"<atem:parameter\b[^>]*?\bname=\"([^\"]+)\"[^>]*?>(.*?)</atem:parameter>"#,
+                options: [.dotMatchesLineSeparators]
+            )
+        else {
+            return .noTools(modelOutput)
+        }
+
+        let outputRange = NSRange(modelOutput.startIndex..., in: modelOutput)
+        let calls = invokeRegex.matches(in: modelOutput, range: outputRange).compactMap { match in
+            parseATEMInvocation(match, in: modelOutput, parameterRegex: parameterRegex)
+        }
+        guard !calls.isEmpty else { return .noTools(modelOutput) }
+        return ExtractedToolCallInformation(toolsCalled: true, toolCalls: calls, content: nil)
+    }
+
+    private func parseATEMInvocation(
+        _ match: NSTextCheckingResult,
+        in content: String,
+        parameterRegex: NSRegularExpression
+    ) -> ParsedToolCall? {
+        guard let nameRange = Range(match.range(at: 1), in: content),
+            let bodyRange = Range(match.range(at: 2), in: content)
+        else {
+            return nil
+        }
+
+        let body = String(content[bodyRange])
+        var arguments: [String: Any] = [:]
+        let bodySearchRange = NSRange(body.startIndex..., in: body)
+        for parameter in parameterRegex.matches(in: body, range: bodySearchRange) {
+            guard let parameterNameRange = Range(parameter.range(at: 1), in: body),
+                let valueRange = Range(parameter.range(at: 2), in: body)
+            else {
+                continue
+            }
+            let value = String(body[valueRange])
+            arguments[String(body[parameterNameRange])] = parseJSONFragmentValue(value) ?? value
+        }
+
+        return ParsedToolCall(
+            id: idGenerator(),
+            name: String(content[nameRange]),
+            arguments: serializeJSONObject(arguments)
+        )
+    }
+}
+
 // MARK: - Hermes / Qwen (`<tool_call>{json}</tool_call>`)
 
 /// Port of vLLM `Hermes2ProToolParser` (`hermes_tool_parser.py`). Buffered:
