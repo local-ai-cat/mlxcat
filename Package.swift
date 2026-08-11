@@ -42,15 +42,13 @@ let package = Package(
         )
     ],
     dependencies: [
-        // Pinned by revision, not tag: 3.31.4 is the newest upstream TAG but it
-        // predates the Gemma 4 loader fixes (#384/#390 build the KV-shared tail
-        // without k_proj/v_proj; #408 loads shards by index). Verified 2026-07-21
-        // that gemma-4-12B/E2B/E4B QAT all load and generate at this revision and
-        // fail to load before it. Repin to a tag once upstream cuts one that
-        // contains fd0f13b.
+        // Atlas fork of the app's fd0f13b baseline. This keeps the app's direct
+        // MLX runtime and mlxserve on one SwiftPM package identity while adding
+        // native Muse Glimmer VLM + ATEM support. Existing loaders retain the
+        // exact upstream baseline they were validated against.
         .package(
-            url: "https://github.com/ml-explore/mlx-swift-lm.git",
-            revision: "fd0f13bcab1f8af78a57f91fbf250a7dfde74c9b"
+            url: "https://github.com/atlas-open-sources/mlx-swift-lm.git",
+            revision: "5ec8c8c6b480453469bee013063af4be2816145a"
         ),
         .package(url: "https://github.com/ml-explore/mlx-swift", .upToNextMinor(from: "0.31.4")),
         // Same URL+version as the Local AI Chat app pins — one URL per package

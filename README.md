@@ -52,7 +52,7 @@ MLXSERVE_MODEL_DIR=/path/to/mlx-model swift run mlxserve-bench
 ```
 
 The package pins the `mlx-swift-lm` fork used by this branch at commit
-`1679b2555eb585200f8a1594e034251cf244b861`.
+`5ec8c8c6b480453469bee013063af4be2816145a`.
 
 ## License
 
