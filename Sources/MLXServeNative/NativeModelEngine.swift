@@ -601,7 +601,7 @@ public struct NativeModelLoader: EnginePoolModelLoader {
         try Self.cacheCapabilities(for: modelConfiguration(in: modelURL))
     }
 
-    private func isVLMModelDirectory(_ modelURL: URL, modelType: String) throws -> Bool {
+    func isVLMModelDirectory(_ modelURL: URL, modelType: String) throws -> Bool {
         if let processorClass = processorClass(in: modelURL),
             Self.vlmProcessorClasses.contains(processorClass)
         {
@@ -768,6 +768,7 @@ public struct NativeModelLoader: EnginePoolModelLoader {
     }
 
     private static let vlmModelTypes: Set<String> = [
+        "muse_glimmer",
         "paligemma",
         "qwen2_vl",
         "qwen2_5_vl",
@@ -801,6 +802,7 @@ public struct NativeModelLoader: EnginePoolModelLoader {
         "gemma4",
         "gemma4_unified",
         "mistral3",
+        "muse_glimmer",
         // GlmOcr builds scalar MRoPE position ids from cache.offset in
         // GlmOcr.swift:308, :356, and :383.
         "glm_ocr",
@@ -814,6 +816,7 @@ public struct NativeModelLoader: EnginePoolModelLoader {
     ]
 
     private static let vlmProcessorClasses: Set<String> = [
+        "MuseGlimmerProcessor",
         "PaliGemmaProcessor",
         "Qwen2VLProcessor",
         "Qwen2_5_VLProcessor",

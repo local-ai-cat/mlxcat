@@ -117,6 +117,16 @@ final class ModelCacheCapabilitiesTests: XCTestCase {
         XCTAssertEqual(profile.bytesPerToken, 256)
     }
 
+    func testNativeLoaderRecognizesMuseGlimmerAsVLM() throws {
+        let loader = NativeModelLoader(maxConcurrentRequests: 1)
+        let directory = try Self.modelDirectory(
+            configJSON: #"{"model_type":"muse_glimmer"}"#,
+            processorJSON: #"{"processor_class":"MuseGlimmerProcessor"}"#
+        )
+
+        XCTAssertTrue(try loader.isVLMModelDirectory(directory, modelType: "muse_glimmer"))
+    }
+
     private static func request(uid: String) -> Request {
         Request(
             uid: uid,
@@ -135,11 +145,14 @@ final class ModelCacheCapabilitiesTests: XCTestCase {
         return cache
     }
 
-    private static func modelDirectory(configJSON: String) throws -> URL {
+    private static func modelDirectory(configJSON: String, processorJSON: String? = nil) throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appending(component: "mlxserve-model-capabilities-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try Data(configJSON.utf8).write(to: directory.appending(component: "config.json"))
+        if let processorJSON {
+            try Data(processorJSON.utf8).write(to: directory.appending(component: "processor_config.json"))
+        }
         return directory
     }
 }

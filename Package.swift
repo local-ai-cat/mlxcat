@@ -48,7 +48,7 @@ let package = Package(
         // exact upstream baseline they were validated against.
         .package(
             url: "https://github.com/atlas-open-sources/mlx-swift-lm.git",
-            revision: "5ec8c8c6b480453469bee013063af4be2816145a"
+            revision: "ac22e979e8223fde195e5930962bf6d0ed9f3081"
         ),
         .package(url: "https://github.com/ml-explore/mlx-swift", .upToNextMinor(from: "0.31.4")),
         // Same URL+version as the Local AI Chat app pins — one URL per package
