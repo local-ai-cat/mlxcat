@@ -117,6 +117,23 @@ final class ModelCacheCapabilitiesTests: XCTestCase {
         XCTAssertEqual(profile.bytesPerToken, 256)
     }
 
+    func testNativeLoaderSerializesMeasuredBatchDecodeRegressions() {
+        for modelType in ["qwen2", "qwen3", "qwen3_moe"] {
+            XCTAssertTrue(
+                NativeModelLoader.usesSerializedDecode(modelType: modelType, isVLM: false),
+                modelType
+            )
+        }
+
+        for modelType in ["gemma4", "gpt_oss", "qwen3_5"] {
+            XCTAssertFalse(
+                NativeModelLoader.usesSerializedDecode(modelType: modelType, isVLM: false),
+                modelType
+            )
+        }
+        XCTAssertTrue(NativeModelLoader.usesSerializedDecode(modelType: "qwen3_vl", isVLM: true))
+    }
+
     private static func request(uid: String) -> Request {
         Request(
             uid: uid,

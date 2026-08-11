@@ -565,7 +565,7 @@ public struct NativeModelLoader: EnginePoolModelLoader {
                 maxContextTokens: try? contextWindow(in: modelURL),
                 maxConcurrentRequests: maxConcurrentRequests,
                 cacheCapabilities: Self.cacheCapabilities(for: modelConfiguration),
-                serializedDecode: isVLM && Self.requiresSerializedDecode(modelType: modelType),
+                serializedDecode: Self.usesSerializedDecode(modelType: modelType, isVLM: isVLM),
                 schedulerManagedTextPrefill: !isVLM
             )
         }
@@ -614,8 +614,10 @@ public struct NativeModelLoader: EnginePoolModelLoader {
         return hasProcessorConfiguration(in: modelURL)
     }
 
-    private static func requiresSerializedDecode(modelType: String) -> Bool {
-        scalarOffsetVLMModelTypes.contains(modelType.lowercased())
+    static func usesSerializedDecode(modelType: String, isVLM: Bool) -> Bool {
+        let normalizedModelType = modelType.lowercased()
+        let requiresScalarOffsets = isVLM && scalarOffsetVLMModelTypes.contains(normalizedModelType)
+        return requiresScalarOffsets || batchDecodeRegressedModelTypes.contains(normalizedModelType)
     }
 
     private static func cacheCapabilities(for configuration: ModelKindConfiguration) -> ModelCacheCapabilities {
@@ -804,6 +806,15 @@ public struct NativeModelLoader: EnginePoolModelLoader {
         // GlmOcr builds scalar MRoPE position ids from cache.offset in
         // GlmOcr.swift:308, :356, and :383.
         "glm_ocr",
+    ]
+
+    // Explicit-demand two-request benchmarks showed lower aggregate throughput
+    // for these model families under batched decode than under serialized decode.
+    // Keep batching enabled for model families where it measurably helps.
+    private static let batchDecodeRegressedModelTypes: Set<String> = [
+        "qwen2",
+        "qwen3",
+        "qwen3_moe",
     ]
 
     private static let windowedKVModelTypes: Set<String> = [
