@@ -160,6 +160,25 @@ public final class ContinuousBatchGenerator {
     private var state: LMOutput.State?
     private var speculativeStats = SpeculativeDecodingStats()
 
+    // Explicit-demand decode-phase timing (MLXSERVE_DECODE_PHASE_TIMING=1):
+    // separates graph build / token wait / launch enqueue / bookkeeping per
+    // pipelined step so a width-1 deficit can be localized without Instruments.
+    private static let phaseTimingEnabled =
+        ProcessInfo.processInfo.environment["MLXSERVE_DECODE_PHASE_TIMING"] == "1"
+    private var phaseBuildNs: UInt64 = 0
+    private var phaseWaitNs: UInt64 = 0
+    private var phaseLaunchNs: UInt64 = 0
+    private var phaseEmitNs: UInt64 = 0
+    private var phaseSteps: UInt64 = 0
+
+    public var phaseTimingSummary: String? {
+        guard Self.phaseTimingEnabled, phaseSteps > 0 else { return nil }
+        let n = Double(phaseSteps)
+        func ms(_ v: UInt64) -> String { String(format: "%.3fms", Double(v) / n / 1_000_000) }
+        return "decode phases over \(phaseSteps) steps: build \(ms(phaseBuildNs)), "
+            + "wait \(ms(phaseWaitNs)), launch \(ms(phaseLaunchNs)), emit \(ms(phaseEmitNs))"
+    }
+
     public init(
         model: any LanguageModel,
         parameters: GenerateParameters,
@@ -511,8 +530,11 @@ public final class ContinuousBatchGenerator {
     /// adopted until the EOS/limit check passes; a discarded build costs one
     /// graph construction per finished request.
     private func emitPendingStep() -> [Response] {
+        let t0 = Self.phaseTimingEnabled ? DispatchTime.now().uptimeNanoseconds : 0
         let prebuilt = prebuildNextStepIfSafe()
+        let t1 = Self.phaseTimingEnabled ? DispatchTime.now().uptimeNanoseconds : 0
         let tokenIds = currentTokens.asArray(Int.self)
+        let t2 = Self.phaseTimingEnabled ? DispatchTime.now().uptimeNanoseconds : 0
         var responses: [Response] = []
         responses.reserveCapacity(rowUIDs.count)
         for row in rowUIDs.indices where pendingEmission[row] {
@@ -522,7 +544,16 @@ public final class ContinuousBatchGenerator {
         pendingEmission = Array(repeating: false, count: rowUIDs.count)
         if let prebuilt {
             if launchIsSafe(latestTokenIds: tokenIds) {
+                let t3 = Self.phaseTimingEnabled ? DispatchTime.now().uptimeNanoseconds : 0
                 asyncEval(prebuilt.tokens, prebuilt.logits)
+                if Self.phaseTimingEnabled {
+                    let t4 = DispatchTime.now().uptimeNanoseconds
+                    phaseBuildNs += t1 - t0
+                    phaseWaitNs += t2 - t1
+                    phaseEmitNs += t3 - t2
+                    phaseLaunchNs += t4 - t3
+                    phaseSteps += 1
+                }
                 state = prebuilt.state
                 currentTokens = prebuilt.tokens
                 pendingEmission = Array(repeating: true, count: rowUIDs.count)

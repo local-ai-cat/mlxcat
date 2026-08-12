@@ -63,6 +63,7 @@ final class Width1ThroughputTests: XCTestCase {
     private static func measure(context: ModelContext) async throws -> String {
         // A chat-sized prompt: long enough that per-token KV snapshot cost is
         // representative, short enough that prefill stays a small fraction.
+        var lastRawGenerator: ContinuousBatchGenerator?
         let prompt = Array(
             repeating: "The quick brown fox jumps over the lazy dog near the riverbank at dawn.",
             count: 12
@@ -110,6 +111,7 @@ final class Width1ThroughputTests: XCTestCase {
                 model: context.model,
                 parameters: GenerateParameters(maxTokens: 16, temperature: 0)
             )
+            lastRawGenerator = generator
             let started = DispatchTime.now().uptimeNanoseconds
             var count = 0
             var firstTokenAt = started
@@ -183,6 +185,11 @@ final class Width1ThroughputTests: XCTestCase {
             row("engine, no prefix store", bareSamples),
             row("engine, app prefix store", storeSamples),
             "prefix store: \(stats.storeCount) stores, \(stats.fetchHitCount) hits, \(stats.currentBytes) bytes in \(stats.slotCount) slots",
+        ]
+        if let phases = lastRawGenerator?.phaseTimingSummary {
+            lines.append("raw generator " + phases)
+        }
+        lines += [
         ]
         let legacyRate = median(iteratorSamples.map(\.decodeTokensPerSecond))
         let bareRate = median(bareSamples.map(\.decodeTokensPerSecond))
