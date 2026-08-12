@@ -553,10 +553,11 @@ public final class ContinuousBatchGenerator {
     /// token early: penalties/minTokens would see a history missing the
     /// pending token, and a discarded build would advance seeded RNG streams.
     /// Temperature-0 and unseeded filter-free sampling are history-free.
-    /// Restricted to `KVCacheSimple` layers: the discard path restores cache
-    /// state through the `state`/`metaState` setters, which are only
-    /// round-trip-safe for the simple cache — and the width-1 single-request
-    /// path this exists for always decodes on `KVCacheSimple`.
+    /// Restricted to cache layers whose one-step discard (`trim(1)`) is exact:
+    /// `KVCacheSimple` always, `RotatingKVCache` only while the built step
+    /// stays in the pre-rotation growth phase — a rotated ring overwrites its
+    /// oldest slot, which a trim cannot restore. Width ≥2 batches merge into
+    /// `BatchKVCache`/batch-state layouts and fall out of the gate naturally.
     private var canPrebuildNextStep: Bool {
         canPipelineDecode
             && randomStates.allSatisfy { $0 == nil }
@@ -565,7 +566,15 @@ public final class ContinuousBatchGenerator {
                     && sampler.minTokens == 0
                     && sampler.allowedSequences == nil
             }
-            && cache.allSatisfy { $0.kvCache is KVCacheSimple }
+            && cache.allSatisfy { Self.discardOneStepIsExact($0.kvCache) }
+    }
+
+    private static func discardOneStepIsExact(_ kvCache: any KVCache) -> Bool {
+        if let rotating = kvCache as? RotatingKVCache {
+            guard let maxSize = rotating.maxSize else { return false }
+            return rotating.offset + 1 < maxSize
+        }
+        return kvCache is KVCacheSimple
     }
 
     /// Build the next decode step against the LIVE cache handles while the
