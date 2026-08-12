@@ -41,6 +41,7 @@ final class Width1ThroughputTests: XCTestCase {
     private struct Sample {
         let decodeTokensPerSecond: Double
         let totalSeconds: Double
+        let firstTokenMilliseconds: Double
     }
 
     func test_width1EngineThroughputAgainstRawIterator() async throws {
@@ -176,7 +177,7 @@ final class Width1ThroughputTests: XCTestCase {
         var lines: [String] = [
             "",
             "width-1 throughput — prompt \(promptTokenCount) tokens, \(generatedTokens) generated, \(measuredRounds) interleaved rounds",
-            String(format: "%-28@ %12@ %20@", "variant", "median t/s", "min–max t/s"),
+            String(format: "%-28@ %12@ %20@ %12@", "variant", "median t/s", "min–max t/s", "ttft"),
             row("TokenIterator (legacy)", iteratorSamples),
             row("raw ContinuousBatchGenerator", rawSamples),
             row("engine, no prefix store", bareSamples),
@@ -207,18 +208,21 @@ final class Width1ThroughputTests: XCTestCase {
         let decodeTokens = max(0, count - 1)
         return Sample(
             decodeTokensPerSecond: decodeSeconds > 0 ? Double(decodeTokens) / decodeSeconds : 0,
-            totalSeconds: totalSeconds
+            totalSeconds: totalSeconds,
+            firstTokenMilliseconds: Double(firstTokenAt - started) / 1_000_000
         )
     }
 
     private static func row(_ label: String, _ samples: [Sample]) -> String {
         let rates = samples.map(\.decodeTokensPerSecond).sorted()
+        let ttfts = samples.map(\.firstTokenMilliseconds).sorted()
         return String(
-            format: "%-28@ %12.1f %11.1f–%.1f",
+            format: "%-28@ %12.1f %11.1f–%.1f %10.1fms",
             label,
             median(rates),
             rates.first ?? 0,
-            rates.last ?? 0
+            rates.last ?? 0,
+            median(ttfts)
         )
     }
 
