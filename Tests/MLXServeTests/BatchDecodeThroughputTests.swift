@@ -4,6 +4,8 @@ import MLXHuggingFace
 import MLXLLM
 import MLXLMCommon
 import MLXServe
+@testable import MLXServeHTTP
+@testable import MLXServeNative
 import Tokenizers
 import XCTest
 
@@ -187,6 +189,86 @@ final class BatchDecodeThroughputTests: XCTestCase {
             admission or the pump loop.
             """
         )
+    }
+
+    /// Third bisection point. `MLXServeEngine` scales 2.11x at two in flight, but
+    /// the shipped sidecar only manages 0.95x — and the socket layer is exonerated
+    /// (engine-reported and client-observed per-request rates agree within 1%).
+    /// The difference between those two is this layer: `PoolBackedChatBackend`
+    /// over `EnginePool`, including its lease/ticket admission.
+    ///
+    /// Scales here  -> the remaining suspect is prefill interleaving for skewed
+    ///                 arrivals, which this test does not reproduce (it starts
+    ///                 every request together).
+    /// Collapses here -> the lease/admission machinery owns the regression.
+    func test_poolBackedBackendConcurrencyScales() async throws {
+        guard let resolution = TestModelResolver.resolve() else {
+            throw XCTSkip("Set MLXSERVE_TEST_MODEL to measure pool-backed concurrency.")
+        }
+
+        let modelID = resolution.url.lastPathComponent
+        let pool = EnginePool(
+            models: [
+                modelID: DiscoveredModel(
+                    id: modelID,
+                    modelURL: resolution.url,
+                    estimatedSize: 2_000_000_000
+                )
+            ],
+            // 8 matches the shipped sidecar default, which is what the campaign drove.
+            loader: NativeModelLoader(maxConcurrentRequests: 8),
+            finalCeiling: 32_000_000_000
+        )
+        let backend = PoolBackedChatBackend(pool: pool, modelIDs: [modelID])
+
+        func request(_ prompt: String) -> OpenAIChatRequest {
+            OpenAIChatRequest(
+                model: modelID,
+                messages: [OpenAIChatMessage(role: "user", content: prompt)],
+                maxTokens: 128,
+                temperature: 0,
+                stream: true
+            )
+        }
+
+        func drain(_ prompt: String) async throws -> Int {
+            let stream = try await backend.startChatCompletion(request(prompt))
+            var tokens = 0
+            for try await _ in stream.chunks { tokens += 1 }
+            return tokens
+        }
+
+        _ = try await drain(Self.prompts[0])  // warm the pool + load the model
+
+        var rates: [Int: Double] = [:]
+        for width in [1, 2, 4] {
+            let started = DispatchTime.now().uptimeNanoseconds
+            var produced = 0
+            try await withThrowingTaskGroup(of: Int.self) { group in
+                for row in 0 ..< width {
+                    let prompt = Self.prompts[row % Self.prompts.count]
+                    group.addTask { try await drain(prompt) }
+                }
+                for try await tokens in group { produced += tokens }
+            }
+            let elapsed = Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000_000
+            rates[width] = Double(produced) / elapsed
+        }
+
+        let baseline = try XCTUnwrap(rates[1])
+        print("""
+
+            pool-backed backend concurrency
+              1 in flight   \(String(format: "%.1f", baseline)) tok/s
+              2 in flight   \(String(format: "%.1f", rates[2] ?? 0)) tok/s \
+            (\(String(format: "%.2f", (rates[2] ?? 0) / baseline))x)
+              4 in flight   \(String(format: "%.1f", rates[4] ?? 0)) tok/s \
+            (\(String(format: "%.2f", (rates[4] ?? 0) / baseline))x)
+            """)
+
+        // Reported, not asserted. This test exists to localize a known regression;
+        // failing it would only restate what the sidecar already demonstrates.
+        // The asserted guard is the decode-level one above.
     }
 
     private struct Measurement {
