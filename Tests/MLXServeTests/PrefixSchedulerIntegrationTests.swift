@@ -69,7 +69,13 @@ final class PrefixSchedulerIntegrationTests: XCTestCase {
         }
 
         XCTAssertEqual(stats.fetchHitCount, 1)
-        XCTAssertGreaterThanOrEqual(stats.storeCount, 2)
+        // Publishes are throttled: a maxTokens=2 request finishes on its only
+        // decode step, so the sole guaranteed store is the finish publish
+        // (request 2's stores are lease-blocked by its own hit). The fetch hit
+        // above is the actual reuse contract. This asserted >= 2 when every
+        // decode step published, which was a ~14% single-request throughput
+        // cost — see Scheduler.midGenerationPublishInterval.
+        XCTAssertGreaterThanOrEqual(stats.storeCount, 1)
         XCTAssertEqual(stats.clearCount, 0)
     }
 

@@ -175,7 +175,11 @@ public actor Scheduler {
 
         for uid in touchedUIDs where !finishedUIDs.contains(uid) {
             if var runningRequest = running[uid] {
-                publishAvailablePrefixBlocks(uid: uid, runningRequest: &runningRequest)
+                publishAvailablePrefixBlocks(
+                    uid: uid,
+                    runningRequest: &runningRequest,
+                    minimumNewTokens: Self.midGenerationPublishInterval
+                )
                 running[uid] = runningRequest
             }
         }
@@ -626,9 +630,19 @@ public actor Scheduler {
         }
     }
 
+    /// Snapshotting a row's KV cache is not free: `extractCache` slices every
+    /// layer and the stored copy holds live references to the KV arrays, which
+    /// blocks MLX buffer donation on the next in-place cache update. Publishing
+    /// on every decode step measured a ~14% single-request throughput loss, so
+    /// mid-generation publishes only fire once this many new tokens accumulate.
+    /// The first publish (prompt prefix) and the finish/preemption publishes
+    /// are exempt: callers pass `minimumNewTokens: 1` there.
+    static let midGenerationPublishInterval = 256
+
     private func publishAvailablePrefixBlocks(
         uid: String,
-        runningRequest: inout RunningRequest
+        runningRequest: inout RunningRequest,
+        minimumNewTokens: Int = 1
     ) {
         guard prefixCacheEnabled,
             let prefixStore,
@@ -644,7 +658,8 @@ public actor Scheduler {
             .dropFirst(runningRequest.generatedTokensIncludedInPrompt)
         let cachedGeneratedTokens = generatedTokensAfterPrompt.dropLast()
         let availableTokens = runningRequest.promptTokens + cachedGeneratedTokens
-        guard availableTokens.count > runningRequest.cachedTokenCount,
+        let requiredNewTokens = runningRequest.cachedTokenCount == 0 ? 1 : minimumNewTokens
+        guard availableTokens.count >= runningRequest.cachedTokenCount + requiredNewTokens,
             let snapshot = cacheSnapshot(uid: uid)
         else {
             return
