@@ -1,3 +1,4 @@
+import Foundation
 import MLX
 import MLXLMCommon
 
@@ -289,6 +290,9 @@ public final class ContinuousBatchGenerator {
         }
 
         rowUIDs.append(uid)
+        // Admission already returned this row's `lastToken` to the caller, so
+        // it joins the batch with nothing pending.
+        pendingEmission.append(false)
         samplers.append(sampling)
         randomStates.append(initialRandomState ?? Self.randomState(for: sampling.seed))
         let matcher = sampling.jsonGrammar?.makeMatcher()
@@ -345,13 +349,24 @@ public final class ContinuousBatchGenerator {
 
     public func extractCache(uid: String) -> [KVCacheSimple]? {
         guard let row = rowUIDs.firstIndex(of: uid) else { return nil }
-        return cache.map { $0.extract(row) }
+        let extracted = cache.map { $0.extract(row) }
+        // A launched-ahead step has already consumed this row's latest token,
+        // so the live cache is one position ahead of what callers expect (the
+        // synchronous-path invariant: "the current step's token is not part of
+        // the cache until the next decode call"). Trim the extracted copy back.
+        if row < pendingEmission.count, pendingEmission[row] {
+            for layer in extracted {
+                _ = layer.trim(1)
+            }
+        }
+        return extracted
     }
 
     public func filter(keeping rows: [Int]) {
         guard !rows.isEmpty else {
             cache.removeAll()
             rowUIDs.removeAll()
+            pendingEmission.removeAll()
             samplers.removeAll()
             randomStates.removeAll()
             jsonGrammarMatchers.removeAll()
@@ -378,6 +393,7 @@ public final class ContinuousBatchGenerator {
         let rowIndices = MLXArray(rows.map(Int32.init))
         currentTokens = currentTokens.take(rowIndices, axis: 0)
         rowUIDs = rows.map { rowUIDs[$0] }
+        pendingEmission = rows.map { pendingEmission[$0] }
         samplers = rows.map { samplers[$0] }
         randomStates = rows.map { randomStates[$0] }
         jsonGrammarMatchers = rows.map { jsonGrammarMatchers[$0] }
@@ -409,30 +425,100 @@ public final class ContinuousBatchGenerator {
         return decodeOneToken()
     }
 
-    private func decodeOneToken() -> [Response] {
-        guard !rowUIDs.isEmpty else { return [] }
+    /// Rows whose entry in `currentTokens` was computed by a launched-ahead
+    /// step and has not been returned to the caller yet. While any entry is
+    /// true, the row caches have already consumed that row's previous token,
+    /// so `extractCache` trims the extra position to keep scheduler-visible
+    /// snapshots identical to the synchronous path.
+    private var pendingEmission: [Bool] = []
 
+    /// Launch-ahead is only exact when sampling needs no CPU-side state that
+    /// could lag the launched step: grammar masks and thinking budgets prepare
+    /// between steps, and speculation manages `currentTokens` itself. Token
+    /// histories are safe — they are updated before the next step is sampled.
+    private var canPipelineDecode: Bool {
+        !speculativeDecoding.enabled
+            && jsonGrammarMatchers.allSatisfy { $0 == nil }
+            && regexGrammarMatchers.allSatisfy { $0 == nil }
+            && gbnfGrammarMatchers.allSatisfy { $0 == nil }
+            && thinkingBudgetStates.allSatisfy { $0 == nil }
+    }
+
+    private func decodeOneToken() -> [Response] {
+        if pendingEmission.contains(true) {
+            return emitPendingStep()
+        }
+
+        let (tokenIds, responses) = advanceStepSynchronously()
+        launchStepAheadIfSafe(latestTokenIds: tokenIds)
+        return responses
+    }
+
+    /// Build one decode step's graph: feed `currentTokens`, thread state, and
+    /// sample the next tokens. Purely lazy — callers decide how to evaluate.
+    private func computeNextTokens() -> MLXArray {
         let output = model(
             LMInput.Text(tokens: currentTokens[0..., .newAxis]),
             cache: cache.map(\.kvCache),
             state: state
         )
         state = output.state
-
         let logits = output.logits[0..., -1, 0...]
-        let nextTokens = batchedSample(from: logits) ?? sampleRows(from: logits)
+        return batchedSample(from: logits) ?? sampleRows(from: logits)
+    }
 
-        asyncEval(nextTokens)
-        eval(currentTokens, logits)
+    private func advanceStepSynchronously() -> ([Int], [Response]) {
+        // The per-step autoreleasepool mirrors the upstream TokenIterator: a
+        // forward pass produces hundreds of autoreleased MLX wrappers and this
+        // loop never reaches a pool boundary on its own.
+        let nextTokens = autoreleasepool { computeNextTokens() }
         currentTokens = nextTokens
+        pendingEmission = Array(repeating: false, count: rowUIDs.count)
 
         let tokenIds = nextTokens.asArray(Int.self)
         for row in generatedTokenHistory.indices {
             recordGeneratedToken(tokenIds[row], row: row)
         }
-        return rowUIDs.enumerated().map { row, uid in
+        let responses = rowUIDs.enumerated().map { row, uid in
             Response(uid: uid, token: tokenIds[row])
         }
+        return (tokenIds, responses)
+    }
+
+    /// Steady-state pipelined step: the tokens were computed by the previous
+    /// call's launch-ahead, so this usually returns without waiting on the GPU.
+    private func emitPendingStep() -> [Response] {
+        let tokenIds = currentTokens.asArray(Int.self)
+        var responses: [Response] = []
+        responses.reserveCapacity(rowUIDs.count)
+        for row in rowUIDs.indices where pendingEmission[row] {
+            recordGeneratedToken(tokenIds[row], row: row)
+            responses.append(Response(uid: rowUIDs[row], token: tokenIds[row]))
+        }
+        pendingEmission = Array(repeating: false, count: rowUIDs.count)
+        launchStepAheadIfSafe(latestTokenIds: tokenIds)
+        return responses
+    }
+
+    /// Start the next decode step before returning the current one, so the GPU
+    /// computes it while the caller streams tokens. Skipped when any row just
+    /// finished: feeding a finished row's stop token would advance the caches
+    /// past what the scheduler is about to snapshot and remove.
+    private func launchStepAheadIfSafe(latestTokenIds: [Int]) {
+        guard canPipelineDecode, !rowUIDs.isEmpty else { return }
+        for row in rowUIDs.indices {
+            if samplers[row].eosTokenIds.contains(latestTokenIds[row]) {
+                return
+            }
+            if let limit = maxGeneratedTokens[row], generatedTokenHistory[row].count >= limit {
+                return
+            }
+        }
+
+        let nextTokens = autoreleasepool { computeNextTokens() }
+        asyncEval(nextTokens)
+        currentTokens = nextTokens
+        pendingEmission = Array(repeating: true, count: rowUIDs.count)
     }
 
     private func batchedSample(from logits: MLXArray) -> MLXArray? {
