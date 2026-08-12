@@ -456,7 +456,12 @@ public final class ContinuousBatchGenerator {
 
     /// Build one decode step's graph: feed `currentTokens`, thread state, and
     /// sample the next tokens. Purely lazy — callers decide how to evaluate.
-    private func computeNextTokens() -> MLXArray {
+    /// The logits are returned so callers can keep marking them as an
+    /// evaluation output: that materialization boundary blocks kernel fusion
+    /// through the sampling ops, and removing it changes bf16 rounding enough
+    /// to flip greedy argmax at near-ties — breaking token-exactness against
+    /// the pre-pipelining engine.
+    private func computeNextTokens() -> (tokens: MLXArray, logits: MLXArray) {
         let output = model(
             LMInput.Text(tokens: currentTokens[0..., .newAxis]),
             cache: cache.map(\.kvCache),
@@ -464,14 +469,15 @@ public final class ContinuousBatchGenerator {
         )
         state = output.state
         let logits = output.logits[0..., -1, 0...]
-        return batchedSample(from: logits) ?? sampleRows(from: logits)
+        return (batchedSample(from: logits) ?? sampleRows(from: logits), logits)
     }
 
     private func advanceStepSynchronously() -> ([Int], [Response]) {
         // The per-step autoreleasepool mirrors the upstream TokenIterator: a
         // forward pass produces hundreds of autoreleased MLX wrappers and this
         // loop never reaches a pool boundary on its own.
-        let nextTokens = autoreleasepool { computeNextTokens() }
+        let (nextTokens, logits) = autoreleasepool { computeNextTokens() }
+        asyncEval(nextTokens, logits)
         currentTokens = nextTokens
         pendingEmission = Array(repeating: false, count: rowUIDs.count)
 
@@ -515,8 +521,8 @@ public final class ContinuousBatchGenerator {
             }
         }
 
-        let nextTokens = autoreleasepool { computeNextTokens() }
-        asyncEval(nextTokens)
+        let (nextTokens, logits) = autoreleasepool { computeNextTokens() }
+        asyncEval(nextTokens, logits)
         currentTokens = nextTokens
         pendingEmission = Array(repeating: true, count: rowUIDs.count)
     }
