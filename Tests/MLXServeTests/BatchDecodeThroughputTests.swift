@@ -78,15 +78,113 @@ final class BatchDecodeThroughputTests: XCTestCase {
         print(lines.joined(separator: "\n"))
 
         let baseline = try XCTUnwrap(measurements[1]).tokensPerSecond
-        let batched = try XCTUnwrap(measurements[2]).tokensPerSecond
+        let wide = try XCTUnwrap(measurements[4]).tokensPerSecond
+
+        // Asserted on batch 4, not batch 2, and with margin. Batch 2 is only ~1.5x
+        // on an idle machine, which is inside this host's noise: with a build
+        // running concurrently the very same code measured 0.91x at batch 2 while
+        // still managing 1.88x at batch 4. Guarding on the marginal comparison
+        // produces false alarms; guarding on the strong one still catches a real
+        // decode regression, which would flatten every batch size at once.
         XCTAssertGreaterThan(
-            batched,
-            baseline,
+            wide,
+            baseline * 1.5,
             """
-            Batch 2 produced \(String(format: "%.1f", batched)) tok/s against \
-            \(String(format: "%.1f", baseline)) tok/s at batch 1. Two rows share one \
-            forward pass, so aggregate throughput must exceed a single row unless the \
-            decode path itself is the bottleneck.
+            Batch 4 produced \(String(format: "%.1f", wide)) tok/s against \
+            \(String(format: "%.1f", baseline)) tok/s at batch 1 — under the 1.5x floor. \
+            Four rows share one forward pass, so this should be far above 1.0x unless \
+            batched decode has genuinely regressed. Re-check on an idle host before \
+            believing it: this measurement is load-sensitive.
+            """
+        )
+    }
+
+    /// Second bisection point. `BatchGenerator` scales (test above) but two
+    /// concurrent HTTP streams do not, so the loss is somewhere between them.
+    /// `MLXServeEngine` is the midpoint: it owns the scheduler, admission and the
+    /// pump loop, but no HTTP, SSE or sockets.
+    ///
+    /// Scales here  -> the loss is in the HTTP/SSE layer.
+    /// Collapses here -> the loss is in scheduler admission or the pump.
+    func test_schedulerLevelConcurrencyScales() async throws {
+        guard let resolution = TestModelResolver.resolve() else {
+            throw XCTSkip("Set MLXSERVE_TEST_MODEL to measure scheduler concurrency.")
+        }
+
+        let container = try await LLMModelFactory.shared.loadContainer(
+            from: resolution.url,
+            using: #huggingFaceTokenizerLoader()
+        )
+
+        let (single, concurrent) = try await container.perform { context in
+            let maxTokens = 128
+            let parameters = GenerateParameters(maxTokens: maxTokens, temperature: 0)
+            var inputs: [LMInput] = []
+            for prompt in Self.prompts.prefix(3) {
+                inputs.append(try await context.processor.prepare(input: UserInput(prompt: prompt)))
+            }
+
+            let engine = MLXServeEngine(
+                model: context.model,
+                parameters: parameters,
+                // Matches the shipped sidecar default, so this measures the same
+                // configuration the campaign drove over HTTP.
+                maxConcurrentRequests: 8
+            )
+
+            func request(_ uid: String, _ input: LMInput) -> Request {
+                Request(
+                    uid: uid,
+                    input: input,
+                    maxTokens: maxTokens,
+                    sampling: SamplingParameters(temperature: 0)
+                )
+            }
+
+            func count(_ stream: AsyncThrowingStream<Response, Error>) async throws -> Int {
+                var tokens = 0
+                for try await _ in stream { tokens += 1 }
+                return tokens
+            }
+
+            _ = try await count(engine.stream(request("warmup", inputs[0])))
+
+            var started = DispatchTime.now().uptimeNanoseconds
+            let singleTokens = try await count(engine.stream(request("solo", inputs[0])))
+            let singleElapsed = Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000_000
+
+            // Streams are created before the concurrent consumers: Request holds
+            // MLXArrays and is not Sendable, so building it inside an `async let`
+            // is a sending violation. The stream of Sendable responses is fine.
+            let firstStream = engine.stream(request("pair-a", inputs[1]))
+            let secondStream = engine.stream(request("pair-b", inputs[2]))
+
+            started = DispatchTime.now().uptimeNanoseconds
+            async let first = count(firstStream)
+            async let second = count(secondStream)
+            let pairTokens = try await first + second
+            let pairElapsed = Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000_000
+
+            return (Double(singleTokens) / singleElapsed, Double(pairTokens) / pairElapsed)
+        }
+
+        print("""
+
+            scheduler-level concurrency
+              one request      \(String(format: "%.1f", single)) tok/s
+              two in flight    \(String(format: "%.1f", concurrent)) tok/s \
+            (\(String(format: "%.2f", concurrent / single))x)
+            """)
+
+        XCTAssertGreaterThan(
+            concurrent,
+            single,
+            """
+            Two requests through MLXServeEngine produced \
+            \(String(format: "%.1f", concurrent)) tok/s against \
+            \(String(format: "%.1f", single)) tok/s for one. The decode loop scales at \
+            this batch size, so a collapse here localizes the defect to scheduler \
+            admission or the pump loop.
             """
         )
     }

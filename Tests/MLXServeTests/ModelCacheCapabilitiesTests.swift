@@ -117,6 +117,15 @@ final class ModelCacheCapabilitiesTests: XCTestCase {
         XCTAssertEqual(profile.bytesPerToken, 256)
     }
 
+    /// Pins the CURRENT policy, which is under review — see
+    /// `BatchDecodeThroughputTests`. The families below are serialized because
+    /// aggregate two-in-flight throughput measured *over HTTP* looked worse than
+    /// serial. Measuring the decode loop directly contradicts that: Qwen3-0.6B
+    /// (`qwen3`) scales 1.53x at batch 2 and 3.36x at batch 4, and the same
+    /// requests through `MLXServeEngine` scale 2.11x. The loss is above the
+    /// engine, so this allowlist is expected to be REVERTED rather than extended
+    /// once the serving-path defect is fixed. Do not add families to it on the
+    /// strength of an HTTP measurement alone.
     func testNativeLoaderSerializesMeasuredBatchDecodeRegressions() {
         for modelType in ["qwen2", "qwen3", "qwen3_moe"] {
             XCTAssertTrue(
@@ -125,12 +134,26 @@ final class ModelCacheCapabilitiesTests: XCTestCase {
             )
         }
 
-        for modelType in ["gemma4", "gpt_oss", "qwen3_5"] {
+        // These are the literal `model_type` strings from the config.json of the
+        // models the campaign actually benchmarked. "gemma4" alone was not one of
+        // them: gemma-4-12B-it-qat-4bit reports `gemma4_unified` (the e2b/e4b
+        // variants are the ones that report `gemma4`), so the original assertion
+        // never covered the Gemma the evidence came from.
+        for modelType in ["gemma4", "gemma4_unified", "gpt_oss", "qwen3_5"] {
             XCTAssertFalse(
                 NativeModelLoader.usesSerializedDecode(modelType: modelType, isVLM: false),
                 modelType
             )
         }
+
+        // Unmeasured families keep batching — the policy is opt-in, so anything
+        // new (e.g. muse_glimmer) defaults to batched rather than serialized.
+        XCTAssertFalse(
+            NativeModelLoader.usesSerializedDecode(modelType: "muse_glimmer", isVLM: false)
+        )
+
+        // The VLM scalar-offset rule is independent of the batch-decode allowlist
+        // and must survive its removal.
         XCTAssertTrue(NativeModelLoader.usesSerializedDecode(modelType: "qwen3_vl", isVLM: true))
     }
 
