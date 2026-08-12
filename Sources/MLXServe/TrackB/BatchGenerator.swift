@@ -461,22 +461,31 @@ public final class ContinuousBatchGenerator {
     /// through the sampling ops, and removing it changes bf16 rounding enough
     /// to flip greedy argmax at near-ties — breaking token-exactness against
     /// the pre-pipelining engine.
-    private func computeNextTokens() -> (tokens: MLXArray, logits: MLXArray) {
+    ///
+    /// The cache and model state are parameters (not `self` fields) so a
+    /// caller can build against shallow cache copies and adopt or discard the
+    /// step afterwards — see `prebuildNextStepIfSafe`.
+    private func computeNextTokens(
+        cache stepCache: [BatchLayerCache],
+        state stepState: LMOutput.State?
+    ) -> (tokens: MLXArray, logits: MLXArray, state: LMOutput.State?) {
         let output = model(
             LMInput.Text(tokens: currentTokens[0..., .newAxis]),
-            cache: cache.map(\.kvCache),
-            state: state
+            cache: stepCache.map(\.kvCache),
+            state: stepState
         )
-        state = output.state
         let logits = output.logits[0..., -1, 0...]
-        return (batchedSample(from: logits) ?? sampleRows(from: logits), logits)
+        return (batchedSample(from: logits) ?? sampleRows(from: logits), logits, output.state)
     }
 
     private func advanceStepSynchronously() -> ([Int], [Response]) {
         // The per-step autoreleasepool mirrors the upstream TokenIterator: a
         // forward pass produces hundreds of autoreleased MLX wrappers and this
         // loop never reaches a pool boundary on its own.
-        let (nextTokens, logits) = autoreleasepool { computeNextTokens() }
+        let (nextTokens, logits, nextState) = autoreleasepool {
+            computeNextTokens(cache: cache, state: state)
+        }
+        state = nextState
         asyncEval(nextTokens, logits)
         currentTokens = nextTokens
         pendingEmission = Array(repeating: false, count: rowUIDs.count)
@@ -493,7 +502,16 @@ public final class ContinuousBatchGenerator {
 
     /// Steady-state pipelined step: the tokens were computed by the previous
     /// call's launch-ahead, so this usually returns without waiting on the GPU.
+    ///
+    /// The next step's graph is BUILT before waiting on the in-flight step —
+    /// graph construction is per-layer CPU work that would otherwise happen
+    /// while the GPU sits idle after draining the in-flight step (the ordering
+    /// the upstream `TokenIterator` gets for free by never blocking before its
+    /// `step()` call). The build targets shallow cache copies, so nothing is
+    /// adopted until the EOS/limit check passes; a discarded build costs one
+    /// graph construction per finished request.
     private func emitPendingStep() -> [Response] {
+        let prebuilt = prebuildNextStepIfSafe()
         let tokenIds = currentTokens.asArray(Int.self)
         var responses: [Response] = []
         responses.reserveCapacity(rowUIDs.count)
@@ -502,8 +520,88 @@ public final class ContinuousBatchGenerator {
             responses.append(Response(uid: rowUIDs[row], token: tokenIds[row]))
         }
         pendingEmission = Array(repeating: false, count: rowUIDs.count)
+        if let prebuilt {
+            if launchIsSafe(latestTokenIds: tokenIds) {
+                asyncEval(prebuilt.tokens, prebuilt.logits)
+                state = prebuilt.state
+                currentTokens = prebuilt.tokens
+                pendingEmission = Array(repeating: true, count: rowUIDs.count)
+            } else {
+                // A row finished, so the built step must not happen. The build
+                // advanced each simple cache by one consumed position; trim it
+                // back so scheduler-visible snapshots (prefix publishing on
+                // finish) keep the synchronous-path invariant. The discarded
+                // graph is never evaluated — at width 1 a finished row removes
+                // the whole batch, so the trimmed cache never decodes again.
+                for layer in cache {
+                    _ = layer.kvCache.trim(1)
+                }
+            }
+            return responses
+        }
         launchStepAheadIfSafe(latestTokenIds: tokenIds)
         return responses
+    }
+
+    private struct PrebuiltStep {
+        let tokens: MLXArray
+        let logits: MLXArray
+        let state: LMOutput.State?
+    }
+
+    /// Sampling that reads per-row history or RNG state cannot be built one
+    /// token early: penalties/minTokens would see a history missing the
+    /// pending token, and a discarded build would advance seeded RNG streams.
+    /// Temperature-0 and unseeded filter-free sampling are history-free.
+    /// Restricted to `KVCacheSimple` layers: the discard path restores cache
+    /// state through the `state`/`metaState` setters, which are only
+    /// round-trip-safe for the simple cache — and the width-1 single-request
+    /// path this exists for always decodes on `KVCacheSimple`.
+    private var canPrebuildNextStep: Bool {
+        canPipelineDecode
+            && randomStates.allSatisfy { $0 == nil }
+            && samplers.allSatisfy { sampler in
+                !sampler.hasSamplingFiltersOrPenalties
+                    && sampler.minTokens == 0
+                    && sampler.allowedSequences == nil
+            }
+            && cache.allSatisfy { $0.kvCache is KVCacheSimple }
+    }
+
+    /// Build the next decode step against the LIVE cache handles while the
+    /// launched-ahead step is still on the GPU, so the graph-construction CPU
+    /// work overlaps the in-flight compute instead of serializing after it —
+    /// the ordering the upstream `TokenIterator` gets by never blocking before
+    /// its `step()` call. Building on the live handles keeps MLX buffer
+    /// donation intact (a shallow cache copy would pin a second reference to
+    /// every KV buffer and force copy-on-write in the slice assignment).
+    /// The pending `currentTokens` feed the graph as lazy handles — no
+    /// materialization is needed to build.
+    private func prebuildNextStepIfSafe() -> PrebuiltStep? {
+        guard canPrebuildNextStep, !rowUIDs.isEmpty else { return nil }
+        for row in rowUIDs.indices {
+            if let limit = maxGeneratedTokens[row],
+                generatedTokenHistory[row].count + 1 >= limit
+            {
+                return nil
+            }
+        }
+        let (tokens, logits, nextState) = autoreleasepool {
+            computeNextTokens(cache: cache, state: state)
+        }
+        return PrebuiltStep(tokens: tokens, logits: logits, state: nextState)
+    }
+
+    private func launchIsSafe(latestTokenIds: [Int]) -> Bool {
+        for row in rowUIDs.indices {
+            if samplers[row].eosTokenIds.contains(latestTokenIds[row]) {
+                return false
+            }
+            if let limit = maxGeneratedTokens[row], generatedTokenHistory[row].count >= limit {
+                return false
+            }
+        }
+        return true
     }
 
     /// Start the next decode step before returning the current one, so the GPU
@@ -511,17 +609,14 @@ public final class ContinuousBatchGenerator {
     /// finished: feeding a finished row's stop token would advance the caches
     /// past what the scheduler is about to snapshot and remove.
     private func launchStepAheadIfSafe(latestTokenIds: [Int]) {
-        guard canPipelineDecode, !rowUIDs.isEmpty else { return }
-        for row in rowUIDs.indices {
-            if samplers[row].eosTokenIds.contains(latestTokenIds[row]) {
-                return
-            }
-            if let limit = maxGeneratedTokens[row], generatedTokenHistory[row].count >= limit {
-                return
-            }
+        guard canPipelineDecode, !rowUIDs.isEmpty, launchIsSafe(latestTokenIds: latestTokenIds) else {
+            return
         }
 
-        let (nextTokens, logits) = autoreleasepool { computeNextTokens() }
+        let (nextTokens, logits, nextState) = autoreleasepool {
+            computeNextTokens(cache: cache, state: state)
+        }
+        state = nextState
         asyncEval(nextTokens, logits)
         currentTokens = nextTokens
         pendingEmission = Array(repeating: true, count: rowUIDs.count)
