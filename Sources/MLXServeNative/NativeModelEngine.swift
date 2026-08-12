@@ -180,9 +180,22 @@ public final class NativeModelEngine: @unchecked Sendable {
         input.text.tokens.size
     }
 
-    private static func prefixCacheMaxBytes() -> Int64 {
-        let raw = ProcessInfo.processInfo.environment["MLXSERVE_PREFIX_CACHE_MAX_BYTES"]
-        return raw.flatMap(Int64.init) ?? 0
+    /// Byte budget for retained prefix-KV snapshots. Unset, the store used to
+    /// run uncapped (`maxBytes: 0`) with up to 8 anonymous slots pinned — full
+    /// KV snapshots that reach GBs on large models. Default: 1/12th of
+    /// physical memory, clamped to [512 MB, 4 GB]. The env var still wins,
+    /// including an explicit `0` for the old uncapped behavior.
+    static func prefixCacheMaxBytes() -> Int64 {
+        if let raw = ProcessInfo.processInfo.environment["MLXSERVE_PREFIX_CACHE_MAX_BYTES"],
+            let explicit = Int64(raw)
+        {
+            return explicit
+        }
+        let physical = Int64(ProcessInfo.processInfo.physicalMemory)
+        let candidate = physical / 12
+        let minimumBytes: Int64 = 512 << 20
+        let maximumBytes: Int64 = 4 << 30
+        return min(max(candidate, minimumBytes), maximumBytes)
     }
 
     private func xtcSpecialTokens() -> [Int] {
