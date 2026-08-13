@@ -142,7 +142,7 @@ public actor Scheduler {
         var touchedUIDs: Set<String> = []
 
         for response in rawResponses {
-            guard var runningRequest = running[response.uid] else {
+            guard let runningRequest = running[response.uid] else {
                 droppedStaleResponseCount += 1
                 continue
             }
@@ -158,7 +158,6 @@ public actor Scheduler {
                 finishReason = nil
             }
 
-            running[response.uid] = runningRequest
             let processedResponse = Response(
                 uid: response.uid,
                 token: response.token,
@@ -174,22 +173,20 @@ public actor Scheduler {
         }
 
         for uid in touchedUIDs where !finishedUIDs.contains(uid) {
-            if var runningRequest = running[uid] {
+            if let runningRequest = running[uid] {
                 publishAvailablePrefixBlocks(
                     uid: uid,
-                    runningRequest: &runningRequest,
+                    runningRequest: runningRequest,
                     minimumNewTokens: Self.midGenerationPublishInterval
                 )
-                running[uid] = runningRequest
             }
         }
 
         if !finishedUIDs.isEmpty {
             Stream.gpu.synchronize()
             for uid in finishedUIDs {
-                if var finishedRequest = running[uid] {
-                    publishAvailablePrefixBlocks(uid: uid, runningRequest: &finishedRequest)
-                    running[uid] = finishedRequest
+                if let finishedRequest = running[uid] {
+                    publishAvailablePrefixBlocks(uid: uid, runningRequest: finishedRequest)
                 }
                 let finishedRequest = running[uid]
                 generator.remove(uid: uid)
@@ -641,7 +638,7 @@ public actor Scheduler {
 
     private func publishAvailablePrefixBlocks(
         uid: String,
-        runningRequest: inout RunningRequest,
+        runningRequest: RunningRequest,
         minimumNewTokens: Int = 1
     ) {
         guard prefixCacheEnabled,
@@ -682,12 +679,12 @@ public actor Scheduler {
             guard let request = running[uid] else { return false }
             return canResumeFromTokenPrompt(request)
         }),
-            var runningRequest = running[uid]
+            let runningRequest = running[uid]
         else {
             return false
         }
 
-        publishAvailablePrefixBlocks(uid: uid, runningRequest: &runningRequest)
+        publishAvailablePrefixBlocks(uid: uid, runningRequest: runningRequest)
         if let hit = runningRequest.prefixHit {
             prefixStore?.release(hit)
         }

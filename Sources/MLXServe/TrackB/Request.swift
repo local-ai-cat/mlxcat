@@ -25,13 +25,29 @@ public struct Request: @unchecked Sendable {
     }
 }
 
-struct RunningRequest {
+final class RunningRequest {
     let request: Request
     let promptTokens: [Int]
     let prefixHit: PrefixKVStoreHit?
     var generatedTokens: [Int]
     let generatedTokensIncludedInPrompt: Int
     var cachedTokenCount: Int
+
+    init(
+        request: Request,
+        promptTokens: [Int],
+        prefixHit: PrefixKVStoreHit?,
+        generatedTokens: [Int],
+        generatedTokensIncludedInPrompt: Int,
+        cachedTokenCount: Int
+    ) {
+        self.request = request
+        self.promptTokens = promptTokens
+        self.prefixHit = prefixHit
+        self.generatedTokens = generatedTokens
+        self.generatedTokensIncludedInPrompt = generatedTokensIncludedInPrompt
+        self.cachedTokenCount = cachedTokenCount
+    }
 
     var generatedTokenCount: Int {
         generatedTokens.count
