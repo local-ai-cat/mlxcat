@@ -246,7 +246,7 @@ final class TrackAPrefixCacheTests: XCTestCase {
             try await tokenIDs(for: text, context: context, parameters: parameters)
         }
 
-        let prefix = prefill(model: model, tokens: prefixTokens, parameters: parameters)
+        let prefix = try prefill(model: model, tokens: prefixTokens, parameters: parameters)
         let prefixCache = BlockAwarePrefixCache(modelName: "Qwen3-0.6B-4bit", blockSize: blockSize)
         let storedTable = try prefixCache.storeCache(tokens: prefixTokens, cache: prefix.cache)
         XCTAssertEqual(storedTable.count, 1)
@@ -378,7 +378,7 @@ final class TrackAPrefixCacheTests: XCTestCase {
             blockSize: blockSize,
             manager: warmManager
         )
-        let prefix = prefill(model: model, tokens: prefixTokens, parameters: parameters)
+        let prefix = try prefill(model: model, tokens: prefixTokens, parameters: parameters)
         let storedTable = try warmCache.storeCache(tokens: prefixTokens, cache: prefix.cache)
         XCTAssertEqual(storedTable.count, 1)
         try await warmManager.flushPendingWrites()
@@ -445,7 +445,7 @@ final class TrackAPrefixCacheTests: XCTestCase {
         let reconstructedLogits = reconstructedOutput.logits[0..., -1, 0...]
         eval(reconstructedLogits, reconstructedCache)
 
-        let fresh = prefill(
+        let fresh = try prefill(
             model: model,
             tokens: prefixTokens + suffixTokens,
             parameters: parameters
@@ -466,8 +466,8 @@ final class TrackAPrefixCacheTests: XCTestCase {
         model: any LanguageModel,
         tokens: [Int],
         parameters: GenerateParameters
-    ) -> (cache: [any KVCache], logits: MLXArray) {
-        let cache = model.newCache(parameters: parameters)
+    ) throws -> (cache: [any KVCache], logits: MLXArray) {
+        let cache = try model.newCache(parameters: parameters)
         let input = LMInput.Text(tokens: MLXArray(tokens.map(Int32.init)))
         let output = model(input[text: .newAxis], cache: cache, state: nil)
         let logits = output.logits[0..., -1, 0...]
@@ -491,7 +491,7 @@ final class TrackAPrefixCacheTests: XCTestCase {
         parameters: GenerateParameters
     ) async throws -> [Int] {
         let input = try await context.processor.prepare(input: UserInput(prompt: text))
-        let cache = context.model.newCache(parameters: parameters)
+        let cache = try context.model.newCache(parameters: parameters)
         switch try context.model.prepare(input, cache: cache, state: nil, windowSize: parameters.prefillStepSize) {
         case .tokens(let tokens):
             return tokens.tokens.asArray(Int.self)

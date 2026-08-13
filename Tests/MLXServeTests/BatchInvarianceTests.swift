@@ -299,7 +299,7 @@ final class BatchInvarianceTests: XCTestCase {
         parameters: GenerateParameters,
         steps: Int
     ) throws -> [DecodeTraceStep] {
-        let cache = model.newCache(parameters: parameters)
+        let cache = try model.newCache(parameters: parameters)
         var state: LMOutput.State?
 
         var currentLogits: MLXArray

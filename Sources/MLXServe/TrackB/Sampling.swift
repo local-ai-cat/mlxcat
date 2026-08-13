@@ -1,5 +1,11 @@
 import MLX
 
+/// Unambiguous alias for cross-module use: upstream MLXLMCommon gained its own
+/// `ThinkingBudgetConfiguration` (mlx-swift-lm #521), and the `MLXServe`
+/// namespace enum shadows the module name, so `MLXServe.` qualification
+/// cannot disambiguate from importing modules.
+public typealias ServeThinkingBudgetConfiguration = ThinkingBudgetConfiguration
+
 public struct ThinkingBudgetConfiguration: Sendable, Equatable {
     public var budget: Int
     public var closeTokenIDs: [Int]

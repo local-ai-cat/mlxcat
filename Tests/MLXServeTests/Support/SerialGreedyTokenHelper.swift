@@ -8,7 +8,7 @@ enum SerialGreedyTokenHelper {
         parameters: GenerateParameters,
         steps: Int
     ) throws -> [Int] {
-        let cache = model.newCache(parameters: parameters)
+        let cache = try model.newCache(parameters: parameters)
         var state: LMOutput.State?
         var currentLogits: MLXArray
         var currentToken: MLXArray

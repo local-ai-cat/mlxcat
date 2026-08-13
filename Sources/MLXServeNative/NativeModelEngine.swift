@@ -365,7 +365,7 @@ public final class NativeModelEngine: @unchecked Sendable {
         return sequences.isEmpty ? nil : sequences
     }
 
-    private func thinkingBudgetConfiguration(from request: OpenAIChatRequest) -> ThinkingBudgetConfiguration? {
+    private func thinkingBudgetConfiguration(from request: OpenAIChatRequest) -> ServeThinkingBudgetConfiguration? {
         guard let budget = request.thinkingBudget else { return nil }
 
         let closeTokenIDs: [Int]
@@ -382,7 +382,7 @@ public final class NativeModelEngine: @unchecked Sendable {
         }
 
         guard !closeTokenIDs.isEmpty else { return nil }
-        return ThinkingBudgetConfiguration(
+        return ServeThinkingBudgetConfiguration(
             budget: budget,
             closeTokenIDs: closeTokenIDs,
             startTokenIDs: context.tokenizer.encode(text: "<think>", addSpecialTokens: false),

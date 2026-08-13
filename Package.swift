@@ -50,7 +50,7 @@ let package = Package(
         // contains fd0f13b.
         .package(
             url: "https://github.com/ml-explore/mlx-swift-lm.git",
-            revision: "fd0f13bcab1f8af78a57f91fbf250a7dfde74c9b"
+            revision: "01472a78fca830689ff78246a82c6d31ab111a78"
         ),
         .package(url: "https://github.com/ml-explore/mlx-swift", .upToNextMinor(from: "0.31.4")),
         // Same URL+version as the Local AI Chat app pins — one URL per package

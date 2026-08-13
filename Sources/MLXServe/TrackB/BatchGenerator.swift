@@ -84,7 +84,7 @@ public final class StaticBatchGenerator {
         var firstLogits: [MLXArray] = []
 
         for input in inputs {
-            let cache = model.newCache(parameters: parameters)
+            let cache = try model.newCache(parameters: parameters)
             let remaining: LMInput.Text
             // state: nil — `cache` is fresh per input, so no prior model state.
             switch try model.prepare(
@@ -238,7 +238,7 @@ public final class ContinuousBatchGenerator {
         maxGeneratedTokens: Int? = nil,
         speculativeContextTokens: [Int] = []
     ) throws -> Response? {
-        let rowCache = model.newCache(parameters: parameters)
+        let rowCache = try model.newCache(parameters: parameters)
         // state: nil — `rowCache` was just created above, so no prior state.
         switch try model.prepare(
             input, cache: rowCache, state: nil,
@@ -263,18 +263,21 @@ public final class ContinuousBatchGenerator {
                     maxGeneratedTokens: maxGeneratedTokens,
                     speculativeContextTokens: speculativeContextTokens + [tokenID],
                     thinkingBudgetState: firstToken.thinkingBudgetState,
-                    randomState: randomState
+                    randomState: randomState,
+                    modelState: output.state
                 )
                 return Response(uid: uid, token: tokenID)
             }
-            let lastToken = try prefillWithLastTokenWithheld(tokens, cache: rowCache)
+            let (lastToken, prefillState) = try prefillWithLastTokenWithheld(
+                tokens, cache: rowCache)
             try insert(
                 uid: uid,
                 cache: rowCache,
                 lastToken: lastToken,
                 sampling: sampling,
                 maxGeneratedTokens: maxGeneratedTokens,
-                speculativeContextTokens: speculativeContextTokens
+                speculativeContextTokens: speculativeContextTokens,
+                modelState: prefillState
             )
             return nil
         case .logits(let output):
@@ -294,7 +297,8 @@ public final class ContinuousBatchGenerator {
                 maxGeneratedTokens: maxGeneratedTokens,
                 speculativeContextTokens: speculativeContextTokens + [tokenID],
                 thinkingBudgetState: firstToken.thinkingBudgetState,
-                randomState: randomState
+                randomState: randomState,
+                modelState: output.state
             )
             return Response(uid: uid, token: tokenID)
         }
@@ -309,7 +313,8 @@ public final class ContinuousBatchGenerator {
         maxGeneratedTokens maxGeneratedTokenCount: Int? = nil,
         speculativeContextTokens: [Int] = [],
         thinkingBudgetState initialThinkingBudgetState: ThinkingBudgetState? = nil,
-        randomState initialRandomState: MLXRandom.RandomState? = nil
+        randomState initialRandomState: MLXRandom.RandomState? = nil,
+        modelState: LMOutput.State? = nil
     ) throws {
         precondition(!rowUIDs.contains(uid), "duplicate batch uid '\(uid)'")
         precondition(!rowCache.isEmpty, "continuous batching requires a non-empty KV cache")
@@ -397,7 +402,17 @@ public final class ContinuousBatchGenerator {
                 : speculativeContextTokens
         )
         maxGeneratedTokens.append(maxGeneratedTokenCount)
-        state = nil
+        // Models with per-call positional state (Qwen3.5/Qwen-VL M-RoPE
+        // ropeDeltas) refuse to continue a warm cache without it — the state
+        // captured during THIS row's prefill must survive into decode. A
+        // single state cannot represent two rows, so it only carries over
+        // while this insert leaves the generator at width 1; stateful models
+        // do not batch (they sit outside the batch-decode allowlist).
+        if rowUIDs.count == 1 {
+            state = modelState
+        } else {
+            state = nil
+        }
         eval(currentTokens, cacheStorage.cacheForModel)
     }
 
@@ -918,7 +933,7 @@ public final class ContinuousBatchGenerator {
     private func prefillWithLastTokenWithheld(
         _ text: LMInput.Text,
         cache rowCache: [any KVCache]
-    ) throws -> MLXArray {
+    ) throws -> (lastToken: MLXArray, modelState: LMOutput.State?) {
         let tokens = text.tokens
         let tokenCount = tokens.dim(0)
         guard tokenCount > 1 else {
@@ -927,10 +942,10 @@ public final class ContinuousBatchGenerator {
 
         let prefixTokens = tokens[..<(tokenCount - 1)]
         let prefixInput = LMInput.Text(tokens: prefixTokens)
-        _ = model(prefixInput[text: .newAxis], cache: rowCache, state: nil)
+        let output = model(prefixInput[text: .newAxis], cache: rowCache, state: nil)
         eval(rowCache)
 
-        return tokens[tokenCount - 1]
+        return (tokens[tokenCount - 1], output.state)
     }
 
     private func sampledToken(

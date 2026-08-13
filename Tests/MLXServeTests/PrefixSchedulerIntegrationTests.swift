@@ -306,7 +306,7 @@ final class PrefixSchedulerIntegrationTests: XCTestCase {
         parameters: GenerateParameters,
         steps: Int
     ) throws -> [(token: Int, logits: MLXArray)] {
-        let cache = model.newCache(parameters: parameters)
+        let cache = try model.newCache(parameters: parameters)
         var state: LMOutput.State?
         let input = LMInput.Text(tokens: MLXArray(tokens.map(Int32.init)))
         let output = model(input[text: .newAxis], cache: cache, state: state)
@@ -380,7 +380,7 @@ final class PrefixSchedulerIntegrationTests: XCTestCase {
         parameters: GenerateParameters
     ) async throws -> [Int] {
         let input = try await context.processor.prepare(input: UserInput(prompt: text))
-        let cache = context.model.newCache(parameters: parameters)
+        let cache = try context.model.newCache(parameters: parameters)
         switch try context.model.prepare(input, cache: cache, state: nil, windowSize: parameters.prefillStepSize) {
         case .tokens(let tokens):
             return tokens.tokens.asArray(Int.self)
