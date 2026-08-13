@@ -168,6 +168,11 @@ public final class ContinuousBatchGenerator {
     }
 
     private var cacheStorage: CacheStorage = .empty
+    /// Experimental (`MLXSERVE_ENCODE_THREAD=1`): dedicated thread owning the
+    /// pipelined launch's kernel encoding. See `EncodeThread` for the
+    /// single-encoder discipline every other eval path must uphold via
+    /// `flush()`.
+    private let encodeThread: EncodeThread? = EncodeThread.enabled ? EncodeThread() : nil
     private var currentTokens = MLXArray([Int32]())
     private var rowUIDs: [String] = []
     private var samplers: [SamplingParameters] = []
@@ -238,6 +243,7 @@ public final class ContinuousBatchGenerator {
         maxGeneratedTokens: Int? = nil,
         speculativeContextTokens: [Int] = []
     ) throws -> Response? {
+        encodeThread?.flush()
         let rowCache = model.newCache(parameters: parameters)
         // state: nil — `rowCache` was just created above, so no prior state.
         switch try model.prepare(
@@ -313,6 +319,7 @@ public final class ContinuousBatchGenerator {
     ) throws {
         precondition(!rowUIDs.contains(uid), "duplicate batch uid '\(uid)'")
         precondition(!rowCache.isEmpty, "continuous batching requires a non-empty KV cache")
+        encodeThread?.flush()
 
         switch cacheStorage {
         case .empty:
@@ -409,6 +416,7 @@ public final class ContinuousBatchGenerator {
 
     public func extractCache(uid: String) -> [KVCacheSimple]? {
         guard let row = rowUIDs.firstIndex(of: uid) else { return nil }
+        encodeThread?.flush()
 
         let extracted: [KVCacheSimple]
         switch cacheStorage {
@@ -440,6 +448,7 @@ public final class ContinuousBatchGenerator {
     }
 
     public func filter(keeping rows: [Int]) {
+        encodeThread?.flush()
         guard !rows.isEmpty else {
             cacheStorage = .empty
             rowUIDs.removeAll()
@@ -566,6 +575,7 @@ public final class ContinuousBatchGenerator {
     }
 
     private func advanceStepSynchronously() -> ([Int], [Response]) {
+        encodeThread?.flush()
         // The per-step autoreleasepool mirrors the upstream TokenIterator: a
         // forward pass produces hundreds of autoreleased MLX wrappers and this
         // loop never reaches a pool boundary on its own.
@@ -601,6 +611,10 @@ public final class ContinuousBatchGenerator {
         let t0 = Self.phaseTimingEnabled ? DispatchTime.now().uptimeNanoseconds : 0
         let prebuilt = prebuildNextStepIfSafe()
         let t1 = Self.phaseTimingEnabled ? DispatchTime.now().uptimeNanoseconds : 0
+        // The in-flight step must be fully scheduled before waiting on it —
+        // an unscheduled array would re-enter encoding on this thread while
+        // the encode thread may still hold the stream's encoder.
+        encodeThread?.flush()
         let tokenIds = currentTokens.asArray(Int.self)
         let t2 = Self.phaseTimingEnabled ? DispatchTime.now().uptimeNanoseconds : 0
         var responses: [Response] = []
@@ -613,7 +627,11 @@ public final class ContinuousBatchGenerator {
         if let prebuilt {
             if launchIsSafe(latestTokenIds: tokenIds) {
                 let t3 = Self.phaseTimingEnabled ? DispatchTime.now().uptimeNanoseconds : 0
-                asyncEval(prebuilt.tokens, prebuilt.logits)
+                if let encodeThread {
+                    encodeThread.submit([prebuilt.tokens, prebuilt.logits])
+                } else {
+                    asyncEval(prebuilt.tokens, prebuilt.logits)
+                }
                 if Self.phaseTimingEnabled {
                     let t4 = DispatchTime.now().uptimeNanoseconds
                     phaseBuildNs += t1 - t0
@@ -719,7 +737,11 @@ public final class ContinuousBatchGenerator {
             computeNextTokens(cacheForModel: cacheStorage.cacheForModel, state: state)
         }
         state = nextState
-        asyncEval(nextTokens, logits)
+        if let encodeThread {
+            encodeThread.submit([nextTokens, logits])
+        } else {
+            asyncEval(nextTokens, logits)
+        }
         currentTokens = nextTokens
         pendingEmission = Array(repeating: true, count: rowUIDs.count)
     }
