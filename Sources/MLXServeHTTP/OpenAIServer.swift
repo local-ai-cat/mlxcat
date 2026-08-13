@@ -1158,31 +1158,46 @@ public final class OpenAIServer: @unchecked Sendable {
         model: String,
         connection: NWConnection
     ) async throws {
-        var payload: [String: Any] = [:]
+        guard !delta.reasoning.isEmpty || !delta.content.isEmpty else { return }
+
+        var deltaFields = ""
         if !delta.reasoning.isEmpty {
-            payload["reasoning_content"] = delta.reasoning
+            deltaFields += "\"reasoning_content\":\"\(jsonEscape(delta.reasoning))\""
         }
         if !delta.content.isEmpty {
-            payload["content"] = delta.content
+            if !deltaFields.isEmpty { deltaFields += "," }
+            deltaFields += "\"content\":\"\(jsonEscape(delta.content))\""
         }
-        guard !payload.isEmpty else { return }
 
-        try await sendSSE(
-            [
-                "id": id,
-                "object": "chat.completion.chunk",
-                "created": created,
-                "model": model,
-                "choices": [
-                    [
-                        "index": 0,
-                        "delta": payload,
-                        "finish_reason": NSNull(),
-                    ]
-                ],
-            ],
-            connection: connection
-        )
+        let line = "data: {\"id\":\"\(id)\",\"object\":\"chat.completion.chunk\","
+            + "\"created\":\(created),\"model\":\"\(jsonEscape(model))\","
+            + "\"choices\":[{\"index\":0,\"delta\":{\(deltaFields)},"
+            + "\"finish_reason\":null}]}\n\n"
+        try await connection.send(data: Data(line.utf8))
+    }
+
+    private func jsonEscape(_ s: String) -> String {
+        guard s.contains(where: { $0 == "\\" || $0 == "\"" || $0 == "\n" || $0 == "\r" || $0 == "\t" || $0.asciiValue.map({ $0 < 0x20 }) == true }) else {
+            return s
+        }
+        var result = ""
+        result.reserveCapacity(s.count + 8)
+        for c in s {
+            switch c {
+            case "\\": result += "\\\\"
+            case "\"": result += "\\\""
+            case "\n": result += "\\n"
+            case "\r": result += "\\r"
+            case "\t": result += "\\t"
+            default:
+                if let ascii = c.asciiValue, ascii < 0x20 {
+                    result += String(format: "\\u%04x", ascii)
+                } else {
+                    result.append(c)
+                }
+            }
+        }
+        return result
     }
 
     private func sendJSON(
