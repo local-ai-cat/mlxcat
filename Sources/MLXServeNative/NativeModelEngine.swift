@@ -54,6 +54,15 @@ public final class NativeModelEngine: @unchecked Sendable {
     }
 
     func startChatCompletion(_ request: OpenAIChatRequest) async throws -> OpenAIChatStream {
+        try await prepareChatCompletion(request).stream
+    }
+
+    struct PreparedChat {
+        let stream: OpenAIChatStream
+        let promptTokens: Int
+    }
+
+    func prepareChatCompletion(_ request: OpenAIChatRequest) async throws -> PreparedChat {
         let input = try await context.processor.prepare(input: try userInput(from: request))
         let promptTokens = try countPromptTokens(input)
         try Self.validateContextWindow(
@@ -71,10 +80,17 @@ public final class NativeModelEngine: @unchecked Sendable {
             cacheSession: request.cacheSession
         )
 
-        return makeStream(from: mlxRequest, promptTokens: promptTokens)
+        return PreparedChat(
+            stream: makeStream(from: mlxRequest, promptTokens: promptTokens),
+            promptTokens: promptTokens
+        )
     }
 
     func startCompletion(_ request: OpenAICompletionRequest) async throws -> OpenAIChatStream {
+        try await prepareCompletion(request).stream
+    }
+
+    func prepareCompletion(_ request: OpenAICompletionRequest) async throws -> PreparedChat {
         guard case .string(let prompt) = request.prompt else {
             throw NativeModelEngineError.invalidPrompt
         }
@@ -93,7 +109,10 @@ public final class NativeModelEngine: @unchecked Sendable {
             sampling: try samplingParameters(from: request),
             eosTokenIds: eosTokenIds
         )
-        return makeStream(from: mlxRequest, promptTokens: tokenIDs.count)
+        return PreparedChat(
+            stream: makeStream(from: mlxRequest, promptTokens: tokenIDs.count),
+            promptTokens: tokenIDs.count
+        )
     }
 
     func prefixCacheStats() -> SessionPrefixKVStoreStats {

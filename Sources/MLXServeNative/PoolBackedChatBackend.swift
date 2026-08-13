@@ -68,14 +68,14 @@ where Loader.Engine == NativeModelEngine {
             let lease = try await pool.acquire(request.model)
             let stream: OpenAIChatStream
             do {
-                let promptTokens = try await lease.engine.countPromptTokens(for: request)
+                let prepared = try await lease.engine.prepareChatCompletion(request)
                 try await admitOrThrow(
                     additionalBytes: lease.engine.estimatedKVCacheBytes(
-                        promptTokens: promptTokens,
+                        promptTokens: prepared.promptTokens,
                         maxGeneratedTokens: request.maxTokens
                     )
                 )
-                stream = try await lease.engine.startChatCompletion(request)
+                stream = prepared.stream
             } catch {
                 await pool.release(lease)
                 await pool.finishWaitingRequest(ticket)
@@ -99,14 +99,14 @@ where Loader.Engine == NativeModelEngine {
             let lease = try await pool.acquire(request.model)
             let stream: OpenAIChatStream
             do {
-                let promptTokens = try await lease.engine.countPromptTokens(for: request)
+                let prepared = try await lease.engine.prepareCompletion(request)
                 try await admitOrThrow(
                     additionalBytes: lease.engine.estimatedKVCacheBytes(
-                        promptTokens: promptTokens,
+                        promptTokens: prepared.promptTokens,
                         maxGeneratedTokens: request.maxTokens
                     )
                 )
-                stream = try await lease.engine.startCompletion(request)
+                stream = prepared.stream
             } catch {
                 await pool.release(lease)
                 await pool.finishWaitingRequest(ticket)
