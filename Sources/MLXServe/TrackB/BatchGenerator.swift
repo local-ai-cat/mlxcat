@@ -142,7 +142,32 @@ public final class ContinuousBatchGenerator {
     private let model: any LanguageModel
     private let parameters: GenerateParameters
     private let speculativeDecoding: SpeculativeDecodingConfiguration
-    private var cache: [BatchLayerCache] = []
+
+    private enum CacheStorage {
+        case empty
+        case singleton([any KVCache])
+        case batched([BatchLayerCache])
+
+        var cacheForModel: [any KVCache] {
+            switch self {
+            case .empty: return []
+            case .singleton(let cache): return cache
+            case .batched(let cache): return cache.map(\.kvCache)
+            }
+        }
+
+        var batchedCache: [BatchLayerCache]? {
+            if case .batched(let cache) = self { return cache }
+            return nil
+        }
+
+        var isSingleton: Bool {
+            if case .singleton = self { return true }
+            return false
+        }
+    }
+
+    private var cacheStorage: CacheStorage = .empty
     private var currentTokens = MLXArray([Int32]())
     private var rowUIDs: [String] = []
     private var samplers: [SamplingParameters] = []
@@ -289,10 +314,26 @@ public final class ContinuousBatchGenerator {
         precondition(!rowUIDs.contains(uid), "duplicate batch uid '\(uid)'")
         precondition(!rowCache.isEmpty, "continuous batching requires a non-empty KV cache")
 
-        if cache.isEmpty {
-            cache = try rowCache.map { try BatchLayerCache.adoptSingle($0) }
+        switch cacheStorage {
+        case .empty:
+            cacheStorage = .singleton(rowCache)
             currentTokens = lastToken.reshaped([1])
-        } else {
+        case .singleton(let existingCache):
+            guard existingCache.count == rowCache.count else {
+                throw BatchGeneratorError.insertedCacheLayerCountChanged(
+                    expected: existingCache.count,
+                    actual: rowCache.count
+                )
+            }
+            let batchCache = try existingCache.map { try BatchLayerCache.adoptSingle($0) }
+            let rowLayers = try rowCache.map { try BatchLayerCache.merge([$0]) }
+            cacheStorage = .batched(try zip(batchCache, rowLayers).map { currentLayer, rowLayer in
+                let mergedLayer = currentLayer.copyLayer()
+                try mergedLayer.extend(rowLayer)
+                return mergedLayer
+            })
+            currentTokens = concatenated([currentTokens, lastToken.reshaped([1])], axis: 0)
+        case .batched(let cache):
             guard cache.count == rowCache.count else {
                 throw BatchGeneratorError.insertedCacheLayerCountChanged(
                     expected: cache.count,
@@ -300,11 +341,11 @@ public final class ContinuousBatchGenerator {
                 )
             }
             let rowLayers = try rowCache.map { try BatchLayerCache.merge([$0]) }
-            cache = try zip(cache, rowLayers).map { currentLayer, rowLayer in
+            cacheStorage = .batched(try zip(cache, rowLayers).map { currentLayer, rowLayer in
                 let mergedLayer = currentLayer.copyLayer()
                 try mergedLayer.extend(rowLayer)
                 return mergedLayer
-            }
+            })
             currentTokens = concatenated([currentTokens, lastToken.reshaped([1])], axis: 0)
         }
 
@@ -357,7 +398,7 @@ public final class ContinuousBatchGenerator {
         )
         maxGeneratedTokens.append(maxGeneratedTokenCount)
         state = nil
-        eval(currentTokens, cache.map(\.kvCache))
+        eval(currentTokens, cacheStorage.cacheForModel)
     }
 
     public func remove(uid: String) {
@@ -368,11 +409,28 @@ public final class ContinuousBatchGenerator {
 
     public func extractCache(uid: String) -> [KVCacheSimple]? {
         guard let row = rowUIDs.firstIndex(of: uid) else { return nil }
-        let extracted = cache.map { $0.extract(row) }
-        // A launched-ahead step has already consumed this row's latest token,
-        // so the live cache is one position ahead of what callers expect (the
-        // synchronous-path invariant: "the current step's token is not part of
-        // the cache until the next decode call"). Trim the extracted copy back.
+
+        let extracted: [KVCacheSimple]
+        switch cacheStorage {
+        case .empty:
+            return nil
+        case .singleton(let cache):
+            guard row == 0 else { return nil }
+            extracted = cache.map { layer in
+                if let simple = layer.copy() as? KVCacheSimple {
+                    return simple
+                }
+                let simple = KVCacheSimple()
+                simple.state = layer.state
+                if !layer.metaState.isEmpty {
+                    simple.metaState = layer.metaState
+                }
+                return simple
+            }
+        case .batched(let cache):
+            extracted = cache.map { $0.extract(row) }
+        }
+
         if row < pendingEmission.count, pendingEmission[row] {
             for layer in extracted {
                 _ = layer.trim(1)
@@ -383,7 +441,7 @@ public final class ContinuousBatchGenerator {
 
     public func filter(keeping rows: [Int]) {
         guard !rows.isEmpty else {
-            cache.removeAll()
+            cacheStorage = .empty
             rowUIDs.removeAll()
             pendingEmission.removeAll()
             samplers.removeAll()
@@ -406,8 +464,18 @@ public final class ContinuousBatchGenerator {
             return
         }
 
-        for layer in cache {
-            layer.filter(keeping: rows)
+        switch cacheStorage {
+        case .empty:
+            break
+        case .singleton:
+            guard rows == [0] else {
+                cacheStorage = .empty
+                break
+            }
+        case .batched(let cache):
+            for layer in cache {
+                layer.filter(keeping: rows)
+            }
         }
         let rowIndices = MLXArray(rows.map(Int32.init))
         currentTokens = currentTokens.take(rowIndices, axis: 0)
@@ -432,7 +500,7 @@ public final class ContinuousBatchGenerator {
         speculativeTokenHistory = rows.map { speculativeTokenHistory[$0] }
         maxGeneratedTokens = rows.map { maxGeneratedTokens[$0] }
         state = nil
-        eval(currentTokens, cache.map(\.kvCache))
+        eval(currentTokens, cacheStorage.cacheForModel)
     }
 
     public func next() -> [Response] {
@@ -485,12 +553,12 @@ public final class ContinuousBatchGenerator {
     /// caller can build against shallow cache copies and adopt or discard the
     /// step afterwards — see `prebuildNextStepIfSafe`.
     private func computeNextTokens(
-        cache stepCache: [BatchLayerCache],
+        cacheForModel: [any KVCache],
         state stepState: LMOutput.State?
     ) -> (tokens: MLXArray, logits: MLXArray, state: LMOutput.State?) {
         let output = model(
             LMInput.Text(tokens: currentTokens[0..., .newAxis]),
-            cache: stepCache.map(\.kvCache),
+            cache: cacheForModel,
             state: stepState
         )
         let logits = output.logits[0..., -1, 0...]
@@ -502,7 +570,7 @@ public final class ContinuousBatchGenerator {
         // forward pass produces hundreds of autoreleased MLX wrappers and this
         // loop never reaches a pool boundary on its own.
         let (nextTokens, logits, nextState) = autoreleasepool {
-            computeNextTokens(cache: cache, state: state)
+            computeNextTokens(cacheForModel: cacheStorage.cacheForModel, state: state)
         }
         state = nextState
         asyncEval(nextTokens, logits)
@@ -558,14 +626,8 @@ public final class ContinuousBatchGenerator {
                 currentTokens = prebuilt.tokens
                 pendingEmission = Array(repeating: true, count: rowUIDs.count)
             } else {
-                // A row finished, so the built step must not happen. The build
-                // advanced each simple cache by one consumed position; trim it
-                // back so scheduler-visible snapshots (prefix publishing on
-                // finish) keep the synchronous-path invariant. The discarded
-                // graph is never evaluated — at width 1 a finished row removes
-                // the whole batch, so the trimmed cache never decodes again.
-                for layer in cache {
-                    _ = layer.kvCache.trim(1)
+                for kvCache in cacheStorage.cacheForModel {
+                    _ = kvCache.trim(1)
                 }
             }
             return responses
@@ -597,7 +659,7 @@ public final class ContinuousBatchGenerator {
                     && sampler.minTokens == 0
                     && sampler.allowedSequences == nil
             }
-            && cache.allSatisfy { Self.discardOneStepIsExact($0.kvCache) }
+            && cacheStorage.cacheForModel.allSatisfy { Self.discardOneStepIsExact($0) }
     }
 
     private static func discardOneStepIsExact(_ kvCache: any KVCache) -> Bool {
@@ -627,7 +689,7 @@ public final class ContinuousBatchGenerator {
             }
         }
         let (tokens, logits, nextState) = autoreleasepool {
-            computeNextTokens(cache: cache, state: state)
+            computeNextTokens(cacheForModel: cacheStorage.cacheForModel, state: state)
         }
         return PrebuiltStep(tokens: tokens, logits: logits, state: nextState)
     }
@@ -654,7 +716,7 @@ public final class ContinuousBatchGenerator {
         }
 
         let (nextTokens, logits, nextState) = autoreleasepool {
-            computeNextTokens(cache: cache, state: state)
+            computeNextTokens(cacheForModel: cacheStorage.cacheForModel, state: state)
         }
         state = nextState
         asyncEval(nextTokens, logits)
@@ -726,10 +788,10 @@ public final class ContinuousBatchGenerator {
 
         let verificationTokens = [currentTokens.item(Int.self)] + proposedTokens
         let verificationInput = MLXArray(verificationTokens.map(Int32.init))[.newAxis, 0...]
-        let workingCache = cache.map { $0.copyLayer() }
+        let workingCacheForModel = cacheStorage.cacheForModel.map { $0.copy() }
         let output = model(
             LMInput.Text(tokens: verificationInput),
-            cache: workingCache.map(\.kvCache),
+            cache: workingCacheForModel,
             state: state
         )
 
@@ -760,12 +822,12 @@ public final class ContinuousBatchGenerator {
             return decodeOneToken()
         }
 
-        cache = workingCache
+        cacheStorage = .singleton(workingCacheForModel)
         state = output.state
         let nextToken = acceptedTokens.last ?? proposedTokens.last ?? currentTokens.item(Int.self)
         currentTokens = MLXArray([Int32(nextToken)])
         asyncEval(currentTokens)
-        eval(output.logits, cache.map(\.kvCache))
+        eval(output.logits, workingCacheForModel)
 
         for token in acceptedTokens {
             recordGeneratedToken(token, row: 0)
