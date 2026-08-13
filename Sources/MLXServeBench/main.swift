@@ -290,7 +290,7 @@ private final class NativeBenchmark {
         tokens: [Int],
         parameters: GenerateParameters
     ) throws {
-        let cache = model.newCache(parameters: parameters)
+        let cache = try model.newCache(parameters: parameters)
         let input = LMInput.Text(tokens: MLXArray(tokens.map { Int32($0) }))
         let output = model(input[text: .newAxis], cache: cache, state: nil)
         eval(output.logits, cache)
@@ -303,7 +303,7 @@ private final class NativeBenchmark {
         tokens: [Int],
         parameters: GenerateParameters
     ) throws -> DecodeState {
-        let cache = model.newCache(parameters: parameters)
+        let cache = try model.newCache(parameters: parameters)
         var state: LMOutput.State?
         let input = LMInput.Text(tokens: MLXArray(tokens.map { Int32($0) }))
         let output = model(input[text: .newAxis], cache: cache, state: state)
