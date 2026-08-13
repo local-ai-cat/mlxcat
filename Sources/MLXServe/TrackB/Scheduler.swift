@@ -362,7 +362,8 @@ public actor Scheduler {
                 speculativeContextTokens: row.promptTokens + generatorSeededTokens,
                 thinkingBudgetState: seededGeneratedTokens.isEmpty
                     ? row.initialGeneratedToken?.thinkingBudgetState
-                    : nil
+                    : nil,
+                modelState: row.modelState
             )
             running[request.uid] = RunningRequest(
                 request: request,
@@ -436,14 +437,15 @@ public actor Scheduler {
             lastToken: initialGeneratedToken.token,
             promptTokens: admission.storedPromptTokens,
             prefixHit: admission.prefixHit,
-            initialGeneratedToken: initialGeneratedToken
+            initialGeneratedToken: initialGeneratedToken,
+            modelState: admission.state
         )
     }
 
     private func prepareForInsert(_ request: Request, sampling: SamplingParameters) throws
         -> PreparedAdmission
     {
-        let rowCache = model.newCache(parameters: parameters)
+        let rowCache = try model.newCache(parameters: parameters)
         let prefixCacheEligible = isPrefixCacheEligible(request.input)
         let canUseRawTextTokens = schedulerManagedTextPrefill
             && prefixCacheEligible
@@ -467,7 +469,8 @@ public actor Scheduler {
                     lastToken: firstToken.token,
                     promptTokens: [],
                     prefixHit: nil,
-                    initialGeneratedToken: firstToken
+                    initialGeneratedToken: firstToken,
+                    modelState: output.state
                 ))
             }
         }
@@ -488,7 +491,8 @@ public actor Scheduler {
                 lastToken: firstToken.token,
                 promptTokens: [],
                 prefixHit: nil,
-                initialGeneratedToken: firstToken
+                initialGeneratedToken: firstToken,
+                modelState: output.state
             ))
         }
 
@@ -815,6 +819,9 @@ private struct PreparedBatchRow {
     let promptTokens: [Int]
     let prefixHit: PrefixKVStoreHit?
     let initialGeneratedToken: PreparedGeneratedToken?
+    /// Model state produced by the prefill (e.g. Qwen3.5/Qwen-VL M-RoPE
+    /// ropeDeltas). Stateful models refuse to decode a warm cache without it.
+    let modelState: LMOutput.State?
 }
 
 private struct PreparedGeneratedToken {
