@@ -7,7 +7,11 @@ import XCTest
 
 final class SchedulerChunkedPrefillTests: XCTestCase {
     func testLongPromptAdmissionYieldsBetweenPrefillChunksDuringActiveDecode() async throws {
-        let parameters = GenerateParameters(maxTokens: 4, temperature: 0, prefillStepSize: 2)
+        let parameters = GenerateParameters(
+            maxTokens: 4,
+            temperature: 0,
+            prefill: PrefillParameters(stepSize: 2, chunking: .remainder)
+        )
         let model = RecordingChunkedLanguageModel(vocabularySize: 16)
         let scheduler = Scheduler(
             modelBox: LanguageModelBox(model),
@@ -67,7 +71,11 @@ final class SchedulerChunkedPrefillTests: XCTestCase {
         let model = PreparedLogitsLanguageModel(vocabularySize: 16)
         let scheduler = Scheduler(
             modelBox: LanguageModelBox(model),
-            parameters: GenerateParameters(maxTokens: 1, temperature: 0, prefillStepSize: 2),
+            parameters: GenerateParameters(
+                maxTokens: 1,
+                temperature: 0,
+                prefill: PrefillParameters(stepSize: 2, chunking: .remainder)
+            ),
             maxConcurrentRequests: 1,
             schedulerManagedTextPrefill: false
         )
@@ -92,7 +100,11 @@ final class SchedulerChunkedPrefillTests: XCTestCase {
         let store = SessionPrefixKVStore()
         let engine = MLXServeEngine(
             model: model,
-            parameters: GenerateParameters(maxTokens: 1, temperature: 0, prefillStepSize: 2),
+            parameters: GenerateParameters(
+                maxTokens: 1,
+                temperature: 0,
+                prefill: PrefillParameters(stepSize: 2, chunking: .remainder)
+            ),
             maxConcurrentRequests: 1,
             prefixStore: store
         )

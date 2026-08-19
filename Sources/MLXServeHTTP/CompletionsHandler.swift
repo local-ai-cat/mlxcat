@@ -42,12 +42,14 @@ struct CompletionsHandler {
         var choices: [[String: Any]] = []
         var promptTokens = 0
         var completionTokens = 0
+        var cachedPromptTokens = 0
 
         for (index, prompt) in prompts.enumerated() {
             let stream = try await backend.startCompletion(request.request(forPrompt: prompt))
             let completion = try await collectCompletion(stream: stream, stopSequences: request.stop)
             promptTokens += stream.promptTokens
             completionTokens += completion.completionTokens
+            cachedPromptTokens += completion.cachedPromptTokens
             choices.append(
                 buildCompletionChoice(
                     index: index,
@@ -64,7 +66,8 @@ struct CompletionsHandler {
                 created: created,
                 choices: choices,
                 promptTokens: promptTokens,
-                completionTokens: completionTokens
+                completionTokens: completionTokens,
+                cachedPromptTokens: cachedPromptTokens
             ),
             status: 200,
             connection: connection
@@ -109,7 +112,8 @@ struct CompletionsHandler {
                         "choices": [],
                         "usage": completionUsage(
                             promptTokens: stream.promptTokens,
-                            completionTokens: formatter.completionTokens
+                            completionTokens: formatter.completionTokens,
+                            cachedPromptTokens: formatter.cachedPromptTokens
                         ),
                     ],
                     connection: connection
@@ -133,12 +137,14 @@ struct CompletionsHandler {
     private func collectCompletion(stream: OpenAIChatStream, stopSequences: [String]) async throws -> CompletionBufferedResult {
         var text = ""
         var completionTokens = 0
+        var cachedPromptTokens = 0
         var finishReason = "length"
         var stopMatcher = StreamingStopSequenceMatcher(stopSequences: stopSequences)
         var stoppedByTextStop = false
 
         for try await chunk in stream.chunks {
             completionTokens += 1
+            cachedPromptTokens = max(cachedPromptTokens, chunk.cachedPromptTokens)
             if let chunkFinishReason = chunk.finishReason {
                 finishReason = chunkFinishReason
             }
@@ -158,7 +164,12 @@ struct CompletionsHandler {
                 finishReason = "stop"
             }
         }
-        return CompletionBufferedResult(text: text, completionTokens: completionTokens, finishReason: finishReason)
+        return CompletionBufferedResult(
+            text: text,
+            completionTokens: completionTokens,
+            finishReason: finishReason,
+            cachedPromptTokens: cachedPromptTokens
+        )
     }
 
     private func sendSSE(_ object: [String: Any], connection: NWConnection) async throws {
@@ -191,11 +202,18 @@ public struct CompletionBufferedResult: Sendable, Equatable {
     public let text: String
     public let completionTokens: Int
     public let finishReason: String
+    public let cachedPromptTokens: Int
 
-    public init(text: String, completionTokens: Int, finishReason: String) {
+    public init(
+        text: String,
+        completionTokens: Int,
+        finishReason: String,
+        cachedPromptTokens: Int = 0
+    ) {
         self.text = text
         self.completionTokens = completionTokens
         self.finishReason = finishReason
+        self.cachedPromptTokens = cachedPromptTokens
     }
 }
 
@@ -207,6 +225,7 @@ public struct CompletionStreamFormatter: Sendable {
     private var finishReason = "length"
     private var emittedFinal = false
     public private(set) var completionTokens = 0
+    public private(set) var cachedPromptTokens = 0
     public private(set) var isStopped = false
 
     public init(id: String, model: String, created: Int, stopSequences: [String]) {
@@ -219,6 +238,7 @@ public struct CompletionStreamFormatter: Sendable {
     public mutating func feed(_ chunk: OpenAIChatChunk) -> [[String: Any]] {
         guard !isStopped else { return [] }
         completionTokens += 1
+        cachedPromptTokens = max(cachedPromptTokens, chunk.cachedPromptTokens)
         if let chunkFinishReason = chunk.finishReason {
             finishReason = chunkFinishReason
         }
@@ -281,7 +301,8 @@ public func buildCompletionResponse(
     created: Int,
     choices: [[String: Any]],
     promptTokens: Int,
-    completionTokens: Int
+    completionTokens: Int,
+    cachedPromptTokens: Int = 0
 ) -> [String: Any] {
     [
         "id": id,
@@ -289,18 +310,26 @@ public func buildCompletionResponse(
         "created": created,
         "model": request.model,
         "choices": choices,
-        "usage": completionUsage(promptTokens: promptTokens, completionTokens: completionTokens),
+        "usage": completionUsage(
+            promptTokens: promptTokens,
+            completionTokens: completionTokens,
+            cachedPromptTokens: cachedPromptTokens
+        ),
     ]
 }
 
-public func completionUsage(promptTokens: Int, completionTokens: Int) -> [String: Any] {
+public func completionUsage(
+    promptTokens: Int,
+    completionTokens: Int,
+    cachedPromptTokens: Int = 0
+) -> [String: Any] {
     [
         "prompt_tokens": promptTokens,
         "completion_tokens": completionTokens,
         "total_tokens": promptTokens + completionTokens,
         "input_tokens": promptTokens,
         "output_tokens": completionTokens,
-        "prompt_tokens_details": ["cached_tokens": 0],
+        "prompt_tokens_details": ["cached_tokens": cachedPromptTokens],
     ]
 }
 

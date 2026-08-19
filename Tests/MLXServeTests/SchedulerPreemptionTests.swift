@@ -46,7 +46,7 @@ final class SchedulerPreemptionTests: XCTestCase {
     private static let parameters = GenerateParameters(
         maxTokens: 4,
         temperature: 0,
-        prefillStepSize: 2
+        prefill: PrefillParameters(stepSize: 2, chunking: .remainder)
     )
 
     private func runGeneration(

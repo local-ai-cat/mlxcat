@@ -492,7 +492,7 @@ final class TrackAPrefixCacheTests: XCTestCase {
     ) async throws -> [Int] {
         let input = try await context.processor.prepare(input: UserInput(prompt: text))
         let cache = try context.model.newCache(parameters: parameters)
-        switch try context.model.prepare(input, cache: cache, state: nil, windowSize: parameters.prefillStepSize) {
+        switch try context.model.prepare(input, cache: cache, state: nil, prefill: parameters.prefill) {
         case .tokens(let tokens):
             return tokens.tokens.asArray(Int.self)
         case .logits:

@@ -70,7 +70,11 @@ final class SchedulerSpeculativeDecodingTests: XCTestCase {
     ) async throws -> (tokens: [Int], stats: SpeculativeDecodingStats) {
         let scheduler = Scheduler(
             modelBox: LanguageModelBox(model),
-            parameters: GenerateParameters(maxTokens: Self.maxTokens, temperature: 0, prefillStepSize: 32),
+            parameters: GenerateParameters(
+                maxTokens: Self.maxTokens,
+                temperature: 0,
+                prefill: PrefillParameters(stepSize: 32, chunking: .remainder)
+            ),
             maxConcurrentRequests: 1,
             speculativeDecoding: speculativeDecoding
         )

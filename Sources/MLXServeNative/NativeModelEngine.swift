@@ -63,7 +63,7 @@ public final class NativeModelEngine: @unchecked Sendable {
     }
 
     func prepareChatCompletion(_ request: OpenAIChatRequest) async throws -> PreparedChat {
-        let input = try await context.processor.prepare(input: try userInput(from: request))
+        let input = try await prepareChatInput(request)
         let promptTokens = try countPromptTokens(input)
         try Self.validateContextWindow(
             promptTokens: promptTokens,
@@ -120,7 +120,7 @@ public final class NativeModelEngine: @unchecked Sendable {
     }
 
     func countPromptTokens(for request: OpenAIChatRequest) async throws -> Int {
-        let input = try await context.processor.prepare(input: try userInput(from: request))
+        let input = try await prepareChatInput(request)
         return try countPromptTokens(input)
     }
 
@@ -175,7 +175,8 @@ public final class NativeModelEngine: @unchecked Sendable {
                             OpenAIChatChunk(
                                 text: text,
                                 tokenID: response.token,
-                                finishReason: openAIFinishReason(response.finishReason)
+                                finishReason: openAIFinishReason(response.finishReason),
+                                cachedPromptTokens: response.cachedPromptTokens
                             )
                         )
                         if response.finishReason != nil {
@@ -222,14 +223,39 @@ public final class NativeModelEngine: @unchecked Sendable {
         return Array(Set(newlineTokens).union(eosTokenIds)).sorted()
     }
 
-    private func userInput(from request: OpenAIChatRequest) throws -> UserInput {
+    private func userInput(
+        from request: OpenAIChatRequest,
+        reasoningEffort: ReasoningEffortTemplateValue
+    ) throws -> UserInput {
         UserInput(
             chat: try injectedMessages(from: request).map(chatMessage),
             tools: toolSpecDictionaries(
                 from: selectOpenAITools(tools: request.tools, toolChoice: request.toolChoice)
             ),
-            additionalContext: additionalContext(from: request)
+            additionalContext: additionalContext(from: request, reasoningEffort: reasoningEffort)
         )
+    }
+
+    private func prepareChatInput(_ request: OpenAIChatRequest) async throws -> LMInput {
+        let candidates = ReasoningEffortCompatibility.candidates(
+            for: request.chatTemplateKwargs?["reasoning_effort"],
+            isHarmony: usesHarmonyChannels
+        )
+        var originalError: Error?
+
+        for candidate in candidates {
+            do {
+                return try await context.processor.prepare(
+                    input: try userInput(from: request, reasoningEffort: candidate)
+                )
+            } catch {
+                if originalError == nil {
+                    originalError = error
+                }
+            }
+        }
+
+        throw originalError ?? NativeModelEngineError.invalidPrompt
     }
 
     private func samplingParameters(from request: OpenAIChatRequest) throws -> SamplingParameters {
@@ -492,12 +518,18 @@ public final class NativeModelEngine: @unchecked Sendable {
         return nil
     }
 
-    private func additionalContext(from request: OpenAIChatRequest) -> [String: any Sendable]? {
+    private func additionalContext(
+        from request: OpenAIChatRequest,
+        reasoningEffort: ReasoningEffortTemplateValue = .omitted
+    ) -> [String: any Sendable]? {
         var context: [String: any Sendable] = [:]
         if let chatTemplateKwargs = request.chatTemplateKwargs {
-            for (key, value) in chatTemplateKwargs {
+            for (key, value) in chatTemplateKwargs where key != "reasoning_effort" {
                 context[key] = sendableValue(from: value)
             }
+        }
+        if case .value(let value) = reasoningEffort {
+            context["reasoning_effort"] = sendableValue(from: value)
         }
         if let enableThinking = request.enableThinking {
             context["enable_thinking"] = enableThinking
@@ -542,6 +574,88 @@ public final class NativeModelEngine: @unchecked Sendable {
         case .null:
             return Optional<String>.none as String?
         }
+    }
+}
+
+enum ReasoningEffortTemplateValue: Equatable {
+    case value(OpenAIJSONValue)
+    case omitted
+}
+
+enum ReasoningEffortCompatibility {
+    private static let aliases: [String: String] = [
+        "off": "low",
+        "none": "low",
+        "minimal": "low",
+        "moderate": "medium",
+        "medium": "high",
+        "high": "xhigh",
+        "xhigh": "max",
+        "max": "xhigh",
+        "maximum": "max",
+        "ultra": "max",
+    ]
+
+    private static let harmonyAliases: [String: String] = [
+        "off": "low",
+        "none": "low",
+        "minimal": "low",
+        "low": "low",
+        "moderate": "medium",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "high",
+        "max": "high",
+        "maximum": "high",
+        "ultra": "high",
+    ]
+
+    private static let namedLevels = Set(aliases.keys)
+
+    static func candidates(
+        for value: OpenAIJSONValue?,
+        isHarmony: Bool
+    ) -> [ReasoningEffortTemplateValue] {
+        guard let value else { return [.omitted] }
+
+        if isHarmony {
+            guard case .string(let rawValue) = value,
+                let mapped = harmonyAliases[rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()]
+            else {
+                return [.omitted]
+            }
+            return [.value(.string(mapped))]
+        }
+
+        let normalized = normalized(value)
+        var candidates: [ReasoningEffortTemplateValue] = [.value(normalized)]
+        if let fallback = fallback(for: normalized), fallback != normalized {
+            candidates.append(.value(fallback))
+        }
+        candidates.append(.omitted)
+        return candidates
+    }
+
+    private static func normalized(_ value: OpenAIJSONValue) -> OpenAIJSONValue {
+        guard case .string(let rawValue) = value else { return value }
+        let normalized = rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if namedLevels.contains(normalized) || finiteNumber(normalized) != nil {
+            return .string(normalized)
+        }
+        return value
+    }
+
+    private static func fallback(for value: OpenAIJSONValue) -> OpenAIJSONValue? {
+        guard case .string(let string) = value else { return nil }
+        if let numeric = finiteNumber(string) {
+            return .number(numeric)
+        }
+        return aliases[string].map(OpenAIJSONValue.string)
+    }
+
+    private static func finiteNumber(_ value: String) -> Double? {
+        guard let number = Double(value), number.isFinite else { return nil }
+        return number
     }
 }
 

@@ -4,6 +4,19 @@ import MLXLMCommon
 import XCTest
 
 final class BatchCacheShapeTests: XCTestCase {
+    func testSingletonMambaExtractionPreservesConcreteCacheType() throws {
+        let cache = MambaCache()
+        cache[0] = MLXArray.zeros([1, 2, 3])
+        cache[1] = MLXArray.zeros([1, 2, 3])
+        let layer = try BatchLayerCache.adoptSingle(cache)
+
+        let extracted = layer.extract(0)
+
+        XCTAssertTrue(extracted is MambaCache)
+        XCTAssertEqual(extracted.metaState, cache.metaState)
+        XCTAssertEqual(extracted.state.map(\.shape), cache.state.map(\.shape))
+    }
+
     override func setUpWithError() throws {
         try super.setUpWithError()
         try MLXMetalRuntime.requireAvailable()

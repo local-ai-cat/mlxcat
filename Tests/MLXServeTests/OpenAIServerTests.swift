@@ -728,6 +728,33 @@ final class OpenAIServerTests: XCTestCase {
         XCTAssertEqual(message["content"] as? String, "plain answer")
     }
 
+    func testBufferedChatReportsCachedPromptTokens() async throws {
+        let backend = ThinkingResponseBackend(chunks: [
+            OpenAIChatChunk(
+                text: "cached answer",
+                tokenID: 1,
+                finishReason: "stop",
+                cachedPromptTokens: 37
+            ),
+        ])
+        let server = try OpenAIServer(port: 0, backend: backend)
+        try await server.start()
+        defer { server.stop() }
+
+        let response = try await postChat(
+            to: try XCTUnwrap(server.boundPort),
+            stream: false,
+            enableThinking: false
+        )
+        let body = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: response) as? [String: Any]
+        )
+        let usage = try XCTUnwrap(body["usage"] as? [String: Any])
+        let promptDetails = try XCTUnwrap(usage["prompt_tokens_details"] as? [String: Any])
+
+        XCTAssertEqual(promptDetails["cached_tokens"] as? Int, 37)
+    }
+
     private func postChat(
         to port: UInt16,
         stream: Bool,

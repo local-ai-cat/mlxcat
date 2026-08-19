@@ -306,7 +306,7 @@ final class BatchInvarianceTests: XCTestCase {
         var currentToken: MLXArray
 
         switch try model.prepare(
-            input, cache: cache, state: state, windowSize: parameters.prefillStepSize) {
+            input, cache: cache, state: state, prefill: parameters.prefill) {
         case .tokens(let tokens):
             let output = model(tokens[text: .newAxis], cache: cache, state: state)
             state = output.state

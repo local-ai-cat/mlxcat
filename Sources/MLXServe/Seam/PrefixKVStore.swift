@@ -132,17 +132,36 @@ public final class BlockAwarePrefixKVStore: PrefixKVStore, @unchecked Sendable {
         }
     }
 
-    public static func cache(from layer: SerializedKVLayer) throws -> KVCacheSimple {
-        guard layer.state.count == 2 else {
-            throw PrefixKVStoreError.unsupportedLayerState
+    public static func cache(from layer: SerializedKVLayer) throws -> any KVCache {
+        switch layer.className {
+        case "MambaCache":
+            guard layer.state.count <= 2 else {
+                throw PrefixKVStoreError.unsupportedLayerState
+            }
+            let cache = MambaCache(leftPadding: metadataValues(layer.metaState, at: 2))
+            cache.state = layer.state
+            cache.prepare(lengths: metadataValues(layer.metaState, at: 3))
+            return cache
+        case "KVCache", "KVCacheSimple":
+            guard layer.state.count == 2 else {
+                throw PrefixKVStoreError.unsupportedLayerState
+            }
+            let cache = KVCacheSimple()
+            cache.state = layer.state
+            return cache
+        default:
+            guard layer.state.count == 2, layer.metaState.isEmpty else {
+                throw PrefixKVStoreError.unsupportedCacheClass(layer.className)
+            }
+            let cache = KVCacheSimple()
+            cache.state = layer.state
+            return cache
         }
+    }
 
-        let cache = KVCacheSimple()
-        cache.state = layer.state
-        if !layer.metaState.isEmpty {
-            cache.metaState = layer.metaState
-        }
-        return cache
+    private static func metadataValues(_ metaState: [String], at index: Int) -> [Int]? {
+        guard metaState.indices.contains(index), !metaState[index].isEmpty else { return nil }
+        return metaState[index].split(separator: ",").compactMap { Int($0) }
     }
 
     private func withLock<T>(_ body: () throws -> T) rethrows -> T {
@@ -155,4 +174,6 @@ public final class BlockAwarePrefixKVStore: PrefixKVStore, @unchecked Sendable {
 public enum PrefixKVStoreError: Error, Equatable {
     case invalidHit
     case unsupportedLayerState
+    case unsupportedCacheClass(String)
+    case unsupportedCacheTrim(String)
 }

@@ -13,7 +13,7 @@ enum SerialGreedyTokenHelper {
         var currentLogits: MLXArray
         var currentToken: MLXArray
 
-        switch try model.prepare(input, cache: cache, state: nil, windowSize: parameters.prefillStepSize) {
+        switch try model.prepare(input, cache: cache, state: nil, prefill: parameters.prefill) {
         case .tokens(let tokens):
             let output = model(tokens[text: .newAxis], cache: cache, state: state)
             state = output.state

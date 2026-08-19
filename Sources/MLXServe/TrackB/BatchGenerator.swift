@@ -49,17 +49,20 @@ public struct Response: Sendable, Equatable {
     public let token: Int
     public let finishReason: FinishReason?
     public let logprobs: [Int: Float]?
+    public let cachedPromptTokens: Int
 
     public init(
         uid: String,
         token: Int,
         finishReason: FinishReason? = nil,
-        logprobs: [Int: Float]? = nil
+        logprobs: [Int: Float]? = nil,
+        cachedPromptTokens: Int = 0
     ) {
         self.uid = uid
         self.token = token
         self.finishReason = finishReason
         self.logprobs = logprobs
+        self.cachedPromptTokens = cachedPromptTokens
     }
 }
 
@@ -89,7 +92,7 @@ public final class StaticBatchGenerator {
             // state: nil — `cache` is fresh per input, so no prior model state.
             switch try model.prepare(
                 input, cache: cache, state: nil,
-                windowSize: parameters.prefillStepSize) {
+                prefill: parameters.prefill) {
             case .tokens(let tokens):
                 remaining = tokens
             case .logits(let output):
@@ -242,7 +245,7 @@ public final class ContinuousBatchGenerator {
         // state: nil — `rowCache` was just created above, so no prior state.
         switch try model.prepare(
             input, cache: rowCache, state: nil,
-            windowSize: parameters.prefillStepSize) {
+            prefill: parameters.prefill) {
         case .tokens(let tokens):
             if tokens.tokens.dim(0) == 1 {
                 let output = model(tokens[text: .newAxis], cache: rowCache, state: nil)
@@ -422,26 +425,16 @@ public final class ContinuousBatchGenerator {
         filter(keeping: keptRows)
     }
 
-    public func extractCache(uid: String) -> [KVCacheSimple]? {
+    public func extractCache(uid: String) -> [any KVCache]? {
         guard let row = rowUIDs.firstIndex(of: uid) else { return nil }
 
-        let extracted: [KVCacheSimple]
+        let extracted: [any KVCache]
         switch cacheStorage {
         case .empty:
             return nil
         case .singleton(let cache):
             guard row == 0 else { return nil }
-            extracted = cache.map { layer in
-                if let simple = layer.copy() as? KVCacheSimple {
-                    return simple
-                }
-                let simple = KVCacheSimple()
-                simple.state = layer.state
-                if !layer.metaState.isEmpty {
-                    simple.metaState = layer.metaState
-                }
-                return simple
-            }
+            extracted = cache.map { $0.copy() }
         case .batched(let cache):
             extracted = cache.map { $0.extract(row) }
         }

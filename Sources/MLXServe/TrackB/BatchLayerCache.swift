@@ -141,10 +141,10 @@ final class BatchLayerCache {
         refreshBatchedMetaState()
     }
 
-    func extract(_ row: Int) -> KVCacheSimple {
+    func extract(_ row: Int) -> any KVCache {
         if layout == .single {
             guard row == 0, !rowMetaStates.isEmpty else { return KVCacheSimple() }
-            return Self.simpleCache(from: kvCache)
+            return kvCache.copy()
         }
 
         if layout == .sequence, let cache = kvCache as? BatchKVCache {
@@ -178,18 +178,6 @@ final class BatchLayerCache {
         kvCache = merged.kvCache
         layout = merged.layout
         rowMetaStates = merged.rowMetaStates
-    }
-
-    private static func simpleCache(from cache: any KVCache) -> KVCacheSimple {
-        if let simple = cache.copy() as? KVCacheSimple {
-            return simple
-        }
-        let simple = KVCacheSimple()
-        simple.state = cache.state
-        if !cache.metaState.isEmpty {
-            simple.metaState = cache.metaState
-        }
-        return simple
     }
 
     private static func mergeBatchState(_ caches: [any KVCache]) throws -> BatchLayerCache {

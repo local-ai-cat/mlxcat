@@ -381,7 +381,8 @@ public actor Scheduler {
         let response = Response(
             uid: request.uid,
             token: initialTokenID,
-            finishReason: finishReason
+            finishReason: finishReason,
+            cachedPromptTokens: row.prefixHit?.matchedTokenCount ?? 0
         )
         collector.record(response)
         return response
@@ -390,10 +391,10 @@ public actor Scheduler {
     private func advanceAdmission(allowPartialPrefill: Bool) throws -> PreparedBatchRow? {
         guard var admission = admissionInProgress else { return nil }
 
-        // `prefillStepSize` became optional upstream (nil = "no chunking"), but
+        // `prefill.stepSize` is optional upstream (nil = model default), but
         // this scheduler needs a concrete chunk size; 512 was the non-optional
         // default it was written against, so this preserves the prior behavior.
-        let prefillStep: Int = max(1, parameters.prefillStepSize ?? 512)
+        let prefillStep: Int = max(1, parameters.prefill.stepSize ?? 512)
         let stepBudget: Int = allowPartialPrefill ? prefillStep : Int.max
         var remainingBudget = stepBudget
         while admission.nextPrefillIndex < admission.prefillRange.upperBound, remainingBudget > 0 {
@@ -459,7 +460,7 @@ public actor Scheduler {
             // prior model state to carry into the prefill.
             switch try model.prepare(
                 request.input, cache: rowCache, state: nil,
-                windowSize: parameters.prefillStepSize) {
+                prefill: parameters.prefill) {
             case .tokens(let tokens):
                 promptText = tokens
             case .logits(let output):
@@ -547,7 +548,7 @@ public actor Scheduler {
         promptTokens: [Int],
         promptTokensArray: MLXArray,
         hit: PrefixKVStoreHit,
-        reconstructedCache: [KVCacheSimple]
+        reconstructedCache: [any KVCache]
     ) throws -> PreparedAdmission {
         let matched = hit.matchedTokenCount
         guard matched <= promptTokens.count else {
@@ -600,7 +601,7 @@ public actor Scheduler {
             SerializedKVLayer(
                 state: $0.state,
                 metaState: $0.metaState,
-                className: "KVCacheSimple"
+                className: String(describing: type(of: $0))
             )
         }
     }
@@ -617,7 +618,7 @@ public actor Scheduler {
             SerializedKVLayer(
                 state: $0.state,
                 metaState: $0.metaState,
-                className: "KVCacheSimple"
+                className: String(describing: type(of: $0))
             )
         }
         do {

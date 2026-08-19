@@ -171,11 +171,18 @@ public struct OpenAIChatChunk: Sendable {
     public let text: String
     public let tokenID: Int
     public let finishReason: String?
+    public let cachedPromptTokens: Int
 
-    public init(text: String, tokenID: Int, finishReason: String? = nil) {
+    public init(
+        text: String,
+        tokenID: Int,
+        finishReason: String? = nil,
+        cachedPromptTokens: Int = 0
+    ) {
         self.text = text
         self.tokenID = tokenID
         self.finishReason = finishReason
+        self.cachedPromptTokens = cachedPromptTokens
     }
 }
 
@@ -649,6 +656,7 @@ public final class OpenAIServer: @unchecked Sendable {
         var firstToken: UInt64?
         var lastToken: UInt64?
         var completionTokens = 0
+        var cachedPromptTokens = 0
         var finishReason = "length"
         // Raw generated token ids captured before the thinking parser reshapes text,
         // flushed on the terminal chunk delta for the migration-gate parity oracle.
@@ -680,6 +688,7 @@ public final class OpenAIServer: @unchecked Sendable {
                 }
                 lastToken = now
                 completionTokens += 1
+                cachedPromptTokens = max(cachedPromptTokens, chunk.cachedPromptTokens)
                 streamTokenIDs.append(chunk.tokenID)
                 if let chunkFinishReason = chunk.finishReason {
                     finishReason = chunkFinishReason
@@ -768,6 +777,7 @@ public final class OpenAIServer: @unchecked Sendable {
                     "choices": [],
                     "usage": usage(
                         promptTokens: stream.promptTokens,
+                        cachedPromptTokens: cachedPromptTokens,
                         completionTokens: completionTokens,
                         started: started,
                         firstToken: firstToken ?? ended,
@@ -804,6 +814,7 @@ public final class OpenAIServer: @unchecked Sendable {
         var firstToken: UInt64?
         var lastToken: UInt64?
         var completionTokens = 0
+        var cachedPromptTokens = 0
         var finishReason = "length"
         var text = ""
         // Raw generated token ids captured before the thinking parser reshapes text,
@@ -838,6 +849,7 @@ public final class OpenAIServer: @unchecked Sendable {
                 }
                 lastToken = now
                 completionTokens += 1
+                cachedPromptTokens = max(cachedPromptTokens, chunk.cachedPromptTokens)
                 streamTokenIDs.append(chunk.tokenID)
                 if let chunkFinishReason = chunk.finishReason {
                     finishReason = chunkFinishReason
@@ -957,6 +969,7 @@ public final class OpenAIServer: @unchecked Sendable {
                     "choices": [],
                     "usage": usage(
                         promptTokens: stream.promptTokens,
+                        cachedPromptTokens: cachedPromptTokens,
                         completionTokens: completionTokens,
                         started: started,
                         firstToken: firstToken ?? ended,
@@ -981,6 +994,7 @@ public final class OpenAIServer: @unchecked Sendable {
         var firstToken: UInt64?
         var lastToken: UInt64?
         var completionTokens = 0
+        var cachedPromptTokens = 0
         var finishReason = "length"
         var text = ""
         // Raw generated token ids, in order, for the migration-gate parity oracle.
@@ -999,6 +1013,7 @@ public final class OpenAIServer: @unchecked Sendable {
             }
             lastToken = now
             completionTokens += 1
+            cachedPromptTokens = max(cachedPromptTokens, chunk.cachedPromptTokens)
             tokenIDs.append(chunk.tokenID)
             if let chunkFinishReason = chunk.finishReason {
                 finishReason = chunkFinishReason
@@ -1055,6 +1070,7 @@ public final class OpenAIServer: @unchecked Sendable {
                 ],
                 "usage": usage(
                     promptTokens: stream.promptTokens,
+                    cachedPromptTokens: cachedPromptTokens,
                     completionTokens: completionTokens,
                     started: started,
                     firstToken: firstToken ?? ended,
@@ -1115,6 +1131,7 @@ public final class OpenAIServer: @unchecked Sendable {
 
     private func usage(
         promptTokens: Int,
+        cachedPromptTokens: Int,
         completionTokens: Int,
         started: UInt64,
         firstToken: UInt64,
@@ -1130,7 +1147,7 @@ public final class OpenAIServer: @unchecked Sendable {
             "total_tokens": promptTokens + completionTokens,
             "input_tokens": promptTokens,
             "output_tokens": completionTokens,
-            "prompt_tokens_details": ["cached_tokens": 0],
+            "prompt_tokens_details": ["cached_tokens": cachedPromptTokens],
             "time_to_first_token": ttft,
             "total_time": total,
             "prompt_eval_duration": ttft,

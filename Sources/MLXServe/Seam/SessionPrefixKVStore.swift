@@ -121,7 +121,9 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
             return try slot.layers.map { layer in
                 let cache = try BlockAwarePrefixKVStore.cache(from: layer)
                 if storage.trimCount > 0 {
-                    _ = cache.trim(storage.trimCount)
+                    guard cache.trim(storage.trimCount) == storage.trimCount else {
+                        throw PrefixKVStoreError.unsupportedCacheTrim(layer.className)
+                    }
                 }
                 return SerializedKVLayer(
                     state: cache.state,

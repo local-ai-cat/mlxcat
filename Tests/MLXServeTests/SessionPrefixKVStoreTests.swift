@@ -1,8 +1,50 @@
 import MLX
+import MLXLMCommon
 @testable import MLXServe
 import XCTest
 
 final class SessionPrefixKVStoreTests: XCTestCase {
+    func testMambaLayerRoundTripsWithoutCoercingMetadataIntoSimpleCache() throws {
+        let original = MambaCache()
+        original[0] = MLXArray.zeros([1, 2, 3])
+        original[1] = MLXArray.zeros([1, 2, 3])
+        let layer = SerializedKVLayer(
+            state: original.state,
+            metaState: original.metaState,
+            className: "MambaCache"
+        )
+
+        let restored = try BlockAwarePrefixKVStore.cache(from: layer)
+
+        XCTAssertTrue(restored is MambaCache)
+        XCTAssertEqual(restored.metaState, original.metaState)
+        XCTAssertEqual(restored.state.map(\.shape), original.state.map(\.shape))
+    }
+
+    func testMambaLayerRejectsUnsafeRewind() throws {
+        let original = MambaCache()
+        original[0] = MLXArray.zeros([1, 2, 3])
+        original[1] = MLXArray.zeros([1, 2, 3])
+        let store = SessionPrefixKVStore()
+        try store.store(
+            tokens: [1, 2, 3],
+            sessionKey: "mamba",
+            cache: [
+                SerializedKVLayer(
+                    state: original.state,
+                    metaState: original.metaState,
+                    className: "MambaCache"
+                )
+            ]
+        )
+        let hit = try XCTUnwrap(store.fetch(tokens: [1, 2, 9], sessionKey: "mamba"))
+
+        XCTAssertThrowsError(try store.reconstructCache(from: hit)) { error in
+            XCTAssertEqual(error as? PrefixKVStoreError, .unsupportedCacheTrim("MambaCache"))
+        }
+        store.release(hit)
+    }
+
     func testSessionPlannerExtendsTrimsAndResetsBySession() throws {
         let store = SessionPrefixKVStore()
         try store.store(tokens: [1, 2, 3, 4], sessionKey: "s1", cache: Self.layers(tokenCount: 4))
