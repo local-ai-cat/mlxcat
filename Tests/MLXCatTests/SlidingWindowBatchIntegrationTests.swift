@@ -1,0 +1,215 @@
+import MLXHuggingFace
+import MLXLLM
+import MLXLMCommon
+import MLXCat
+import Tokenizers
+import XCTest
+
+final class SlidingWindowBatchIntegrationTests: XCTestCase {
+    func testSlidingWindowBatchMatchesSerialGreedyTokens() async throws {
+        try MLXMetalRuntime.requireAvailable()
+
+        guard let modelPath = ProcessInfo.processInfo.environment["MLXSERVE_SLIDING_TEST_MODEL"] else {
+            throw XCTSkip("Set MLXSERVE_SLIDING_TEST_MODEL to a sliding-window model to run this gate.")
+        }
+
+        let container = try await LLMModelFactory.shared.loadContainer(
+            from: URL(fileURLWithPath: modelPath),
+            using: #huggingFaceTokenizerLoader()
+        )
+
+        try await container.perform { context in
+            let tokenCount = 4
+            let parameters = GenerateParameters(maxTokens: tokenCount, temperature: 0)
+            let prompts = [
+                "In one sentence, define sliding-window attention:",
+                "Write a concise Swift comment explaining why mixed-length prompt batches need left padding before attention masking:",
+            ]
+            var inputs: [LMInput] = []
+            for prompt in prompts {
+                inputs.append(
+                    try await context.processor.prepare(input: UserInput(prompt: prompt))
+                )
+            }
+            let serial = try inputs.map {
+                try SerialGreedyTokenHelper.tokens(
+                    model: context.model,
+                    input: $0,
+                    parameters: parameters,
+                    steps: tokenCount
+                )
+            }
+            let engine = MLXCatEngine(
+                model: context.model,
+                parameters: parameters,
+                maxConcurrentRequests: 2
+            )
+            let batched = try await engine.generate(
+                inputs.enumerated().map { index, input in
+                    Request(
+                        uid: "sliding-batch-\(index)",
+                        input: input,
+                        maxTokens: tokenCount,
+                        sampling: SamplingParameters(temperature: 0)
+                    )
+                }
+            )
+
+            for index in inputs.indices {
+                XCTAssertEqual(batched["sliding-batch-\(index)"], serial[index])
+            }
+        }
+    }
+
+    func testSlidingWindowInsertRemoveExtractMidBatch() async throws {
+        try MLXMetalRuntime.requireAvailable()
+
+        guard let modelPath = ProcessInfo.processInfo.environment["MLXSERVE_SLIDING_TEST_MODEL"] else {
+            throw XCTSkip("Set MLXSERVE_SLIDING_TEST_MODEL to a sliding-window model to run this gate.")
+        }
+
+        let container = try await LLMModelFactory.shared.loadContainer(
+            from: URL(fileURLWithPath: modelPath),
+            using: #huggingFaceTokenizerLoader()
+        )
+
+        try await container.perform { context in
+            let parameters = GenerateParameters(maxTokens: 2, temperature: 0)
+            let generator = ContinuousBatchGenerator(
+                model: context.model,
+                parameters: parameters
+            )
+            let prompts = [
+                "The kernel cache stores",
+                "Explain batching in a short sentence:",
+                "Name two Apple silicon GPU facts:",
+            ]
+            var inputs: [LMInput] = []
+            for prompt in prompts {
+                inputs.append(
+                    try await context.processor.prepare(input: UserInput(prompt: prompt))
+                )
+            }
+
+            try generator.insert(uid: "sliding-0", input: inputs[0], sampling: SamplingParameters(temperature: 0))
+            try generator.insert(uid: "sliding-1", input: inputs[1], sampling: SamplingParameters(temperature: 0))
+            XCTAssertEqual(generator.next().count, 2)
+            try generator.insert(uid: "sliding-2", input: inputs[2], sampling: SamplingParameters(temperature: 0))
+            generator.remove(uid: "sliding-1")
+
+            XCTAssertEqual(generator.uids, ["sliding-0", "sliding-2"])
+            XCTAssertNotNil(generator.extractCache(uid: "sliding-0"))
+            XCTAssertNotNil(generator.extractCache(uid: "sliding-2"))
+            XCTAssertEqual(generator.next().count, 2)
+        }
+    }
+
+    func testSlidingWindowBatchMatchesSerialBeyondWindow() async throws {
+        try MLXMetalRuntime.requireAvailable()
+
+        guard let modelPath = ProcessInfo.processInfo.environment["MLXSERVE_SLIDING_TEST_MODEL"] else {
+            throw XCTSkip("Set MLXSERVE_SLIDING_TEST_MODEL to a sliding-window model to run this gate.")
+        }
+
+        let container = try await LLMModelFactory.shared.loadContainer(
+            from: URL(fileURLWithPath: modelPath),
+            using: #huggingFaceTokenizerLoader()
+        )
+
+        try await container.perform { context in
+            // gpt-oss uses slidingWindow=128; 160 decode steps force the batch
+            // mask to restrict single-token decode after the window is exceeded.
+            let tokenCount = 160
+            let parameters = GenerateParameters(maxTokens: tokenCount, temperature: 0)
+            let prompts = [
+                "Continue this technical note about sliding-window attention in concise prose:",
+                "Write a compact implementation diary for a Swift batch inference cache:",
+            ]
+            var inputs: [LMInput] = []
+            for prompt in prompts {
+                inputs.append(
+                    try await context.processor.prepare(input: UserInput(prompt: prompt))
+                )
+            }
+            let serial = try inputs.map {
+                try SerialGreedyTokenHelper.tokens(
+                    model: context.model,
+                    input: $0,
+                    parameters: parameters,
+                    steps: tokenCount
+                )
+            }
+            let engine = MLXCatEngine(
+                model: context.model,
+                parameters: parameters,
+                maxConcurrentRequests: 2
+            )
+            let batched = try await engine.generate(
+                inputs.enumerated().map { index, input in
+                    Request(
+                        uid: "sliding-long-\(index)",
+                        input: input,
+                        maxTokens: tokenCount,
+                        sampling: SamplingParameters(temperature: 0)
+                    )
+                }
+            )
+
+            for index in inputs.indices {
+                let actual = try XCTUnwrap(batched["sliding-long-\(index)"])
+                // Long greedy generations can have rare isolated token flips from
+                // accumulated fp non-determinism around close logits. The important
+                // sliding-window failure mode is a sustained divergence after the
+                // window engages, so this gate bounds total drift and rejects cascades.
+                Self.assertTokenSequencesMatchWithinSlidingWindowMargin(
+                    actual: actual,
+                    expected: serial[index],
+                    label: "sliding-long-\(index)"
+                )
+            }
+        }
+    }
+
+    private static func assertTokenSequencesMatchWithinSlidingWindowMargin(
+        actual: [Int],
+        expected: [Int],
+        label: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertEqual(actual.count, expected.count, "\(label) token count mismatch", file: file, line: line)
+        let total = min(actual.count, expected.count)
+        let mismatchIndices = (0 ..< total).filter { actual[$0] != expected[$0] }
+        let allowedMismatches = max(2, total / 40)
+        let firstMismatches = mismatchIndices.prefix(10).map(String.init).joined(separator: ",")
+
+        XCTAssertLessThanOrEqual(
+            mismatchIndices.count,
+            allowedMismatches,
+            "\(label) mismatch count \(mismatchIndices.count)/\(total) exceeds margin \(allowedMismatches); first mismatches: [\(firstMismatches)]",
+            file: file,
+            line: line
+        )
+
+        var longestRun = 0
+        var currentRun = 0
+        var previousIndex: Int?
+        for index in mismatchIndices {
+            if let previousIndex, index == previousIndex + 1 {
+                currentRun += 1
+            } else {
+                currentRun = 1
+            }
+            longestRun = max(longestRun, currentRun)
+            previousIndex = index
+        }
+
+        XCTAssertLessThan(
+            longestRun,
+            5,
+            "\(label) has sustained mismatch run of \(longestRun); first mismatches: [\(firstMismatches)]",
+            file: file,
+            line: line
+        )
+    }
+}

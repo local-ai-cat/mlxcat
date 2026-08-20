@@ -3,42 +3,42 @@
 import PackageDescription
 
 let package = Package(
-    name: "mlxserve",
+    name: "mlxcat",
     platforms: [
         .macOS(.v14),
         .iOS(.v17)
     ],
     products: [
         .library(
-            name: "MLXServe",
-            targets: ["MLXServe"]
+            name: "MLXCat",
+            targets: ["MLXCat"]
         ),
         .library(
-            name: "MLXServeHTTP",
-            targets: ["MLXServeHTTP"]
+            name: "MLXCatHTTP",
+            targets: ["MLXCatHTTP"]
         ),
         // The native MLX chat engine wired as an OpenAI-compatible backend,
         // linkable in-process (e.g. by the iOS app) without the server executable
         // or WhisperKit. This is what makes "embed the real engine" possible.
         .library(
-            name: "MLXServeNative",
-            targets: ["MLXServeNative"]
+            name: "MLXCatNative",
+            targets: ["MLXCatNative"]
         ),
         .library(
-            name: "MLXServeSpeech",
-            targets: ["MLXServeSpeech"]
+            name: "MLXCatSpeech",
+            targets: ["MLXCatSpeech"]
         ),
         .library(
-            name: "MLXServeSpeechWhisperKit",
-            targets: ["MLXServeSpeechWhisperKit"]
+            name: "MLXCatSpeechWhisperKit",
+            targets: ["MLXCatSpeechWhisperKit"]
         ),
         .executable(
-            name: "mlxserve-bench",
-            targets: ["MLXServeBench"]
+            name: "mlxcat-bench",
+            targets: ["MLXCatBench"]
         ),
         .executable(
-            name: "mlxserve-http",
-            targets: ["MLXServeHTTPServer"]
+            name: "mlxcat-http",
+            targets: ["MLXCatHTTPServer"]
         )
     ],
     dependencies: [
@@ -67,7 +67,7 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "MLXServe",
+            name: "MLXCat",
             dependencies: [
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
@@ -75,9 +75,9 @@ let package = Package(
             ]
         ),
         .executableTarget(
-            name: "MLXServeBench",
+            name: "MLXCatBench",
             dependencies: [
-                "MLXServe",
+                "MLXCat",
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "MLXHuggingFace", package: "mlx-swift-lm"),
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
@@ -86,14 +86,14 @@ let package = Package(
             ]
         ),
         .target(
-            name: "MLXServeHTTP",
+            name: "MLXCatHTTP",
             dependencies: []
         ),
         .target(
-            name: "MLXServeNative",
+            name: "MLXCatNative",
             dependencies: [
-                "MLXServe",
-                "MLXServeHTTP",
+                "MLXCat",
+                "MLXCatHTTP",
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "MLXHuggingFace", package: "mlx-swift-lm"),
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
@@ -103,24 +103,24 @@ let package = Package(
             ]
         ),
         .target(
-            name: "MLXServeSpeech",
+            name: "MLXCatSpeech",
             dependencies: []
         ),
         .target(
-            name: "MLXServeSpeechWhisperKit",
+            name: "MLXCatSpeechWhisperKit",
             dependencies: [
-                "MLXServeSpeech",
+                "MLXCatSpeech",
                 .product(name: "WhisperKit", package: "WhisperKit"),
             ]
         ),
         .executableTarget(
-            name: "MLXServeHTTPServer",
+            name: "MLXCatHTTPServer",
             dependencies: [
-                "MLXServe",
-                "MLXServeHTTP",
-                "MLXServeNative",
-                "MLXServeSpeech",
-                "MLXServeSpeechWhisperKit",
+                "MLXCat",
+                "MLXCatHTTP",
+                "MLXCatNative",
+                "MLXCatSpeech",
+                "MLXCatSpeechWhisperKit",
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "MLXEmbedders", package: "mlx-swift-lm"),
                 .product(name: "MLXHuggingFace", package: "mlx-swift-lm"),
@@ -131,14 +131,14 @@ let package = Package(
             ]
         ),
         .testTarget(
-            name: "MLXServeTests",
+            name: "MLXCatTests",
             dependencies: [
-                "MLXServe",
-                "MLXServeHTTP",
-                "MLXServeNative",
-                "MLXServeHTTPServer",
-                "MLXServeSpeech",
-                "MLXServeSpeechWhisperKit",
+                "MLXCat",
+                "MLXCatHTTP",
+                "MLXCatNative",
+                "MLXCatHTTPServer",
+                "MLXCatSpeech",
+                "MLXCatSpeechWhisperKit",
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "MLXHuggingFace", package: "mlx-swift-lm"),
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm"),

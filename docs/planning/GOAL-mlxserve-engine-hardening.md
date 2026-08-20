@@ -1,17 +1,17 @@
-# GOAL: mlxserve engine hardening (vLLM-derived)
+# GOAL: mlxcat engine hardening (vLLM-derived)
 
-Autonomous Codex goal session. Port vLLM's proven engine patterns into mlxserve, one
+Autonomous Codex goal session. Port vLLM's proven engine patterns into mlxcat, one
 focused+tested commit at a time, looping with full test gates on **Mac + iPhone 16** until
 every gate is green. Reference engines are Python (do NOT run them — translate the LOGIC to
 Swift): **vLLM** `/Users/timapple/Documents/Guest/vllm` (canonical), **omlx**
 `/Users/timapple/Documents/Guest/omlx` (cross-ref).
 
 ## Repo & branch
-- Engine: `/Users/timapple/Documents/Github/mlxserve-native`, branch `feat/parity-next`
-  (= local-ai-cat/mlxserve main; PUBLIC — builds/pushes anywhere). Commit per item; do NOT
+- Engine: `/Users/timapple/Documents/Github/mlxcat-native`, branch `feat/parity-next`
+  (= local-ai-cat/mlxcat main; PUBLIC — builds/pushes anywhere). Commit per item; do NOT
   push until the governor integrates (pin bump for the app).
 - App (for the iPhone gate): `/Users/timapple/Documents/Github/lac-iostest`, branch
-  `feat/mlxserve-migration-gate`.
+  `feat/mlxcat-migration-gate`.
 
 ## Prerequisites (governor lands these BEFORE the loop starts)
 1. Tool-call parser registry merged on `feat/parity-next` (`ea486ac` + the `<function_call>`
@@ -31,7 +31,7 @@ them — there is no valid call to parse. Every OTHER capability (structured JSO
 determinism, greedy) already passes on all 16 models.
 
 ## Environment & test harness (already built — use these)
-- **Mac fleet gate:** boot `.build/release/mlxserve-http --model-dir ~/Library/Caches/models
+- **Mac fleet gate:** boot `.build/release/mlxcat-http --model-dir ~/Library/Caches/models
   --memory-ceiling-bytes <45G>`; run `scratchpad/correctness_check.py <base_url> <model> <timeout>`
   per served model via `scratchpad/mac_campaign.sh`. Served models (bare leaf ids) span
   Qwen3/2.5/Coder, Llama-3.2, DeepSeek-R1, Qwen2-VL, gemma-4, gpt-oss, Ornith, and the 27/30/35B.
@@ -42,14 +42,14 @@ determinism, greedy) already passes on all 16 models.
 - **Discipline (STRICT):** serialize ALL model loads; before each load gate on
   `memory_pressure -Q` > 40% free; one model at a time. The Mac has 128GB; the iPhone ~6GB
   (small/medium models only).
-- Codex: `model_reasoning_effort: high`, read-only sandbox for review, cwd = the mlxserve worktree.
+- Codex: `model_reasoning_effort: high`, read-only sandbox for review, cwd = the mlxcat worktree.
 
 ## Work items — sequenced (each = one focused, tested commit)
 
 ### Quick correctness wins (independent — do FIRST)
 **W1. Per-request RNG (LIVE BUG).** Seeded requests call `MLXRandom.seed()` → GLOBAL state
 mutation; in a mixed batch the last seeded request skews ALL rows' draws
-(`Sources/MLXServe/TrackB/BatchGenerator.swift:191-195`, incl. XTC uniform `Sampling.swift:504`).
+(`Sources/MLXCat/TrackB/BatchGenerator.swift:191-195`, incl. XTC uniform `Sampling.swift:504`).
 vLLM uses a per-request generator. Fix: per-row `MLXRandom.key(seed)` passed explicitly into
 categorical/uniform draws; unseeded rows keep global/default.
 - DoD: new test — one batch with {seed=A, seed=B, unseeded}: each seeded row is reproducible
@@ -74,7 +74,7 @@ until min reached). Slot into `TokenSampler.sample`; wire request fields through
 (`Scheduler.swift:158-236, 402-420`), stalling every active decode. vLLM has no phases — each
 request's computed-tokens catches up under a per-step token budget + long-prefill threshold
 (`vllm/v1/core/sched/scheduler.py:396-530`, design note 398-407). Make prefill resumable per-step
-state (mlxserve already chunks by `prefillStepSize` — it just never yields between chunks).
+state (mlxcat already chunks by `prefillStepSize` — it just never yields between chunks).
 - Handle landmine: `continue`-not-`break` on temporarily-unschedulable running requests
   (scheduler.py:514-530) — FCFS relaxation to avoid head-of-line blocking.
 - DoD: a test where a long-prompt admission runs CONCURRENTLY with an active decode → the decode

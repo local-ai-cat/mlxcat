@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Correctness gate for one model against a running mlxserve /v1. Mirrors the
+"""Correctness gate for one model against a running mlxcat /v1. Mirrors the
 on-device test_nativeCapabilityCorrectness assertions."""
 import json, sys, urllib.request
 

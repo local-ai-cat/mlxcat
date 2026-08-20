@@ -1,13 +1,13 @@
 # M8b — Speech engine registry: design of record
 
-Decided 2026-07-05 with the operator. Context: `docs-site/pages/mlxserve-omlx-parity.mdx`
+Decided 2026-07-05 with the operator. Context: `docs-site/pages/mlxcat-omlx-parity.mdx`
 (Local-AI-Chat repo) — audio gets done properly in-engine, not deferred to cat-integration.
 
 ## Shape
 
 One registry, engines as peer adapters, consumers on top:
 
-- **`MLXServeSpeech`** (new dependency-free target): the protocol layer —
+- **`MLXCatSpeech`** (new dependency-free target): the protocol layer —
   `SpeechEngineAdapter`, `SpeechStreamSession`, capabilities, `SpeechEngineRegistry`.
 - **Adapter packages/targets** (one per engine, each owning its heavy dependency):
   WhisperKit (ANE) first; Parakeet/FluidAudio (ANE), whisper.cpp (CPU), MLX-ASR (GPU)

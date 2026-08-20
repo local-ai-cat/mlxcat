@@ -1,4 +1,4 @@
-# MLXServe Native vs oMLX Parity
+# MLXCat Native vs oMLX Parity
 
 Date: 2026-07-03
 
@@ -10,16 +10,16 @@ Native in-process benchmark:
 
 ```bash
 MLXSERVE_TEST_MODEL=/Users/timapple/Library/Caches/models/mlx-community/Qwen3-0.6B-4bit \
-  /tmp/mlxserve-m6-bench/mlxserve-bench \
+  /tmp/mlxcat-m6-bench/mlxcat-bench \
   --runs 5 --warmup 2 --decode-tokens 16 \
-  --output /tmp/mlxserve-native-bench-corrected.md
+  --output /tmp/mlxcat-native-bench-corrected.md
 ```
 
 Native HTTP server:
 
 ```bash
 MLXSERVE_TEST_MODEL=/Users/timapple/Library/Caches/models/mlx-community/Qwen3-0.6B-4bit \
-  /tmp/mlxserve-http-m6/mlxserve-http \
+  /tmp/mlxcat-http-m6/mlxcat-http \
   --port 18181 --model-id Qwen3-0.6B-4bit --max-concurrent-requests 8
 ```
 
@@ -95,7 +95,7 @@ Concurrency sweep, HTTP-observed completion throughput:
 
 ## B. Deployment
 
-Native in-process avoids HTTP parsing, socket IO, SSE framing, and server-side chunking behavior. That deployment advantage is real for embedding MLXServe directly, but it is a transport/deployment advantage, not proof that the underlying MLX kernels are faster.
+Native in-process avoids HTTP parsing, socket IO, SSE framing, and server-side chunking behavior. That deployment advantage is real for embedding MLXCat directly, but it is a transport/deployment advantage, not proof that the underlying MLX kernels are faster.
 
 | Path | PP | TG | Notes |
 | --- | ---: | ---: | --- |

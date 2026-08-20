@@ -1,6 +1,6 @@
-# MLXServe — Implementation Plan (for autonomous execution)
+# MLXCat — Implementation Plan (for autonomous execution)
 
-**Repo:** standalone Swift package `mlxserve` (Apache 2.0 + NOTICE crediting `jundot/omlx` + `vllm-mlx`).
+**Repo:** standalone Swift package `mlxcat` (Apache 2.0 + NOTICE crediting `jundot/omlx` + `vllm-mlx`).
 **Mission:** port omlx's two parked serving capabilities to native Swift on mlx-swift, verified end-to-end by `swift test` in isolation (no host app):
 1. **Continuous / batched decode** — decode N concurrent sequences in one forward pass (omlx serving-plan Phase 1/2).
 2. **Tiered prefix KV cache** — chain-hash disk-backed prefix reuse, hot RAM + cold SSD tiers, restart-survivable (Phase 3).
@@ -13,7 +13,7 @@
 
 Two findings reshape the naive plan:
 
-- **A1 — omlx "paging" is NOT GPU-resident paging; there is NO custom Metal attention kernel.** A cache block holds *only metadata* (SHA-256 chain-hash + ref-count). KV bytes live as **one safetensors file per block** (MLXServe block_size=256, §0.5) across a hot-RAM tier + cold-SSD tier. On a request, omlx chain-hashes the prompt, finds the longest cached prefix, `concatenate`s those blocks into a **contiguous** K/V, and feeds the **standard** `scaledDotProductAttention`. → Track A reuses mlx-swift's existing attention; the port is a cache/prefix/IO system, not a kernel.
+- **A1 — omlx "paging" is NOT GPU-resident paging; there is NO custom Metal attention kernel.** A cache block holds *only metadata* (SHA-256 chain-hash + ref-count). KV bytes live as **one safetensors file per block** (MLXCat block_size=256, §0.5) across a hot-RAM tier + cold-SSD tier. On a request, omlx chain-hashes the prompt, finds the longest cached prefix, `concatenate`s those blocks into a **contiguous** K/V, and feeds the **standard** `scaledDotProductAttention`. → Track A reuses mlx-swift's existing attention; the port is a cache/prefix/IO system, not a kernel.
 - **B1 — the ragged mask / batched forward is NOT in omlx; it's in mlx-lm's `GenerationBatch`/`BatchGenerator`.** omlx only *drives* it (insert/next_generated/remove/extract_cache/filter/extend). mlx-swift has single-sequence generation only. → the batched forward + ragged causal mask + per-layer batch cache is **net-new Swift** and the hardest single piece.
 
 **Consequence for structure:** the two tracks are parallelizable and each ships "simple correct" first:
@@ -34,14 +34,14 @@ We port our own Swift, following mlx-lm's *mechanism* + omlx's *serving approach
   - **`GenerationBatch._step` (`generate.py:1320-1378`)** — `(B,1)` forward, `logsumexp` normalize, per-row sampler, `async_eval(next)…eval(current)` double-buffer.
   - **`save/load_prompt_cache` + `state`/`meta_state` (`cache.py:15-85,127-175`)** — Track A serialization primitive: one `.safetensors` with tensor payload + string metadata (class names + meta_state).
   - Provenance PRs: **#443** (original batch API), **#1072** (the clean refactor we're reading), **#1359** (return_logprobs).
-- **omlx (Python, local `~/Documents/Guest/omlx`, Apache-2.0)** = the *serving architecture*: scheduler, chain-hash blocks, hot RAM + cold SSD tiers, CoW prefix sharing, the driving contract. (Block size: omlx's low-level cache manager defaults to 64 (`paged_cache.py:503`) but its **serving scheduler wires 256** (`scheduler.py:1309`), as does mlx-engine — **MLXServe default = 256**, configurable.) Our primary architectural model (see Appendices A/B for file:line maps).
+- **omlx (Python, local `~/Documents/Guest/omlx`, Apache-2.0)** = the *serving architecture*: scheduler, chain-hash blocks, hot RAM + cold SSD tiers, CoW prefix sharing, the driving contract. (Block size: omlx's low-level cache manager defaults to 64 (`paged_cache.py:503`) but its **serving scheduler wires 256** (`scheduler.py:1309`), as does mlx-engine — **MLXCat default = 256**, configurable.) Our primary architectural model (see Appendices A/B for file:line maps).
 - **lmstudio-ai/mlx-engine PR #326 (MERGED, MIT, Python)** = closest sibling — disk-chunked KV (256-token chain-hash blocks) + continuous batching + dedicated cache-I/O thread + chunked prefix restoration. A **design cross-check** for Track A's SSD tier (NOT a Swift dependency — it's Python). Modules to skim: `chunks.py`, `records.py`, `blob_store.py`+`disk_budget.py`, `coordinator.py`+`cache_io_thread.py`.
 - **Signal — GPU-paged route was rejected upstream:** mlx-lm **#610** and **#629** (full continuous-batching-with-paged-KV) were both **CLOSED, not merged**. Corroborates our disk-backed / reconstruct-contiguous approach (finding A1) over vLLM-style GPU paging.
 - **Swift ecosystem: EMPTY.** No batched/continuous generation in mlx-swift or mlx-swift-examples (confirmed). We are building the first Swift batching layer → author from scratch following mlx-lm, nothing to fork.
 - **Convergent upstream cache work (context):** mlx-lm **#1218** (opt-in disk-backed L2 prompt cache), **#1283** (per-request prompt cache files) — the ecosystem is converging on exactly this.
 - **Known-limitation references (design around):** **#980** (prefix cache broken for hybrid/sliding-window upstream — reinforces our full-attention-only v1), **#903** (Qwen3.5 cache-miss bug), **#1251** (`bool('False')==True` corrupts rotating cache serialization — hazard H7).
 
-**LICENSE (corrected):** MLXServe is **Apache-2.0** (a port of Apache-2.0 omlx = derivative work → same license; this is the clean case, NOT a conflict). Referencing/porting patterns from **MIT** sources (mlx-lm, mlx-engine, mlx-swift) *into* an Apache-2.0 project is fully permitted (MIT is permissive). `NOTICE` credits jundot/omlx + vllm-mlx (Apache attribution) and mlx-lm/mlx-engine (courtesy). There is **no** license blocker.
+**LICENSE (corrected):** MLXCat is **Apache-2.0** (a port of Apache-2.0 omlx = derivative work → same license; this is the clean case, NOT a conflict). Referencing/porting patterns from **MIT** sources (mlx-lm, mlx-engine, mlx-swift) *into* an Apache-2.0 project is fully permitted (MIT is permissive). `NOTICE` credits jundot/omlx + vllm-mlx (Apache attribution) and mlx-lm/mlx-engine (courtesy). There is **no** license blocker.
 
 ## 1. Non-goals (scope fence — an autonomous run MUST NOT wander into these)
 
@@ -51,25 +51,25 @@ We port our own Swift, following mlx-lm's *mechanism* + omlx's *serving approach
 - ❌ **GGUF / llama.cpp.** Separate ggml engine. Only negative constraint: keep the scheduler engine-agnostic so a llama.cpp engine could ride it later. Do NOT touch llama.cpp.
 - ❌ Cross-impl on-disk cache reuse with the Python omlx cache dir. Define a **fresh canonical token encoding** for the chain hash; don't reproduce Python `repr`.
 - ❌ Wiring into the Local AI Chat app. That's a later step (SPM pin by SHA behind `LocalAITextGenerating` + `FEATURE_MLXSERVE`). This repo stays standalone + `swift test`-only.
-- ❌ The Python sidecar. Serving topology is decided (native primary + omlx/mlx-engine sidecar as the parked fallback for big coding models / heavy multi-session — see scoping doc). MLXServe is the **native** engine only; the sidecar is a separate `LocalAITextGenerating` backend built later, not here.
+- ❌ The Python sidecar. Serving topology is decided (native primary + omlx/mlx-engine sidecar as the parked fallback for big coding models / heavy multi-session — see scoping doc). MLXCat is the **native** engine only; the sidecar is a separate `LocalAITextGenerating` backend built later, not here.
 
 ---
 
 ## 2. Repo layout
 
 ```
-mlxserve/
+mlxcat/
   Package.swift                 # deps: mlx-swift-lm (MLXLMCommon, MLXLLM) → transitively mlx-swift
   LICENSE                       # Apache 2.0
   NOTICE                        # credits jundot/omlx + vllm-mlx (derivative work)
   README.md                     # what it is; "not affiliated with omlx"
   PLAN.md                       # this file (the executable spec)
-  Sources/MLXServe/
+  Sources/MLXCat/
     TrackB/  (batched decode + scheduler)   # §Track B file map
     TrackA/  (prefix + SSD cache)           # §Track A file map
     Seam/    PrefixKVStore.swift            # the collaborator protocol
-    Engine/  MLXServeEngine.swift           # public façade (generate / stream)
-  Tests/MLXServeTests/
+    Engine/  MLXCatEngine.swift           # public façade (generate / stream)
+  Tests/MLXCatTests/
     Fixtures/                   # golden JSON from Python omlx/mlx-lm (committed)
     Support/                    # model-load helpers, tolerance asserts, fixture loader
     *Tests.swift
@@ -113,7 +113,7 @@ Only after M1 is green. Add `filter` (fancy-index + re-minimize padding, `cache.
 - **Gate:** a row can be added and a finished row removed mid-batch; surviving rows still pass batch-invariance vs their solo runs.
 
 ### M2 — Track B: scheduler + engine
-**Depends on M1.5** (its cancel/finish gate needs mid-batch `remove`/`filter`). Port omlx `Scheduler` (spec-B §3/§4) with collaborators = `nil`. Files: `TrackB/Scheduler.swift` (+ `+Prefill`, `+Cancellation`), `TrackB/Request.swift`, `TrackB/OutputCollector.swift`, `TrackB/Sampling.swift`, `Engine/MLXServeEngine.swift`.
+**Depends on M1.5** (its cancel/finish gate needs mid-batch `remove`/`filter`). Port omlx `Scheduler` (spec-B §3/§4) with collaborators = `nil`. Files: `TrackB/Scheduler.swift` (+ `+Prefill`, `+Cancellation`), `TrackB/Request.swift`, `TrackB/OutputCollector.swift`, `TrackB/Sampling.swift`, `Engine/MLXCatEngine.swift`.
 - `waiting`/`running` queues, FCFS admission, `maxConcurrentRequests` cap.
 - **External prefill** (`_do_external_prefill`, `scheduler.py:2850`): run model on `tokens[0:N-1]` outside the batch; **withhold last token**, hand to `insert`.
 - `step()` pump (spec-B §3.4): drain aborts → admit → one `next_generated()` decode step → detokenize/finish-detect → cleanup.
@@ -125,7 +125,7 @@ Only after M1 is green. Add `filter` (fancy-index + re-minimize padding, `cache.
 ### M3 — Track A: prefix cache, HOT tier only (parallel with M1/M2)
 Port the metadata/prefix core (spec-A §1–3,§5), RAM tier only, **KVCache family only**. Files: `TrackA/KVCacheBlock.swift`, `FreeBlockQueue.swift`, `BlockHashIndex.swift`, `BlockHashing.swift`, `PagedCacheManager.swift`, `CacheTypeHandlers.swift` (KVCache + Default only), `BlockAwarePrefixCache.swift`.
 - `CacheBlock` (`final class`, intrusive free-list or index-based), `BlockTable`, `FreeBlockQueue` (O(1)).
-- **Chain hash** (`compute_block_hash`, `paged_cache.py:78-119`) over a **fresh canonical token encoding** (NOT Python repr). block_size = 256 (MLXServe default; see §0.5).
+- **Chain hash** (`compute_block_hash`, `paged_cache.py:78-119`) over a **fresh canonical token encoding** (NOT Python repr). block_size = 256 (MLXCat default; see §0.5).
 - **Hot block-PAYLOAD store (REQUIRED — Codex MAJOR).** A `CacheBlock` holds only metadata (hash + ref-count); the KV bytes live in a *separate* store (`paged_cache.py:135-163`; omlx keeps them in the SSD manager). M3 must include an in-RAM `blockHash → (keys, values)` payload store so `reconstruct` has tensors to concatenate. **M4 puts the SSD cold tier UNDER this same store.** Without it there is nothing to reconstruct and the M3 gate cannot pass.
 - `PagedCacheManager`: alloc/ref-count/`free`/`touch`/elastic-grow; `fork_block_table` (O(1) ref-bump) + `get_blocks_for_generation` CoW trigger (metadata-only copy).
 - `BlockAwarePrefixCache`: `fetchCache` (longest-prefix) → `reconstructCache` (concat blocks along axis 2 → contiguous cache) → `storeCache`. Axis-info-driven generic slicer (`CacheStateAxisInfo`, `type_handlers.py:56-74`).
@@ -185,7 +185,7 @@ Rotating/sliding-window family (+supersede-on-extend + boundary snapshots), MTP,
   - `B=8`: `1.1855469`, `24`, `0`
   The largest error was on a wide-margin token (`margin=13.125`) with matching serial/batch token id `198`; the committed gate keeps token equality margin-gated and uses a `1.25` logit tolerance for this local 4-bit/bfloat Qwen path.
 - **M1.5 continuous batching, 2026-07-03 on branch `impl/native`: PASS.** Added dynamic `BatchKVCache.filter`/`extend`/`insert`, `ContinuousBatchGenerator` row insert/remove/filter, per-row sampling, and `Response {uid, token, finishReason, logprobs?}`. GPU gate inserts rows mid-batch and removes finished rows after a stream sync; surviving wide-margin tokens match their solo traces. Result: `responses=12`, `inserts=4`, `removals=2`, `checkedTokens=9`, `mismatches=0`.
-- **M2 scheduler + engine, 2026-07-03 on branch `impl/native`: PASS.** Added `Request`, `OutputCollector`, `Scheduler`, and `MLXServeEngine` with FCFS admission, `maxConcurrentRequests`, external prefill via last-token-withheld insert, serial step ownership, finish cleanup, cancellation with `Stream.gpu.synchronize()` before row removal, and queue-depth backpressure at `max(cap*4,32)`. GPU gate submits `{1,4,8}` concurrent generations through the engine and compares wide-margin tokens against solo traces: `batchChecked=39`, `batchMismatches=0`; mid-flight cancel: `cancelChecked=6`, `cancelMismatches=0`, `cancelledResponses=1`; queue-full rejection: `true`.
+- **M2 scheduler + engine, 2026-07-03 on branch `impl/native`: PASS.** Added `Request`, `OutputCollector`, `Scheduler`, and `MLXCatEngine` with FCFS admission, `maxConcurrentRequests`, external prefill via last-token-withheld insert, serial step ownership, finish cleanup, cancellation with `Stream.gpu.synchronize()` before row removal, and queue-depth backpressure at `max(cap*4,32)`. GPU gate submits `{1,4,8}` concurrent generations through the engine and compares wide-margin tokens against solo traces: `batchChecked=39`, `batchMismatches=0`; mid-flight cancel: `cancelChecked=6`, `cancelMismatches=0`, `cancelledResponses=1`; queue-full rejection: `true`.
 - **M3 Track A HOT prefix cache, 2026-07-03 on branch `impl/native`: PASS.** Added metadata-only `KVCacheBlock`, `BlockTable`, O(1) `FreeBlockQueue`, chain hashing over a fresh canonical token encoding isolated by model name, hot in-RAM block payload store, `PagedCacheManager`, and `BlockAwarePrefixCache` for longest-prefix fetch/reconstruct/store. GPU gate uses a tokenizer-built 256-token prefix block, reconstructs the prefix cache, continues divergent suffixes, and compares against fresh full prefill. Result: `maxLogitError=0.84375`, `checkedTokens=10`, `mismatches=0`, `sharedBlocks=1`, `allocatedBaseline=1`, `allocatedAfter=1`, `totalRefBaseline=1`, `totalRefAfter=1`.
 - **M4 Track A SSD cold tier, 2026-07-03 on branch `impl/native`: PASS.** Added pure-Swift per-block safetensors writer/reader and `PagedSSDCacheManager` under the hot payload store. Producing thread snapshots/evals MLX arrays to raw bytes first; background writer actor receives only `Data` and metadata. Files are written to `<dir>/<hex[0]>/<hex>.safetensors` with temp-file + rename, explicit bool metadata, scan-on-start, model/block-size compatibility checks, and cold restore on hot miss. Gate: BF16 byte round-trip exact through the raw writer and MLX loader; restart survival with fresh manager scanning disk and reconstructing a 256-token Qwen prefix. Result: `byteExact=true`, `maxLogitError=0.84375`, `checkedTokens=1`, `mismatches=0`, `scannedBlocks=1`, `hotPayloadsAfterScan=0`.
 - **M5 Track A/B scheduler integration, 2026-07-03 on branch `impl/native`: PASS.** Added `PrefixKVStore` seam over serialized per-layer `(state, metaState, className)` tuples and wired it into scheduler admission/finish/cancel. Cache-hit rows reconstruct prefix KV, prefill only the suffix, and enter the batch through the same `BatchKVCache.merge` path as cache-miss rows. Finish stores prompt blocks; cancellation releases/clears active hits. GPU gate warms a 256-token common prefix through the scheduler, then runs a mixed concurrent batch with cache-hit and cache-miss rows and compares against solo traces. Result: `fetchHits=2`, `stores=4`, `checkedTokens=9`, `mismatches=0`, `allocatedBaseline=1`, `allocatedAfter=1`, `refBaseline=1`, `refAfter=1`.
@@ -214,7 +214,7 @@ Rotating/sliding-window family (+supersede-on-extend + boundary snapshots), MTP,
 
 Minimal viable Track A = rows 1–10 minus deferred branches → block paging + chain-hash prefix sharing + metadata-only CoW fork + hot→cold safetensors + restart survival.
 
-Key numbers/paths: block_size **MLXServe default 256** (omlx cache-mgr default 64 `factory.py:42`, but serving wires 256 `scheduler.py:1309`), null block reserved id 0, SSD file = `<dir>/<hex[0]>/<hex>.safetensors` (16 subdirs), format version "3", cache dir env/config.
+Key numbers/paths: block_size **MLXCat default 256** (omlx cache-mgr default 64 `factory.py:42`, but serving wires 256 `scheduler.py:1309`), null block reserved id 0, SSD file = `<dir>/<hex[0]>/<hex>.safetensors` (16 subdirs), format version "3", cache dir env/config.
 
 ## Appendix B — Track B porting map (batched decode + scheduler)  [omlx file:line preserved]
 
@@ -229,7 +229,7 @@ Key numbers/paths: block_size **MLXServe default 256** (omlx cache-mgr default 6
 | `Scheduler+Cancellation.swift` | `scheduler.py:6713,6731,6791` | enqueue→apply-on-step-thread; sync-before-remove (H3) |
 | `SchedulerConfig.swift` | `scheduler.py:1294,1307,1337` | maxNumSeqs, chunkedPrefill flag, SchedulerOutput |
 | `Sampling.swift` | `omlx/utils/sampling.py` via `scheduler.py:2507,2518` | temp/top_p/min_p/top_k/xtc + repetition/presence/frequency/suppress |
-| `Engine/MLXServeEngine.swift` | `engine/batched.py`,`base.py` | model load, generate/stream, preflight, wraps Scheduler |
+| `Engine/MLXCatEngine.swift` | `engine/batched.py`,`base.py` | model load, generate/stream, preflight, wraps Scheduler |
 | `Seam/PrefixKVStore.swift` | `scheduler.py:5795-5821,8484,6863` consumer methods | fetch→preload→reconstruct at admit; store at finish; release/clear on abort; over serialized `(state,metaState,className)` |
 | *(defer)* MTP/ | `batch_generator.py` (all) | speculative decode — out of scope |
 

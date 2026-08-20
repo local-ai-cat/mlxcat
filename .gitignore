@@ -5,6 +5,6 @@
 DerivedData/
 Package.resolved
 # test model + generated artifacts (fixtures are committed; models are not)
-Tests/MLXServeTests/Models/
+Tests/MLXCatTests/Models/
 *.safetensors
-!Tests/MLXServeTests/Fixtures/*.safetensors
+!Tests/MLXCatTests/Fixtures/*.safetensors

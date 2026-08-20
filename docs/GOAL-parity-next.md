@@ -23,8 +23,8 @@ GBNF grammar sampler in pure Swift:
   arithmetic-expression grammar.
 
 ## Lane 2 — M8b-2: speech pool citizenship (audio_stt)
-The speech registry (Sources/MLXServeSpeech, WhisperKit adapter, registry
-bridge in MLXServeHTTPServer) is merged. Make speech models pool citizens:
+The speech registry (Sources/MLXCatSpeech, WhisperKit adapter, registry
+bridge in MLXCatHTTPServer) is merged. Make speech models pool citizens:
 - `GET /v1/models` and `models/status` include speech models with a
   `model_type: "audio_stt"` field (match omlx's status taxonomy —
   reference /Users/timapple/Documents/Guest/omlx engine_pool.py).

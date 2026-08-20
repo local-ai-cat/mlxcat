@@ -3,7 +3,7 @@
 Delegated worker under an automated orchestrator; if blocked emit
 `NEEDS_INPUT`. NEVER push. Author `76924051+atlascodesai@users.noreply.github.com`.
 Continue on `feat/omlx-parity`. MEMORY GUARD: one model at a time, never boot
-mlxserve+omlx together, gate model boots on `memory_pressure -Q` >40%.
+mlxcat+omlx together, gate model boots on `memory_pressure -Q` >40%.
 
 ## BLOCKER — prefix cache stores POST-GENERATION KV → correctness corruption
 `storeFinishedPromptCache` (Scheduler.swift:406) extracts the cache AFTER

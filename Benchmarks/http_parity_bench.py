@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""HTTP parity benchmark for MLXServe native and oMLX.
+"""HTTP parity benchmark for MLXCat native and oMLX.
 
 This intentionally measures both servers through the same OpenAI-compatible
 /v1/chat/completions client. It is not a pass/fail test.
@@ -270,8 +270,8 @@ def main() -> None:
     parser.add_argument("--runs", type=int, default=5)
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--decode-tokens", type=int, default=16)
-    parser.add_argument("--output-json", default="/tmp/mlxserve-http-parity.json")
-    parser.add_argument("--output-md", default="/tmp/mlxserve-http-parity.md")
+    parser.add_argument("--output-json", default="/tmp/mlxcat-http-parity.json")
+    parser.add_argument("--output-md", default="/tmp/mlxcat-http-parity.md")
     args = parser.parse_args()
 
     results = [

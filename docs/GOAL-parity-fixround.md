@@ -11,7 +11,7 @@ unworkable — never guess. Do not push. Do not start new features.
 
 ### 1. BLOCKER — MCP stdio client is unsafe under concurrent execute calls
 `MCPStdioClient` keeps a single `activeRequestID`/`pendingRead`
-(`Sources/MLXServeHTTP/MCP.swift:493,570`); actor reentrancy across
+(`Sources/MLXCatHTTP/MCP.swift:493,570`); actor reentrancy across
 `await readMatchingResponse` lets a second request overwrite both →
 leaked continuation / wrong timeout / lost response.
 **Fix:** per-request state — a `[RequestID: PendingRequest]` map keyed by the
@@ -24,7 +24,7 @@ answers out of order → both complete correctly; one hung + one fast concurrent
 
 ### 2. MAJOR — thinking_budget forced tokens bypass constrained-decode masks
 The forced close/trailer token returns before allowedSequences / JSON / regex
-masks apply (`Sources/MLXServe/TrackB/Sampling.swift:220`) and matchers are
+masks apply (`Sources/MLXCat/TrackB/Sampling.swift:220`) and matchers are
 advanced with tokens they may reject (`BatchGenerator.swift:297`).
 **Ruling:** forced injection must VALIDATE against active matchers: if a
 grammar/choice constraint is active and the forced token is not accepted by
@@ -35,7 +35,7 @@ active → output stays grammar-valid and matcher state never desyncs.
 
 ### 3. MAJOR — Harmony unknown channels leak into user-visible content
 `parseHarmonyChannels` routes every non-analysis/final channel to `content`
-(`Sources/MLXServeHTTP/ThinkingParser.swift:216`).
+(`Sources/MLXCatHTTP/ThinkingParser.swift:216`).
 **Ruling:** match omlx exactly (check `/Users/timapple/Documents/Guest/omlx`
 for its channel mapping). Where omlx has no defined mapping for a channel,
 route it to `reasoning_content` (never to `content`) — unknown output must
@@ -45,7 +45,7 @@ name, stream and non-stream.
 ### 4. MAJOR — /v1/rerank bypasses pool lifecycle entirely
 `NativeRerankBackend` loads/caches ModelContainers outside the memory
 ceiling, queue, unload, and modelBusy accounting
-(`Sources/MLXServeHTTPServer/NativeRerankBackend.swift:25`).
+(`Sources/MLXCatHTTPServer/NativeRerankBackend.swift:25`).
 **Ruling (pragmatic, pre-pool-citizenship):** cap the rerank cache at ONE
 loaded model — loading a different rerank model unloads the previous one
 first; check the memory-guard ceiling before load and return 507 (same error

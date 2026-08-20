@@ -2,7 +2,7 @@
 set -u
 SCRIPT_DIR="${0:A:h}"
 REPO_ROOT="${SCRIPT_DIR:h:h}"
-BIN="${MLXSERVE_HTTP_BIN:-$REPO_ROOT/.build/release/mlxserve-http}"
+BIN="${MLXSERVE_HTTP_BIN:-$REPO_ROOT/.build/release/mlxcat-http}"
 MODELS="${MLXSERVE_MODEL_DIR:-/Users/timapple/Library/Caches/models}"
 PORT="${MLXSERVE_FLEET_PORT:-11500}"
 RESULTS="${MLXSERVE_FLEET_RESULTS:-$SCRIPT_DIR/mac-campaign-results.log}"
@@ -29,7 +29,7 @@ MODEL_LIST=(
   Qwen3.6-35B-A3B-4bit
 )
 
-echo "booting mlxserve @ $PORT (ceiling 45G)..." | tee -a "$RESULTS"
+echo "booting mlxcat @ $PORT (ceiling 45G)..." | tee -a "$RESULTS"
 "$BIN" --host 127.0.0.1 --port $PORT --model-dir "$MODELS" \
   --memory-ceiling-bytes 48318382080 > "$SRVLOG" 2>&1 &
 SRV=$!

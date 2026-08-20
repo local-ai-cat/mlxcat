@@ -1,4 +1,4 @@
-MLXServe
+MLXCat
 Copyright 2026 atlascodes
 
 This product is licensed under the Apache License, Version 2.0 (see LICENSE).
@@ -7,12 +7,12 @@ This product is licensed under the Apache License, Version 2.0 (see LICENSE).
 Attributions
 ------------------------------------------------------------------------------
 
-MLXServe is a native-Swift port of serving capabilities (continuous/batched
+MLXCat is a native-Swift port of serving capabilities (continuous/batched
 decode and a tiered prefix KV cache) whose design derives from:
 
   * oMLX — https://github.com/jundot/omlx
     Copyright (c) jundot. Licensed under the Apache License, Version 2.0.
-    MLXServe's serving architecture (block-based chain-hash KV cache, hot RAM +
+    MLXCat's serving architecture (block-based chain-hash KV cache, hot RAM +
     cold SSD tiers, copy-on-write prefix sharing, the scheduler/driving contract)
     is a Swift re-implementation of oMLX's approach. oMLX itself began from
     vllm-mlx (below).
@@ -32,4 +32,4 @@ Built on:
   * MLX / mlx-swift — https://github.com/ml-explore/mlx-swift  (MIT)
     Apple's array framework and its Swift bindings.
 
-MLXServe is not affiliated with or endorsed by any of the above projects.
+MLXCat is not affiliated with or endorsed by any of the above projects.

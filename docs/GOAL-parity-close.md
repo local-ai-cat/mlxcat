@@ -3,9 +3,9 @@
 You are a delegated worker under an automated orchestrator that verifies your
 work. If blocked, emit `NEEDS_INPUT: <question>` and stop — never guess.
 
-Repo: `/Users/timapple/Documents/Github/mlxserve-native`, branch
+Repo: `/Users/timapple/Documents/Github/mlxcat-native`, branch
 `feat/omlx-parity` (continue on it). Harness work happens in the worktree
-`/Users/timapple/Documents/Github/mlxserve-native-harness` on
+`/Users/timapple/Documents/Github/mlxcat-native-harness` on
 `feat/omlx-parity-harness`. omlx reference source:
 `/Users/timapple/Documents/Guest/omlx`. NEVER push to any remote. Commit per
 milestone, author `76924051+atlascodesai@users.noreply.github.com`. Run gates
