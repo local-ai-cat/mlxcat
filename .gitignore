@@ -12,3 +12,4 @@ Tests/MLXCatTests/Models/
 # Reference/donor engine clones (omlx, mlx-lm, vllm, ollama, ...) — never committed
 guest/
 bench/results/.logs/
+__pycache__/

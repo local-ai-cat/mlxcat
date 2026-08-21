@@ -172,7 +172,10 @@ print("|---|---|---|---|---|---:|---|")
 for p in report["pins"]:
     h = p.get("head") or {}
     rel = p.get("latest_release") or {}
-    pinned = (p.get("resolved_revision") or p["pin"])[:10] if p["kind"] == "revision" else p["pin"]
+    if p["kind"] == "revision":
+        pinned = (p.get("resolved_revision") or p["pin"])[:10]
+    else:
+        pinned = p["pin"] + (f" → {p['resolved_version']}" if p.get("resolved_version") else "")
     print(f"| {p['repo']} | `{pinned}` | {p.get('pin_date') or '?'} | `{h.get('sha','?')}` {h.get('date','')} | {rel.get('tag') or '—'} {rel.get('date','')} | {p['commits_since_pin']} | {len(p['keyword_hits'])} |")
 print("\n<details><summary>Keyword hits in pinned deps</summary>\n")
 for p in report["pins"]:

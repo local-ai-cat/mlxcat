@@ -161,8 +161,8 @@ def render(records: List[Dict[str, Any]], matrix: Dict[str, Any]) -> str:
                 out.append("")
                 tiers = tree[platform][device].get(model, {})
                 if tiers:
-                    out.append("| context | engine | version | prompt tok | TTFT ms | prefill tok/s | decode tok/s | peak GiB | measured |")
-                    out.append("|---|---|---|---:|---:|---:|---:|---:|---|")
+                    out.append("| context | engine | transport | version | prompt tok | TTFT ms | prefill tok/s | decode tok/s | peak GiB | measured |")
+                    out.append("|---|---|---|---|---:|---:|---:|---:|---:|---|")
                     tier_order = [t["name"] for t in matrix.get("context_tiers", [])]
                     for tier in sorted(tiers.keys(), key=lambda t: tier_order.index(t) if t in tier_order else 99):
                         rows = sorted(tiers[tier], key=lambda r: -(med(r["metrics"].get("decode_tps")) or 0))
@@ -185,7 +185,7 @@ def render(records: List[Dict[str, Any]], matrix: Dict[str, Any]) -> str:
                             if record["engine"].get("weights") and "same files" not in record["engine"]["weights"]:
                                 weights_note = " ⚠︎"
                             out.append(
-                                f"| {tier} | {name}{weights_note} | {record['engine'].get('version') or '—'} | "
+                                f"| {tier} | {name}{weights_note} | {record['engine'].get('transport') or 'http'} | {record['engine'].get('version') or '—'} | "
                                 f"{m.get('prompt_tokens', '—')} | {ttft} | {prefill} | {decode} | "
                                 f"{gib(m.get('peak_phys_footprint_bytes'))} | {record['timestamp'][:10]} |"
                             )
