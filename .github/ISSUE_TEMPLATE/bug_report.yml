@@ -1,0 +1,43 @@
+name: Bug report
+description: Something mlxcat does wrong (wrong output, crash, hang, leak)
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: mlxcat commit / tag
+      placeholder: a481734
+    validations: { required: true }
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options: [macOS (mlxcat-http), macOS (embedded in an app), iOS (embedded), other]
+    validations: { required: true }
+  - type: input
+    id: device
+    attributes:
+      label: Device + OS
+      placeholder: MacBook Pro M5 Max 128 GB, macOS 26.5 · iPhone 16 Pro Max, iOS 26.1
+    validations: { required: true }
+  - type: input
+    id: model
+    attributes:
+      label: Model (exact mlx-community id or path)
+      placeholder: mlx-community/Qwen3.5-4B-MLX-4bit
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: The request (curl / JSON body), flags used to start the server, and what happened. Attach server log lines if you have them.
+      render: shell
+    validations: { required: true }
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs actual
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Concurrency at the time, memory pressure, whether a prefix-cache hit was involved, other engines' behaviour on the same request.
