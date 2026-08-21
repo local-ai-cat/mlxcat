@@ -120,18 +120,18 @@ def newest_per_key(records: Iterable[Dict[str, Any]]) -> Dict[Tuple, Dict[str, A
 
 def bold_best(rows: List[Dict[str, Any]], field: str, higher_is_better: bool) -> Dict[str, bool]:
     """Best per TRANSPORT group — an in-process row must never be bolded as beating HTTP rows."""
-    marks: Dict[Tuple[str, str], bool] = {}
-    groups: Dict[str, Dict[str, float]] = {}
+    marks: Dict[Tuple, bool] = {}
+    groups: Dict[Tuple, Dict[str, float]] = {}
     for r in rows:
-        transport = r["engine"].get("transport") or "http"
+        scope = (r["engine"].get("transport") or "http", int(r["workload"].get("max_tokens") or 0))
         value = med(r["metrics"].get(field))
         if value is not None:
-            groups.setdefault(transport, {})[r["engine"]["name"]] = value
-    for transport, clean in groups.items():
+            groups.setdefault(scope, {})[r["engine"]["name"]] = value
+    for scope, clean in groups.items():
         if len(clean) < 2:
             continue
         best = max(clean, key=clean.get) if higher_is_better else min(clean, key=clean.get)
-        marks[(transport, best)] = True
+        marks[scope + (best,)] = True
     return marks
 
 
@@ -212,14 +212,18 @@ def render(records: List[Dict[str, Any]], matrix: Dict[str, Any]) -> str:
                             m = record["metrics"]
                             name = record["engine"]["name"]
                             transport = record["engine"].get("transport") or "http"
+                            mark_scope = (transport, int(record["workload"].get("max_tokens") or 0))
                             decode = fmt(med(m.get("decode_tps")))
+                            decode_block = m.get("decode_tps")
+                            if decode_block and decode_block.get("n", 0) < int(record["workload"].get("runs") or 0):
+                                decode += " †"  # fewer measurable runs than requested
                             prefill = fmt(med(m.get("prefill_tps")), 0)
                             ttft = fmt(med(m.get("ttft_ms")), 0)
-                            if best_decode.get((transport, name)):
+                            if best_decode.get(mark_scope + (name,)):
                                 decode = f"**{decode}**"
-                            if best_prefill.get((transport, name)):
+                            if best_prefill.get(mark_scope + (name,)):
                                 prefill = f"**{prefill}**"
-                            if best_ttft.get((transport, name)):
+                            if best_ttft.get(mark_scope + (name,)):
                                 ttft = f"**{ttft}**"
                             weights_note = ""
                             if record["engine"].get("weights") and "same files" not in record["engine"]["weights"]:
@@ -258,7 +262,8 @@ def render(records: List[Dict[str, Any]], matrix: Dict[str, Any]) -> str:
                         out.append("")
         out.append("")
 
-    out.append("⚠︎ = different weight artifacts than the `mlx-community` safetensors the other rows use (e.g. Ollama library, GGUF) — compare quality class, not bits.")
+    out.append("⚠︎ = different weight artifacts than the `mlx-community` safetensors the other rows use (e.g. Ollama library, GGUF) — compare quality class, not bits. "
+               "† = fewer measurable runs than requested (some runs had no token-granular decode window).")
     out.append("")
     out.append("## How to add a row")
     out.append("")

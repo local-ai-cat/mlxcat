@@ -437,7 +437,15 @@ class Engine:
         # nonsense number from a ~0 denominator.
         last_output = chunk_times[-1] if chunk_times else finished
         decode_seconds = last_output - first_output
-        decode_measurable = len(chunk_times) >= 2 and decode_seconds > 1e-6
+        # Token-granular streaming only: if the engine coalesced tokens into a few
+        # buffered chunks, the chunk cadence does not observe decode speed (two
+        # chunks 2 µs apart carrying 128 tokens is not 64M tok/s). Require about
+        # one chunk per token before publishing a decode rate.
+        completion_estimate = int(usage.get("completion_tokens") or 0)
+        decode_measurable = (
+            len(chunk_times) >= max(2, completion_estimate // 2)
+            and decode_seconds > 1e-3
+        )
         ttft = first_output - started
         gaps = [b - a for a, b in zip(chunk_times, chunk_times[1:])]
         return {
@@ -621,19 +629,29 @@ def run_producer(
         # with a snapshot taken when THAT cell's numbers were produced — a host
         # that gets loud mid-producer must not leave later tiers marked valid.
         lines: List[str] = []
-        try:
-            process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            assert process.stdout is not None
-            for line in process.stdout:
-                if line.strip().startswith("{"):
-                    lines.append(line.strip() + "\t" + json.dumps(host_snapshot()))
-            process.wait(timeout=float(args.request_timeout) * 4)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            print(f"[{engine_name}/{model_id}] producer timed out", file=sys.stderr)
-            continue
+        # stderr goes to a FILE, not a pipe — a chatty producer (MLX diagnostics)
+        # would fill an undrained pipe and deadlock against our stdout read loop.
+        # A kill-timer bounds the whole read, since `for line in stdout` has no
+        # timeout of its own.
+        stderr_path = Path(os.environ.get("TMPDIR", "/tmp")) / f"mlxcat-bench-producer-{engine_name}-{os.getpid()}.err"
+        deadline = threading.Timer(float(args.request_timeout) * 4, lambda: process.kill())
+        timed_out = False
+        with open(stderr_path, "w", encoding="utf-8") as stderr_handle:
+            process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=stderr_handle, text=True)
+            deadline.start()
+            try:
+                assert process.stdout is not None
+                for line in process.stdout:
+                    if line.strip().startswith("{"):
+                        lines.append(line.strip() + "\t" + json.dumps(host_snapshot()))
+                process.wait()
+            finally:
+                timed_out = not deadline.is_alive() and process.returncode in (-9, None)
+                deadline.cancel()
+        if timed_out:
+            print(f"[{engine_name}/{model_id}] producer timed out (killed)", file=sys.stderr)
         if process.returncode != 0:
-            stderr_tail = (process.stderr.read() if process.stderr else "").strip()[-400:]
+            stderr_tail = stderr_path.read_text(encoding="utf-8", errors="replace").strip()[-400:]
             print(f"[{engine_name}/{model_id}] producer rc={process.returncode}: {stderr_tail}", file=sys.stderr)
         for tagged in lines:
             line, _, snap_json = tagged.partition("\t")
