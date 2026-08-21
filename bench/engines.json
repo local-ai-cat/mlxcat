@@ -132,6 +132,8 @@
           "--serve",
           "--model-dir",
           "{model_root}",
+          "--host",
+          "127.0.0.1",
           "--port",
           "{port}"
         ],
@@ -139,7 +141,7 @@
         "ready_timeout_s": 240
       },
       "extra_request_fields": {},
-      "notes": "Two install routes: `brew tap ddalcu/mlx-serve https://github.com/ddalcu/mlx-serve && brew trust ddalcu/mlx-serve && brew install mlx-serve` (brew REFUSES the formula without the trust grant, which is a standing permission to execute that tap's Ruby \u2014 prefer the second route on shared machines), or build from source: `git clone` + `brew bundle install --file=Brewfile` (cmake, webp) + `zig build -Doptimize=ReleaseFast` \u2192 zig-out/bin/mlx-serve, then point MLX_SERVE_BIN at it. Same mlx-community weights via --model-dir."
+      "notes": "Two install routes: `brew tap ddalcu/mlx-serve https://github.com/ddalcu/mlx-serve && brew trust ddalcu/mlx-serve && brew install mlx-serve` (brew REFUSES the formula without the trust grant, which is a standing permission to execute that tap's Ruby \u2014 prefer the second route on shared machines), or build from source: `git clone` + `brew bundle install --file=Brewfile` (cmake, webp) + `zig build -Doptimize=ReleaseFast` \u2192 zig-out/bin/mlx-serve, then point MLX_SERVE_BIN at it. Same mlx-community weights via --model-dir. NOTE: mlx-serve defaults to --host 0.0.0.0 (open to the local network); the launch template pins 127.0.0.1 so a benchmark never exposes a model server to the LAN. Prebuilt arm64 binary from its GitHub releases is the least-privilege route (no brew trust, no zig 0.17-dev nightly)."
     },
     "vllm-mlx": {
       "description": "vllm-mlx (waybarrios) \u2014 continuous batching + paged/prefix KV on MLX.",
