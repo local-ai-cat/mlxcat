@@ -60,9 +60,14 @@ struct Options {
             case "--cell":
                 // "PROMPT:MAX" — per-cell token budgets, so a 16k cell can carry a
                 // smaller generation budget than a short cell (matrix parity).
-                let parts = value().split(separator: ":")
-                let prompt = parts.count > 0 ? Int(parts[0]) ?? 256 : 256
-                let max = parts.count > 1 ? Int(parts[1]) ?? 128 : 128
+                // Malformed input is rejected, never silently defaulted — a wrong
+                // benchmark is worse than no benchmark.
+                let raw = value()
+                let parts = raw.split(separator: ":", omittingEmptySubsequences: false)
+                guard parts.count == 2, let prompt = Int(parts[0]), let max = Int(parts[1]), prompt > 0, max > 0 else {
+                    fputs("invalid --cell '\(raw)' (expected PROMPT:MAX, both positive integers)\n", stderr)
+                    exit(64)
+                }
                 cells.append((prompt, max))
             case "--max-tokens": options.maxTokens = Int(value()) ?? 128
             case "--runs": options.runs = Int(value()) ?? 3

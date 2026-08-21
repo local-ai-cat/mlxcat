@@ -43,7 +43,9 @@ jobs:
         run: swift package resolve
 
       - name: Build (debug, with tests)
-        run: swift build --build-tests 2>&1 | tee build.log | grep -E "error:|warning: unre|Compiling|Build complete" | tail -40; exit ${PIPESTATUS[0]}
+        run: |
+          set -o pipefail
+          swift build --build-tests 2>&1 | tee build.log | grep -E "error:|Build complete" | tail -40
 
       - name: Test
         # Model-gated suites throw XCTSkip when MLXSERVE_*_TEST_MODEL is unset;

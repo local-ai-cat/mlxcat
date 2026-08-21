@@ -76,17 +76,25 @@ def parsed_ts(record: Dict[str, Any]) -> float:
     import datetime as _dt
     raw = str(record.get("timestamp", ""))
     try:
-        return _dt.datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()
+        parsed = _dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except ValueError:
         return 0.0
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=_dt.timezone.utc)  # naive → UTC, machine-independent
+    return parsed.timestamp()
 
 
 def device_label(device: Dict[str, Any]) -> str:
     """Device identity: chip alone is ambiguous (two 'M4 Max' Macs with different RAM)."""
-    chip = device.get("chip") or device.get("model") or "unknown"
+    chip = device.get("chip") or "unknown"
     mem = device.get("memory_bytes")
-    mem_part = f" · {round(mem / 2**30)} GB" if mem else ""
-    return f"{chip}{mem_part}"
+    model = device.get("model")
+    parts = [chip]
+    if mem:
+        parts.append(f"{round(mem / 2**30)} GB")
+    if model and model != chip:
+        parts.append(model)  # Mac17,6 vs a Studio with the same chip+RAM are different machines
+    return " · ".join(parts)
 
 
 def newest_per_key(records: Iterable[Dict[str, Any]]) -> Dict[Tuple, Dict[str, Any]]:
@@ -112,18 +120,18 @@ def newest_per_key(records: Iterable[Dict[str, Any]]) -> Dict[Tuple, Dict[str, A
 
 def bold_best(rows: List[Dict[str, Any]], field: str, higher_is_better: bool) -> Dict[str, bool]:
     """Best per TRANSPORT group — an in-process row must never be bolded as beating HTTP rows."""
-    marks: Dict[str, bool] = {}
+    marks: Dict[Tuple[str, str], bool] = {}
     groups: Dict[str, Dict[str, float]] = {}
     for r in rows:
         transport = r["engine"].get("transport") or "http"
         value = med(r["metrics"].get(field))
         if value is not None:
             groups.setdefault(transport, {})[r["engine"]["name"]] = value
-    for clean in groups.values():
+    for transport, clean in groups.items():
         if len(clean) < 2:
             continue
         best = max(clean, key=clean.get) if higher_is_better else min(clean, key=clean.get)
-        marks[best] = True
+        marks[(transport, best)] = True
     return marks
 
 
@@ -189,8 +197,8 @@ def render(records: List[Dict[str, Any]], matrix: Dict[str, Any]) -> str:
                 out.append("")
                 tiers = tree[platform][device].get(model, {})
                 if tiers:
-                    out.append("| context | engine | transport | version | prompt tok | TTFT ms | prefill tok/s | decode tok/s | peak GiB | measured |")
-                    out.append("|---|---|---|---|---:|---:|---:|---:|---:|---|")
+                    out.append("| context | gen tok | engine | transport | version | prompt tok | TTFT ms | prefill tok/s | decode tok/s | peak GiB | measured |")
+                    out.append("|---|---:|---|---|---|---:|---:|---:|---:|---:|---|")
                     tier_order = [t["name"] for t in matrix.get("context_tiers", [])]
                     for tier in sorted(tiers.keys(), key=lambda t: tier_order.index(t) if t in tier_order else 99):
                         rows = sorted(
@@ -203,20 +211,21 @@ def render(records: List[Dict[str, Any]], matrix: Dict[str, Any]) -> str:
                         for record in rows:
                             m = record["metrics"]
                             name = record["engine"]["name"]
+                            transport = record["engine"].get("transport") or "http"
                             decode = fmt(med(m.get("decode_tps")))
                             prefill = fmt(med(m.get("prefill_tps")), 0)
                             ttft = fmt(med(m.get("ttft_ms")), 0)
-                            if best_decode.get(name):
+                            if best_decode.get((transport, name)):
                                 decode = f"**{decode}**"
-                            if best_prefill.get(name):
+                            if best_prefill.get((transport, name)):
                                 prefill = f"**{prefill}**"
-                            if best_ttft.get(name):
+                            if best_ttft.get((transport, name)):
                                 ttft = f"**{ttft}**"
                             weights_note = ""
                             if record["engine"].get("weights") and "same files" not in record["engine"]["weights"]:
                                 weights_note = " ⚠︎"
                             out.append(
-                                f"| {tier} | {name}{weights_note} | {record['engine'].get('transport') or 'http'} | {record['engine'].get('version') or '—'} | "
+                                f"| {tier} | {record['workload'].get('max_tokens', '—')} | {name}{weights_note} | {transport} | {record['engine'].get('version') or '—'} | "
                                 f"{m.get('prompt_tokens', '—')} | {ttft} | {prefill} | {decode} | "
                                 f"{gib(m.get('peak_phys_footprint_bytes'))} | {record['timestamp'][:10]} |"
                             )

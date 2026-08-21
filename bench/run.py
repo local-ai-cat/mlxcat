@@ -432,8 +432,12 @@ class Engine:
             raise RuntimeError(f"{self.name}: usage.completion_tokens missing (needed for honest tok/s)")
         # Decode ends at the LAST OUTPUT CHUNK, not at [DONE]/usage framing — an
         # engine that dawdles over its terminal frames must not read as slower decode.
+        # An engine that buffers the whole completion into one visible chunk has no
+        # measurable decode window over this transport: decode_tps is None, never a
+        # nonsense number from a ~0 denominator.
         last_output = chunk_times[-1] if chunk_times else finished
-        decode_seconds = max(last_output - first_output, 1e-9)
+        decode_seconds = last_output - first_output
+        decode_measurable = len(chunk_times) >= 2 and decode_seconds > 1e-6
         ttft = first_output - started
         gaps = [b - a for a, b in zip(chunk_times, chunk_times[1:])]
         return {
@@ -442,7 +446,7 @@ class Engine:
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "prefill_tps": (prompt_tokens / ttft) if prompt_tokens and ttft > 0 else None,
-            "decode_tps": (completion_tokens - 1) / decode_seconds if completion_tokens > 1 else None,
+            "decode_tps": (completion_tokens - 1) / decode_seconds if (completion_tokens > 1 and decode_measurable) else None,
             "e2e_tps": completion_tokens / max(finished - started, 1e-9),
             "itl_p50_ms": statistics.median(gaps) * 1000 if gaps else None,
             "itl_p95_ms": percentile(gaps, 95) * 1000 if gaps else None,
@@ -613,19 +617,28 @@ def run_producer(
             tier = tiers[tier_name]
             argv += [flag, f"{int(tier['prompt_tokens'])}:{int(tier.get('max_tokens', args.max_tokens))}"]
         print(f"[{engine_name}/{model_id}] {' '.join(os.path.basename(a) if i == 0 else a for i, a in enumerate(argv))}")
-        model_snapshot = host_snapshot()
-        model_violations = quiet_machine_violations(model_snapshot, args.max_load, args.min_free_pct)
+        # Stream rows as the producer finishes each cell, so validity is stamped
+        # with a snapshot taken when THAT cell's numbers were produced — a host
+        # that gets loud mid-producer must not leave later tiers marked valid.
+        lines: List[str] = []
         try:
-            completed = subprocess.run(argv, capture_output=True, text=True, timeout=float(args.request_timeout) * 4)
+            process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            assert process.stdout is not None
+            for line in process.stdout:
+                if line.strip().startswith("{"):
+                    lines.append(line.strip() + "\t" + json.dumps(host_snapshot()))
+            process.wait(timeout=float(args.request_timeout) * 4)
         except subprocess.TimeoutExpired:
+            process.kill()
             print(f"[{engine_name}/{model_id}] producer timed out", file=sys.stderr)
             continue
-        if completed.returncode != 0:
-            print(f"[{engine_name}/{model_id}] producer rc={completed.returncode}: {completed.stderr.strip()[-400:]}", file=sys.stderr)
-        for line in completed.stdout.splitlines():
-            line = line.strip()
-            if not line.startswith("{"):
-                continue
+        if process.returncode != 0:
+            stderr_tail = (process.stderr.read() if process.stderr else "").strip()[-400:]
+            print(f"[{engine_name}/{model_id}] producer rc={process.returncode}: {stderr_tail}", file=sys.stderr)
+        for tagged in lines:
+            line, _, snap_json = tagged.partition("\t")
+            row_snapshot = json.loads(snap_json)
+            row_violations = quiet_machine_violations(row_snapshot, args.max_load, args.min_free_pct)
             try:
                 record = json.loads(line)
             except json.JSONDecodeError:
@@ -635,9 +648,9 @@ def run_producer(
             record["model"] = {**record.get("model", {}), **{k: v for k, v in model_specs.get(model_id, {}).items() if k != "id"}, "id": model_id}
             record["engine"]["name"] = engine_name
             record.update(stamp)
-            record["host"] = model_snapshot
-            record["valid_for_leaderboard"] = not model_violations and "error" not in record.get("metrics", {})
-            record["invalid_reason"] = "; ".join(model_violations) or None
+            record["host"] = row_snapshot
+            record["valid_for_leaderboard"] = not row_violations and "error" not in record.get("metrics", {})
+            record["invalid_reason"] = "; ".join(row_violations) or None
             with open(out_path, "a", encoding="utf-8") as handle:
                 handle.write(json.dumps(record, sort_keys=True) + "\n")
             written += 1
