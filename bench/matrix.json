@@ -1,33 +1,182 @@
 {
-  "_comment": "The benchmark matrix. Model floor per the 2026-08-19 ruling: Qwen3-0.6B is a wire-format smoke model only — never the basis of a perf or quality number. 'default' is what a weekly run covers; 'flagship' is the long one. Context tiers are prompt-token targets (the harness calibrates chars/token per model and records the actual prompt_tokens).",
+  "_comment": "The benchmark matrix. Model floor per the 2026-08-19 ruling: Qwen3-0.6B is a wire-format smoke model only \u2014 never the basis of a perf or quality number. 'default' is what a weekly run covers; 'flagship' is the long one. Context tiers are prompt-token targets (the harness calibrates chars/token per model and records the actual prompt_tokens).",
   "models": [
-    {"id": "Qwen3-0.6B-4bit",                   "family": "qwen3",     "params": "0.6B",   "quant": "4bit",    "role": "smoke", "ios": true},
-    {"id": "Qwen3-1.7B-4bit",                   "family": "qwen3",     "params": "1.7B",   "quant": "4bit",    "role": "small", "ios": true},
-    {"id": "Llama-3.2-3B-Instruct-4bit",        "family": "llama",     "params": "3B",     "quant": "4bit",    "role": "small", "ios": true},
-    {"id": "gemma-4-E2B-it-qat-4bit",           "family": "gemma4",    "params": "E2B",    "quant": "qat-4bit","role": "device-floor", "ios": true},
-    {"id": "gemma-4-E4B-it-qat-4bit",           "family": "gemma4",    "params": "E4B",    "quant": "qat-4bit","role": "small", "ios": true},
-    {"id": "Qwen3.5-4B-MLX-4bit",               "family": "qwen3_5",   "params": "4B",     "quant": "4bit",    "role": "mac-floor", "ios": true},
-    {"id": "Qwen2.5-Coder-7B-Instruct-4bit",    "family": "qwen2",     "params": "7B",     "quant": "4bit",    "role": "medium"},
-    {"id": "gpt-oss-20b-MXFP4-Q8",              "family": "gpt_oss",   "params": "20B MoE","quant": "mxfp4",   "role": "reasoning"},
-    {"id": "Qwen3.8-27B-4bit",                  "family": "qwen3_8",   "params": "27B",    "quant": "4bit",    "role": "flagship-dense"},
-    {"id": "Qwen3.6-27B-4bit",                  "family": "qwen3_6",   "params": "27B",    "quant": "4bit",    "role": "flagship-coder"},
-    {"id": "Qwen3-Coder-30B-A3B-Instruct-4bit", "family": "qwen3_moe", "params": "30B-A3B","quant": "4bit",    "role": "flagship-moe"},
-    {"id": "Qwen3.6-35B-A3B-4bit",              "family": "qwen3_6_moe","params": "35B-A3B","quant": "4bit",   "role": "flagship-moe"},
-    {"id": "gemma-4-12B-it-qat-4bit",           "family": "gemma4",    "params": "12B",    "quant": "qat-4bit","role": "flagship-vision"}
+    {
+      "id": "Qwen3-0.6B-4bit",
+      "family": "qwen3",
+      "params": "0.6B",
+      "quant": "4bit",
+      "role": "smoke",
+      "ios": true
+    },
+    {
+      "id": "Qwen3-1.7B-4bit",
+      "family": "qwen3",
+      "params": "1.7B",
+      "quant": "4bit",
+      "role": "small",
+      "ios": true
+    },
+    {
+      "id": "Llama-3.2-3B-Instruct-4bit",
+      "family": "llama",
+      "params": "3B",
+      "quant": "4bit",
+      "role": "small",
+      "ios": true
+    },
+    {
+      "id": "gemma-4-E2B-it-qat-4bit",
+      "family": "gemma4",
+      "params": "E2B",
+      "quant": "qat-4bit",
+      "role": "device-floor",
+      "ios": true
+    },
+    {
+      "id": "gemma-4-E4B-it-qat-4bit",
+      "family": "gemma4",
+      "params": "E4B",
+      "quant": "qat-4bit",
+      "role": "small",
+      "ios": true
+    },
+    {
+      "id": "Qwen3.5-4B-MLX-4bit",
+      "family": "qwen3_5",
+      "params": "4B",
+      "quant": "4bit",
+      "role": "mac-floor",
+      "ios": true
+    },
+    {
+      "id": "Qwen2.5-Coder-7B-Instruct-4bit",
+      "family": "qwen2",
+      "params": "7B",
+      "quant": "4bit",
+      "role": "medium"
+    },
+    {
+      "id": "gpt-oss-20b-MXFP4-Q8",
+      "family": "gpt_oss",
+      "params": "20B MoE",
+      "quant": "mxfp4",
+      "role": "reasoning"
+    },
+    {
+      "id": "Qwen3.8-27B-4bit",
+      "family": "qwen3_8",
+      "params": "27B",
+      "quant": "4bit",
+      "role": "flagship-dense"
+    },
+    {
+      "id": "Qwen3.6-27B-4bit",
+      "family": "qwen3_6",
+      "params": "27B",
+      "quant": "4bit",
+      "role": "flagship-coder"
+    },
+    {
+      "id": "Qwen3-Coder-30B-A3B-Instruct-4bit",
+      "family": "qwen3_moe",
+      "params": "30B-A3B",
+      "quant": "4bit",
+      "role": "flagship-moe"
+    },
+    {
+      "id": "Qwen3.6-35B-A3B-4bit",
+      "family": "qwen3_6_moe",
+      "params": "35B-A3B",
+      "quant": "4bit",
+      "role": "flagship-moe"
+    },
+    {
+      "id": "gemma-4-12B-it-qat-4bit",
+      "family": "gemma4",
+      "params": "12B",
+      "quant": "qat-4bit",
+      "role": "flagship-vision"
+    }
   ],
   "model_sets": {
-    "smoke":    ["Qwen3-0.6B-4bit"],
-    "device":   ["gemma-4-E2B-it-qat-4bit", "Qwen3.5-4B-MLX-4bit", "Llama-3.2-3B-Instruct-4bit"],
-    "default":  ["Qwen3.5-4B-MLX-4bit", "gemma-4-E2B-it-qat-4bit", "Qwen3.8-27B-4bit", "Qwen3-Coder-30B-A3B-Instruct-4bit", "gpt-oss-20b-MXFP4-Q8"],
-    "flagship": ["Qwen3.8-27B-4bit", "Qwen3.6-27B-4bit", "Qwen3-Coder-30B-A3B-Instruct-4bit", "Qwen3.6-35B-A3B-4bit", "gemma-4-12B-it-qat-4bit", "gpt-oss-20b-MXFP4-Q8"],
-    "all":      ["Qwen3-0.6B-4bit", "Qwen3-1.7B-4bit", "Llama-3.2-3B-Instruct-4bit", "gemma-4-E2B-it-qat-4bit", "gemma-4-E4B-it-qat-4bit", "Qwen3.5-4B-MLX-4bit", "Qwen2.5-Coder-7B-Instruct-4bit", "gpt-oss-20b-MXFP4-Q8", "Qwen3.8-27B-4bit", "Qwen3.6-27B-4bit", "Qwen3-Coder-30B-A3B-Instruct-4bit", "Qwen3.6-35B-A3B-4bit", "gemma-4-12B-it-qat-4bit"]
+    "smoke": [
+      "Qwen3-0.6B-4bit"
+    ],
+    "device": [
+      "gemma-4-E2B-it-qat-4bit",
+      "Qwen3.5-4B-MLX-4bit",
+      "Llama-3.2-3B-Instruct-4bit"
+    ],
+    "default": [
+      "Qwen3.5-4B-MLX-4bit",
+      "gemma-4-E2B-it-qat-4bit",
+      "Qwen3.8-27B-4bit",
+      "Qwen3-Coder-30B-A3B-Instruct-4bit",
+      "gpt-oss-20b-MXFP4-Q8"
+    ],
+    "flagship": [
+      "Qwen3.8-27B-4bit",
+      "Qwen3.6-27B-4bit",
+      "Qwen3-Coder-30B-A3B-Instruct-4bit",
+      "Qwen3.6-35B-A3B-4bit",
+      "gemma-4-12B-it-qat-4bit",
+      "gpt-oss-20b-MXFP4-Q8"
+    ],
+    "all": [
+      "Qwen3-0.6B-4bit",
+      "Qwen3-1.7B-4bit",
+      "Llama-3.2-3B-Instruct-4bit",
+      "gemma-4-E2B-it-qat-4bit",
+      "gemma-4-E4B-it-qat-4bit",
+      "Qwen3.5-4B-MLX-4bit",
+      "Qwen2.5-Coder-7B-Instruct-4bit",
+      "gpt-oss-20b-MXFP4-Q8",
+      "Qwen3.8-27B-4bit",
+      "Qwen3.6-27B-4bit",
+      "Qwen3-Coder-30B-A3B-Instruct-4bit",
+      "Qwen3.6-35B-A3B-4bit",
+      "gemma-4-12B-it-qat-4bit"
+    ]
   },
   "context_tiers": [
-    {"name": "short", "prompt_tokens": 256,   "max_tokens": 128},
-    {"name": "4k",    "prompt_tokens": 4096,  "max_tokens": 128},
-    {"name": "16k",   "prompt_tokens": 16384, "max_tokens": 64},
-    {"name": "32k",   "prompt_tokens": 32768, "max_tokens": 64}
+    {
+      "name": "short",
+      "prompt_tokens": 256,
+      "max_tokens": 128
+    },
+    {
+      "name": "4k",
+      "prompt_tokens": 4096,
+      "max_tokens": 128
+    },
+    {
+      "name": "16k",
+      "prompt_tokens": 16384,
+      "max_tokens": 64
+    },
+    {
+      "name": "32k",
+      "prompt_tokens": 32768,
+      "max_tokens": 64
+    },
+    {
+      "name": "longgen",
+      "prompt_tokens": 1024,
+      "max_tokens": 1024
+    }
   ],
-  "default_context_tiers": ["short", "4k", "16k"],
-  "concurrency": {"tier": "short", "widths": [2, 4, 8]}
+  "default_context_tiers": [
+    "short",
+    "4k",
+    "16k"
+  ],
+  "concurrency": {
+    "tier": "short",
+    "widths": [
+      2,
+      4,
+      8
+    ]
+  }
 }
