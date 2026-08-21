@@ -1,0 +1,122 @@
+{
+  "_comment": "Engine registry for bench/run.py. 'launch' engines are started by the harness (one process per model, so peak memory is per model); 'url' engines are attached to where they already run. Template variables: {port} {model_root} {model_dir} {model_id} {memory_ceiling_bytes} {repo}. Binaries resolve from <bin_env> first, then PATH, then the literal path. Platforms: which platform's leaderboard the engine can appear on; iOS rows are produced by in-app harnesses, never by this script.",
+  "engines": {
+    "mlxcat": {
+      "description": "mlxcat native engine over its own HTTP server (mlxcat-http).",
+      "platforms": ["macos", "ios"],
+      "launch": {
+        "bin": "{repo}/.build/release/mlxcat-http",
+        "bin_env": "MLXCAT_HTTP_BIN",
+        "args": ["--host", "127.0.0.1", "--port", "{port}", "--model-dir", "{model_root}", "--memory-ceiling-bytes", "{memory_ceiling_bytes}"],
+        "port_base": 11700,
+        "ready_timeout_s": 120
+      },
+      "notes": "Build with: swift build -c release --product mlxcat-http"
+    },
+    "mlx-swift-lm-tokeniterator": {
+      "description": "mlx-swift-lm's raw TokenIterator loop, in-process — the mlx-swift-examples lineage and EXACTLY the mechanism behind Local AI Cat's legacy LLMEvaluator. The single-sequence baseline mlxcat must not lose to.",
+      "platforms": ["macos", "ios"],
+      "producer": {
+        "bin": "{repo}/.build/release/mlxcat-baseline",
+        "bin_env": "MLXCAT_BASELINE_BIN",
+        "args": ["--model-dir", "{model_dir}", "--model-id", "{model_id}", "--variant", "tokeniterator", "--max-tokens", "{max_tokens}", "--runs", "{runs}", "--warmup", "{warmup}"],
+        "prompt_tokens_flag": "--prompt-tokens"
+      },
+      "notes": "Build with: swift build -c release --product mlxcat-baseline. transport=in-process; compare to mlxcat-inprocess, not to HTTP rows."
+    },
+    "mlxcat-inprocess": {
+      "description": "MLXCatEngine driven in-process (no HTTP) — the engine's own cost next to the TokenIterator baseline; the HTTP row minus this row is the transport cost.",
+      "platforms": ["macos", "ios"],
+      "producer": {
+        "bin": "{repo}/.build/release/mlxcat-baseline",
+        "bin_env": "MLXCAT_BASELINE_BIN",
+        "args": ["--model-dir", "{model_dir}", "--model-id", "{model_id}", "--variant", "mlxcat", "--max-tokens", "{max_tokens}", "--runs", "{runs}", "--warmup", "{warmup}"],
+        "prompt_tokens_flag": "--prompt-tokens"
+      }
+    },
+    "omlx": {
+      "description": "Stock oMLX (jundot/omlx) — the Python reference mlxcat was ported from.",
+      "platforms": ["macos"],
+      "launch": {
+        "bin": "omlx",
+        "bin_env": "OMLX_BIN",
+        "args": ["serve", "--model-dir", "{model_root}", "--port", "{port}", "--no-cache", "--log-level", "warning"],
+        "port_base": 11800,
+        "ready_timeout_s": 180
+      },
+      "extra_request_fields": {},
+      "notes": "Install: pipx install omlx (or brew tap jundot/omlx). Same mlx-community weights."
+    },
+    "mlx-lm": {
+      "description": "Apple's mlx-lm reference server (python -m mlx_lm server).",
+      "platforms": ["macos"],
+      "launch": {
+        "bin": "python3",
+        "bin_env": "MLX_LM_PYTHON",
+        "args": ["-m", "mlx_lm", "server", "--model", "{model_dir}", "--port", "{port}", "--host", "127.0.0.1"],
+        "port_base": 11900,
+        "ready_timeout_s": 180
+      },
+      "extra_request_fields": {},
+      "notes": "pip install mlx-lm in the interpreter named by MLX_LM_PYTHON. Single-sequence; no continuous batching."
+    },
+    "vllm-mlx": {
+      "description": "vllm-mlx (waybarrios) — continuous batching + paged/prefix KV on MLX.",
+      "platforms": ["macos"],
+      "launch": {
+        "bin": "vllm-mlx",
+        "bin_env": "VLLM_MLX_BIN",
+        "args": ["serve", "{model_dir}", "--port", "{port}", "--host", "127.0.0.1"],
+        "port_base": 12000,
+        "ready_timeout_s": 240
+      },
+      "extra_request_fields": {},
+      "notes": "pip install vllm-mlx. Verify the CLI shape against the installed version before trusting a row."
+    },
+    "rapid-mlx": {
+      "description": "Rapid-MLX (raullenchai) — 'Ollama replacement' MLX engine with prompt caching.",
+      "platforms": ["macos"],
+      "url": "http://127.0.0.1:8000",
+      "notes": "Attach-only until its CLI is pinned; start it yourself pointing at the same weights."
+    },
+    "swama": {
+      "description": "swama (Trans-N-ai) — native Swift MLX engine; the closest sibling to mlxcat.",
+      "platforms": ["macos", "ios"],
+      "url": "http://127.0.0.1:28100",
+      "notes": "Attach-only. Ships a macOS app + CLI; iOS app exists (rows from its app would need its own producer)."
+    },
+    "swiftlm": {
+      "description": "SwiftLM (SharpAI) — native MLX Swift server, SSD streaming for 100B+ MoE, iOS app support.",
+      "platforms": ["macos", "ios"],
+      "url": "http://127.0.0.1:8080",
+      "notes": "Attach-only."
+    },
+    "lmstudio": {
+      "description": "LM Studio (mlx-engine) local server.",
+      "platforms": ["macos"],
+      "url": "http://127.0.0.1:1234",
+      "notes": "lms server start && lms load <model>. Must point LM Studio at the same mlx-community weights (or record the quant it used)."
+    },
+    "ollama": {
+      "description": "Ollama — MLX backend by default on Apple Silicon since v0.30 (2026-05); llama.cpp before that.",
+      "platforms": ["macos"],
+      "url": "http://127.0.0.1:11435",
+      "weights": "ollama library (its own artifacts — NOT the same files; compare with care)",
+      "notes": "Port 11434 is Local AI Cat's Local API on our Macs — run Ollama with OLLAMA_HOST=127.0.0.1:11435. Different weight artifacts; rows are labelled as such."
+    },
+    "llama-cpp": {
+      "description": "llama.cpp llama-server (Metal) — the GGUF baseline.",
+      "platforms": ["macos", "ios"],
+      "url": "http://127.0.0.1:8081",
+      "weights": "GGUF (different quantization family — compare quality class, not bits)",
+      "notes": "Attach-only. Use a Q4_K_M GGUF of the same base model; record it in --tag."
+    },
+    "localaicat-legacy": {
+      "description": "Local AI Cat's legacy in-app LLMEvaluator (mlx-swift-lm TokenIterator) through the app's Local API.",
+      "platforms": ["macos", "ios"],
+      "url": "http://127.0.0.1:11434",
+      "token_env": "LOCALAI_API_TOKEN",
+      "notes": "Attach to a running Local AI Cat with the engine setting forced to legacy. The alpha on :11434 must NOT be restarted by the harness."
+    }
+  }
+}
