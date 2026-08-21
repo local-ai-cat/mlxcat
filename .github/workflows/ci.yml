@@ -1,0 +1,97 @@
+name: ci
+
+# Build + unit tests on GitHub-hosted Apple Silicon (free for public repos).
+# Model-backed tests skip cleanly here (no weights on the runner); they run in
+# scripts/nightly-models.sh on our own Macs — see CONTRIBUTING.md § Tests.
+# The leaderboard gate is cheap and runs on Linux.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: swift build + test (macOS, Apple Silicon)
+    runs-on: macos-26
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.app 2>/dev/null || true
+          xcodebuild -version
+          swift --version
+
+      - name: Cache SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            ~/Library/Caches/org.swift.swiftpm
+            ~/Library/org.swift.swiftpm
+          key: spm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Package.swift') }}
+          restore-keys: |
+            spm-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Resolve
+        run: swift package resolve
+
+      - name: Build (debug, with tests)
+        run: swift build --build-tests 2>&1 | tee build.log | grep -E "error:|warning: unre|Compiling|Build complete" | tail -40; exit ${PIPESTATUS[0]}
+
+      - name: Test
+        # Model-gated suites throw XCTSkip when MLXSERVE_*_TEST_MODEL is unset;
+        # Metal-dependent probes skip when no Metal device is visible.
+        run: |
+          set -o pipefail
+          swift test --skip-build 2>&1 | tee test.log | grep -E "Test Suite|Executed|Test run with|error:|failed|skipped" | tail -60
+
+      - name: Summarize
+        if: always()
+        run: |
+          {
+            echo "### swift test"
+            grep -E "Executed [0-9]+ tests|Test run with [0-9]+ tests" test.log | tail -2 || echo "no summary line found"
+            echo; echo '<details><summary>skips</summary>'; echo
+            grep -E "skipped" test.log | head -50 || true
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ github.run_id }}
+          path: |
+            build.log
+            test.log
+          retention-days: 7
+
+  leaderboard:
+    name: leaderboard is derived from results
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: LEADERBOARD.md matches bench/results
+        run: python3 bench/leaderboard.py --check
+      - name: bench scripts parse
+        run: |
+          python3 -m py_compile bench/run.py bench/leaderboard.py
+          python3 -c "import json; json.load(open('bench/engines.json')); json.load(open('bench/matrix.json')); print('engines.json + matrix.json ok')"
+          python3 bench/run.py --dry-run --engines mlxcat --model-set smoke --allow-loaded >/dev/null && echo "run.py --dry-run ok"
+
+  shell:
+    name: shell scripts parse
+    runs-on: macos-26
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: for f in scripts/*.sh scripts/**/*.sh; do [ -f "$f" ] && zsh -n "$f" && echo "ok $f"; done

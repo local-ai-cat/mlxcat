@@ -1,0 +1,50 @@
+name: donor-drift
+
+# Weekly: how far have the repos we pin / port from / compete with moved?
+# Runs scripts/donor-drift.sh (read-only GitHub API) and upserts ONE issue in
+# THIS repo titled "Donor drift report". Never touches any other repository.
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"   # Mondays 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate report
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRIFT_SINCE_DAYS: "14"
+        run: |
+          sudo apt-get -qq update && sudo apt-get -qq install -y zsh >/dev/null
+          zsh scripts/donor-drift.sh > drift.md
+          head -c 60000 drift.md > drift-body.md
+          echo >> drift-body.md
+          echo "_Full report: workflow run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}_" >> drift-body.md
+      - name: Upsert issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh label create drift --color 5319e7 --description "donor/competitor drift reports" -R "$REPO" 2>/dev/null || true
+          number=$(gh issue list -R "$REPO" --label drift --state open --search "Donor drift report in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh issue edit "$number" -R "$REPO" --body-file drift-body.md
+            gh issue comment "$number" -R "$REPO" --body "Refreshed $(date -u +%F)."
+            echo "updated #$number"
+          else
+            gh issue create -R "$REPO" --title "Donor drift report" --label drift --body-file drift-body.md
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: donor-drift-${{ github.run_id }}
+          path: drift.md
+          retention-days: 90
