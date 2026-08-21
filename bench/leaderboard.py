@@ -156,7 +156,11 @@ def render(records: List[Dict[str, Any]], matrix: Dict[str, Any]) -> str:
     out.append(f"_{total_valid} ranked cells · {invalid} recorded-but-invalid rows (loaded host / errors) kept in `bench/results/` for audit._")
     out.append("")
     out.append("Metrics: **TTFT** time to first visible token (ms, median) · **prefill** prompt tokens ÷ TTFT · "
-               "**decode** (completion−1) ÷ time after first token · **peak** sampled physical footprint of the engine "
+               "**decode** (completion−1) ÷ time after first token, and only where the engine streams roughly one "
+               "chunk per token — an engine that coalesces tokens into few chunks (oMLX sends ~8 per chunk) shows — "
+               "rather than a rate its stream cannot support · **e2e** completion tokens ÷ full request wall time, "
+               "the transport-honest figure that is comparable across every engine regardless of streaming "
+               "granularity, and what a client actually feels · **peak** sampled physical footprint of the engine "
                "process during the measured runs (GiB) · **agg** aggregate tok/s across N simultaneous streams. "
                "Spread (min–max over runs) lives in the JSONL.")
     out.append("")
@@ -197,8 +201,8 @@ def render(records: List[Dict[str, Any]], matrix: Dict[str, Any]) -> str:
                 out.append("")
                 tiers = tree[platform][device].get(model, {})
                 if tiers:
-                    out.append("| context | gen tok | engine | transport | version | prompt tok | TTFT ms | prefill tok/s | decode tok/s | peak GiB | measured |")
-                    out.append("|---|---:|---|---|---|---:|---:|---:|---:|---:|---|")
+                    out.append("| context | gen tok | engine | transport | version | prompt tok | TTFT ms | prefill tok/s | decode tok/s | e2e tok/s | peak GiB | measured |")
+                    out.append("|---|---:|---|---|---|---:|---:|---:|---:|---:|---:|---|")
                     tier_order = [t["name"] for t in matrix.get("context_tiers", [])]
                     for tier in sorted(tiers.keys(), key=lambda t: tier_order.index(t) if t in tier_order else 99):
                         rows = sorted(
@@ -206,6 +210,7 @@ def render(records: List[Dict[str, Any]], matrix: Dict[str, Any]) -> str:
                             key=lambda r: (r["engine"].get("transport") or "http", -(med(r["metrics"].get("decode_tps")) or 0), r["engine"]["name"]),
                         )
                         best_decode = bold_best(rows, "decode_tps", True)
+                        best_e2e = bold_best(rows, "e2e_tps", True)
                         best_prefill = bold_best(rows, "prefill_tps", True)
                         best_ttft = bold_best(rows, "ttft_ms", False)
                         for record in rows:
@@ -214,6 +219,9 @@ def render(records: List[Dict[str, Any]], matrix: Dict[str, Any]) -> str:
                             transport = record["engine"].get("transport") or "http"
                             mark_scope = (transport, int(record["workload"].get("max_tokens") or 0))
                             decode = fmt(med(m.get("decode_tps")))
+                            e2e = fmt(med(m.get("e2e_tps")))
+                            if best_e2e.get(mark_scope + (name,)):
+                                e2e = f"**{e2e}**"
                             decode_block = m.get("decode_tps")
                             if decode_block and decode_block.get("n", 0) < int(record["workload"].get("runs") or 0):
                                 decode += " †"  # fewer measurable runs than requested
@@ -230,7 +238,7 @@ def render(records: List[Dict[str, Any]], matrix: Dict[str, Any]) -> str:
                                 weights_note = " ⚠︎"
                             out.append(
                                 f"| {tier} | {record['workload'].get('max_tokens', '—')} | {name}{weights_note} | {transport} | {record['engine'].get('version') or '—'} | "
-                                f"{m.get('prompt_tokens', '—')} | {ttft} | {prefill} | {decode} | "
+                                f"{m.get('prompt_tokens', '—')} | {ttft} | {prefill} | {decode} | {e2e} | "
                                 f"{gib(m.get('peak_phys_footprint_bytes'))} | {record['timestamp'][:10]} |"
                             )
                     out.append("")

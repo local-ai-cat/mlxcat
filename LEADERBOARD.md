@@ -4,7 +4,7 @@ Same client, same transport (`/v1/chat/completions`, streaming, greedy), same pr
 
 _53 ranked cells · 1 recorded-but-invalid rows (loaded host / errors) kept in `bench/results/` for audit._
 
-Metrics: **TTFT** time to first visible token (ms, median) · **prefill** prompt tokens ÷ TTFT · **decode** (completion−1) ÷ time after first token · **peak** sampled physical footprint of the engine process during the measured runs (GiB) · **agg** aggregate tok/s across N simultaneous streams. Spread (min–max over runs) lives in the JSONL.
+Metrics: **TTFT** time to first visible token (ms, median) · **prefill** prompt tokens ÷ TTFT · **decode** (completion−1) ÷ time after first token, and only where the engine streams roughly one chunk per token — an engine that coalesces tokens into few chunks (oMLX sends ~8 per chunk) shows — rather than a rate its stream cannot support · **e2e** completion tokens ÷ full request wall time, the transport-honest figure that is comparable across every engine regardless of streaming granularity, and what a client actually feels · **peak** sampled physical footprint of the engine process during the measured runs (GiB) · **agg** aggregate tok/s across N simultaneous streams. Spread (min–max over runs) lives in the JSONL.
 
 ## macOS
 
@@ -12,12 +12,12 @@ Metrics: **TTFT** time to first visible token (ms, median) · **prefill** prompt
 
 #### Qwen3-Coder-30B-A3B-Instruct-4bit — _flagship-moe_
 
-| context | gen tok | engine | transport | version | prompt tok | TTFT ms | prefill tok/s | decode tok/s | peak GiB | measured |
-|---|---:|---|---|---|---:|---:|---:|---:|---:|---|
-| short | 128 | mlxcat | http | — | 227 | 386 | 593 | 79.1 | 19.24 | 2026-08-21 |
-| 4k | 128 | mlxcat | http | — | 4056 | 6,519 | 622 | 60.3 | 21.85 | 2026-08-21 |
-| 16k | 64 | mlxcat | http | — | 16351 | 42,912 | 381 | 36.9 | 28.29 | 2026-08-21 |
-| longgen | 1024 | mlxcat | http | — | 1040 | 1,872 | 555 | 71.2 | 19.81 | 2026-08-21 |
+| context | gen tok | engine | transport | version | prompt tok | TTFT ms | prefill tok/s | decode tok/s | e2e tok/s | peak GiB | measured |
+|---|---:|---|---|---|---:|---:|---:|---:|---:|---:|---|
+| short | 128 | mlxcat | http | — | 227 | 386 | 593 | 79.1 | 64.3 | 19.24 | 2026-08-21 |
+| 4k | 128 | mlxcat | http | — | 4056 | 6,519 | 622 | 60.3 | 14.8 | 21.85 | 2026-08-21 |
+| 16k | 64 | mlxcat | http | — | 16351 | 42,912 | 381 | 36.9 | 1.4 | 28.29 | 2026-08-21 |
+| longgen | 1024 | mlxcat | http | — | 1040 | 1,872 | 555 | 71.2 | 60.2 | 19.81 | 2026-08-21 |
 
 Concurrency (`short` prompt, aggregate tok/s across N streams, median of runs):
 
@@ -27,16 +27,16 @@ Concurrency (`short` prompt, aggregate tok/s across N streams, median of runs):
 
 #### Qwen3.5-4B-MLX-4bit — _mac-floor_
 
-| context | gen tok | engine | transport | version | prompt tok | TTFT ms | prefill tok/s | decode tok/s | peak GiB | measured |
-|---|---:|---|---|---|---:|---:|---:|---:|---:|---|
-| short | 128 | mlxcat | http | — | 231 | 384 | 601 | 69.4 | 6.29 | 2026-08-21 |
-| short | 128 | mlx-swift-lm-tokeniterator | in-process | — | 215 | 436 | 493 | 80.0 | 3.15 | 2026-08-21 |
-| 4k | 128 | mlxcat | http | — | 4118 | 5,474 | 752 | 65.6 | 10.50 | 2026-08-21 |
-| 4k | 128 | mlx-swift-lm-tokeniterator | in-process | — | 3985 | 6,227 | 640 | 74.2 | 5.67 | 2026-08-21 |
-| 16k | 64 | mlxcat | http | — | 16354 | 41,653 | 393 | 55.0 | 20.44 | 2026-08-21 |
-| 16k | 64 | mlx-swift-lm-tokeniterator | in-process | — | 16107 | 27,275 | 591 | 59.1 | 24.48 | 2026-08-21 |
-| longgen | 1024 | mlxcat | http | — | 1044 | 2,145 | 487 | 65.7 | 8.46 | 2026-08-21 |
-| longgen | 1024 | mlx-swift-lm-tokeniterator | in-process | — | 969 | 1,990 | 487 | 76.0 | 3.81 | 2026-08-21 |
+| context | gen tok | engine | transport | version | prompt tok | TTFT ms | prefill tok/s | decode tok/s | e2e tok/s | peak GiB | measured |
+|---|---:|---|---|---|---:|---:|---:|---:|---:|---:|---|
+| short | 128 | mlxcat | http | — | 231 | 384 | 601 | 69.4 | 57.8 | 6.29 | 2026-08-21 |
+| short | 128 | mlx-swift-lm-tokeniterator | in-process | — | 215 | 436 | 493 | 80.0 | 63.2 | 3.15 | 2026-08-21 |
+| 4k | 128 | mlxcat | http | — | 4118 | 5,474 | 752 | 65.6 | 17.3 | 10.50 | 2026-08-21 |
+| 4k | 128 | mlx-swift-lm-tokeniterator | in-process | — | 3985 | 6,227 | 640 | 74.2 | 16.1 | 5.67 | 2026-08-21 |
+| 16k | 64 | mlxcat | http | — | 16354 | 41,653 | 393 | 55.0 | 1.5 | 20.44 | 2026-08-21 |
+| 16k | 64 | mlx-swift-lm-tokeniterator | in-process | — | 16107 | 27,275 | 591 | 59.1 | 2.3 | 24.48 | 2026-08-21 |
+| longgen | 1024 | mlxcat | http | — | 1044 | 2,145 | 487 | 65.7 | 50.4 | 8.46 | 2026-08-21 |
+| longgen | 1024 | mlx-swift-lm-tokeniterator | in-process | — | 969 | 1,990 | 487 | 76.0 | 66.2 | 3.81 | 2026-08-21 |
 
 Concurrency (`short` prompt, aggregate tok/s across N streams, median of runs):
 
@@ -46,12 +46,12 @@ Concurrency (`short` prompt, aggregate tok/s across N streams, median of runs):
 
 #### Qwen3.8-27B-4bit — _flagship-dense_
 
-| context | gen tok | engine | transport | version | prompt tok | TTFT ms | prefill tok/s | decode tok/s | peak GiB | measured |
-|---|---:|---|---|---|---:|---:|---:|---:|---:|---|
-| short | 128 | mlxcat | http | — | 231 | 3,041 | 76 | 13.8 | 19.70 | 2026-08-21 |
-| 4k | 128 | mlxcat | http | — | 4117 | 42,834 | 96 | 13.3 | 20.44 | 2026-08-21 |
-| 16k | 64 | mlxcat | http | — | 16414 | 179,579 | 91 | 12.5 | 21.13 | 2026-08-21 |
-| longgen | 1024 | mlxcat | http | — | 1043 | 10,642 | 98 | 13.7 | 17.56 | 2026-08-21 |
+| context | gen tok | engine | transport | version | prompt tok | TTFT ms | prefill tok/s | decode tok/s | e2e tok/s | peak GiB | measured |
+|---|---:|---|---|---|---:|---:|---:|---:|---:|---:|---|
+| short | 128 | mlxcat | http | — | 231 | 3,041 | 76 | 13.8 | 10.5 | 19.70 | 2026-08-21 |
+| 4k | 128 | mlxcat | http | — | 4117 | 42,834 | 96 | 13.3 | 2.4 | 20.44 | 2026-08-21 |
+| 16k | 64 | mlxcat | http | — | 16414 | 179,579 | 91 | 12.5 | 0.3 | 21.13 | 2026-08-21 |
+| longgen | 1024 | mlxcat | http | — | 1043 | 10,642 | 98 | 13.7 | 10.8 | 17.56 | 2026-08-21 |
 
 Concurrency (`short` prompt, aggregate tok/s across N streams, median of runs):
 
@@ -61,12 +61,12 @@ Concurrency (`short` prompt, aggregate tok/s across N streams, median of runs):
 
 #### gemma-4-12B-it-qat-4bit — _flagship-vision_
 
-| context | gen tok | engine | transport | version | prompt tok | TTFT ms | prefill tok/s | decode tok/s | peak GiB | measured |
-|---|---:|---|---|---|---:|---:|---:|---:|---:|---|
-| short | 128 | mlxcat | http | — | 230 | 1,474 | 156 | 19.6 | 14.86 | 2026-08-21 |
-| 4k | 128 | mlxcat | http | — | 4105 | 20,090 | 204 | 18.3 | 19.27 | 2026-08-21 |
-| 16k | 64 | mlxcat | http | — | 16359 | 80,394 | 203 | 17.8 | 19.80 | 2026-08-21 |
-| longgen | 1024 | mlxcat | http | — | 1027 | 5,141 | 200 | 18.5 | 17.66 | 2026-08-21 |
+| context | gen tok | engine | transport | version | prompt tok | TTFT ms | prefill tok/s | decode tok/s | e2e tok/s | peak GiB | measured |
+|---|---:|---|---|---|---:|---:|---:|---:|---:|---:|---|
+| short | 128 | mlxcat | http | — | 230 | 1,474 | 156 | 19.6 | 16.0 | 14.86 | 2026-08-21 |
+| 4k | 128 | mlxcat | http | — | 4105 | 20,090 | 204 | 18.3 | 4.7 | 19.27 | 2026-08-21 |
+| 16k | 64 | mlxcat | http | — | 16359 | 80,394 | 203 | 17.8 | 0.8 | 19.80 | 2026-08-21 |
+| longgen | 1024 | mlxcat | http | — | 1027 | 5,141 | 200 | 18.5 | 15.0 | 17.66 | 2026-08-21 |
 
 Concurrency (`short` prompt, aggregate tok/s across N streams, median of runs):
 
@@ -76,16 +76,16 @@ Concurrency (`short` prompt, aggregate tok/s across N streams, median of runs):
 
 #### gemma-4-E2B-it-qat-4bit — _device-floor_
 
-| context | gen tok | engine | transport | version | prompt tok | TTFT ms | prefill tok/s | decode tok/s | peak GiB | measured |
-|---|---:|---|---|---|---:|---:|---:|---:|---:|---|
-| short | 128 | mlxcat | http | — | 225 | 69 | 3,254 | 79.0 | 5.15 | 2026-08-21 |
-| short | 128 | mlx-swift-lm-tokeniterator | in-process | — | 211 | 228 | 924 | 83.8 | 3.91 | 2026-08-21 |
-| 4k | 128 | mlxcat | http | — | 4100 | 1,038 | 3,953 | 72.8 | 6.68 | 2026-08-21 |
-| 4k | 128 | mlx-swift-lm-tokeniterator | in-process | — | 4030 | 1,040 | 3,874 | 79.8 | 5.14 | 2026-08-21 |
-| 16k | 64 | mlxcat | http | — | 16358 | 4,639 | 3,526 | 66.5 | 13.19 | 2026-08-21 |
-| 16k | 64 | mlx-swift-lm-tokeniterator | in-process | — | 16057 | 4,626 | 3,471 | 70.1 | 10.68 | 2026-08-21 |
-| longgen | 1024 | mlxcat | http | — | 1023 | 250 | 4,093 | 74.3 | 13.60 | 2026-08-21 |
-| longgen | 1024 | mlx-swift-lm-tokeniterator | in-process | — | 1009 | 257 | 3,922 | 82.6 | 3.95 | 2026-08-21 |
+| context | gen tok | engine | transport | version | prompt tok | TTFT ms | prefill tok/s | decode tok/s | e2e tok/s | peak GiB | measured |
+|---|---:|---|---|---|---:|---:|---:|---:|---:|---:|---|
+| short | 128 | mlxcat | http | — | 225 | 69 | 3,254 | 79.0 | 76.4 | 5.15 | 2026-08-21 |
+| short | 128 | mlx-swift-lm-tokeniterator | in-process | — | 211 | 228 | 924 | 83.8 | 73.6 | 3.91 | 2026-08-21 |
+| 4k | 128 | mlxcat | http | — | 4100 | 1,038 | 3,953 | 72.8 | 45.9 | 6.68 | 2026-08-21 |
+| 4k | 128 | mlx-swift-lm-tokeniterator | in-process | — | 4030 | 1,040 | 3,874 | 79.8 | 48.7 | 5.14 | 2026-08-21 |
+| 16k | 64 | mlxcat | http | — | 16358 | 4,639 | 3,526 | 66.5 | 11.5 | 13.19 | 2026-08-21 |
+| 16k | 64 | mlx-swift-lm-tokeniterator | in-process | — | 16057 | 4,626 | 3,471 | 70.1 | 11.6 | 10.68 | 2026-08-21 |
+| longgen | 1024 | mlxcat | http | — | 1023 | 250 | 4,093 | 74.3 | 73.0 | 13.60 | 2026-08-21 |
+| longgen | 1024 | mlx-swift-lm-tokeniterator | in-process | — | 1009 | 257 | 3,922 | 82.6 | 81.0 | 3.95 | 2026-08-21 |
 
 Concurrency (`short` prompt, aggregate tok/s across N streams, median of runs):
 
@@ -95,15 +95,15 @@ Concurrency (`short` prompt, aggregate tok/s across N streams, median of runs):
 
 #### gpt-oss-20b-MXFP4-Q8 — _reasoning_
 
-| context | gen tok | engine | transport | version | prompt tok | TTFT ms | prefill tok/s | decode tok/s | peak GiB | measured |
-|---|---:|---|---|---|---:|---:|---:|---:|---:|---|
-| short | 128 | mlx-swift-lm-tokeniterator | in-process | — | 274 | 689 | 398 | 62.8 | 12.29 | 2026-08-21 |
-| 4k | 128 | mlxcat | http | — | 4171 | 9,319 | 448 | 56.6 | 20.84 | 2026-08-21 |
-| 4k | 128 | mlx-swift-lm-tokeniterator | in-process | — | 4044 | 7,357 | 550 | 59.8 | 15.16 | 2026-08-21 |
-| 16k | 64 | mlxcat | http | — | 16466 | 53,940 | 305 | 47.0 | 35.76 | 2026-08-21 |
-| 16k | 64 | mlx-swift-lm-tokeniterator | in-process | — | 16166 | 34,920 | 463 | 46.0 | 28.37 | 2026-08-21 |
-| longgen | 1024 | mlxcat | http | — | 1098 | 2,929 | 375 | 55.2 | 18.97 | 2026-08-21 |
-| longgen | 1024 | mlx-swift-lm-tokeniterator | in-process | — | 1028 | 2,497 | 412 | 59.1 | 13.10 | 2026-08-21 |
+| context | gen tok | engine | transport | version | prompt tok | TTFT ms | prefill tok/s | decode tok/s | e2e tok/s | peak GiB | measured |
+|---|---:|---|---|---|---:|---:|---:|---:|---:|---:|---|
+| short | 128 | mlx-swift-lm-tokeniterator | in-process | — | 274 | 689 | 398 | 62.8 | 47.2 | 12.29 | 2026-08-21 |
+| 4k | 128 | mlxcat | http | — | 4171 | 9,319 | 448 | 56.6 | 11.0 | 20.84 | 2026-08-21 |
+| 4k | 128 | mlx-swift-lm-tokeniterator | in-process | — | 4044 | 7,357 | 550 | 59.8 | 13.5 | 15.16 | 2026-08-21 |
+| 16k | 64 | mlxcat | http | — | 16466 | 53,940 | 305 | 47.0 | 1.2 | 35.76 | 2026-08-21 |
+| 16k | 64 | mlx-swift-lm-tokeniterator | in-process | — | 16166 | 34,920 | 463 | 46.0 | 1.8 | 28.37 | 2026-08-21 |
+| longgen | 1024 | mlxcat | http | — | 1098 | 2,929 | 375 | 55.2 | 47.7 | 18.97 | 2026-08-21 |
+| longgen | 1024 | mlx-swift-lm-tokeniterator | in-process | — | 1028 | 2,497 | 412 | 59.1 | 52.0 | 13.10 | 2026-08-21 |
 
 Concurrency (`short` prompt, aggregate tok/s across N streams, median of runs):
 

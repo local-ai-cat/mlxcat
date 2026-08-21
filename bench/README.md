@@ -52,7 +52,7 @@ of two probe requests so "16k" really is ~16k tokens on that tokenizer.
 | `ttft_ms` | request start → first visible content/reasoning delta |
 | `prefill_tps` | `usage.prompt_tokens ÷ ttft` |
 | `decode_tps` | `(completion_tokens − 1) ÷ (end − first token)` |
-| `e2e_tps` | `completion_tokens ÷ wall` (what a client feels) |
+| `e2e_tps` | `completion_tokens ÷ wall` — **the cross-engine comparison metric.** Unlike `decode_tps` it needs no assumption about streaming granularity, so it is the only decode-ish figure that works for an engine which coalesces tokens into few SSE chunks. oMLX sends ~8 tokens per chunk (measured 2026-08-22: 128 completion tokens, 122 ms inter-chunk, 63 tok/s e2e ⇒ ~16 chunks), so its `decode_tps` is correctly reported as unmeasurable; `PARITY.md` hit the same behaviour in July and reached the same conclusion. |
 | `itl_p50_ms` / `itl_p95_ms` | inter-chunk gaps (chunks may carry >1 token — a jitter signal, not a token clock) |
 | `aggregate_tps` | Σ completion tokens ÷ wall for N simultaneous streams. **Read this with the tier in mind**: prefill is per-row serial in mlxcat by design, so at a short tier a ~700 ms prefill dominates the wall of a 128-token generation and the number mostly reports *admission latency*, not batched decode. Measured 2026-08-21 (gpt-oss-20b, M4 Pro): TTFT 727/1614/3122/5883 ms at c1/2/4/8 — linear in N — while per-request decode fell only 4.3× across an 8× concurrency rise. The `longgen` tier is where batching can show its worth. |
 | `peak_phys_footprint_bytes` | max `ri_phys_footprint` of the engine process sampled every 50 ms during the measured runs |
