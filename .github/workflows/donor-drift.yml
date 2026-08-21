@@ -26,7 +26,7 @@ jobs:
         run: |
           sudo apt-get -qq update && sudo apt-get -qq install -y zsh >/dev/null
           zsh scripts/donor-drift.sh > drift.md
-          head -c 60000 drift.md > drift-body.md
+          python3 -c "import sys; data = open('drift.md', encoding='utf-8').read(); sys.stdout.write(data[:60000])" > drift-body.md
           echo >> drift-body.md
           echo "_Full report: workflow run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}_" >> drift-body.md
       - name: Upsert issue

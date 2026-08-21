@@ -19,8 +19,8 @@
       "producer": {
         "bin": "{repo}/.build/release/mlxcat-baseline",
         "bin_env": "MLXCAT_BASELINE_BIN",
-        "args": ["--model-dir", "{model_dir}", "--model-id", "{model_id}", "--variant", "tokeniterator", "--max-tokens", "{max_tokens}", "--runs", "{runs}", "--warmup", "{warmup}"],
-        "prompt_tokens_flag": "--prompt-tokens"
+        "args": ["--model-dir", "{model_dir}", "--model-id", "{model_id}", "--variant", "tokeniterator", "--runs", "{runs}", "--warmup", "{warmup}"],
+        "cell_flag": "--cell"
       },
       "notes": "Build with: swift build -c release --product mlxcat-baseline. transport=in-process; compare to mlxcat-inprocess, not to HTTP rows."
     },
@@ -30,8 +30,8 @@
       "producer": {
         "bin": "{repo}/.build/release/mlxcat-baseline",
         "bin_env": "MLXCAT_BASELINE_BIN",
-        "args": ["--model-dir", "{model_dir}", "--model-id", "{model_id}", "--variant", "mlxcat", "--max-tokens", "{max_tokens}", "--runs", "{runs}", "--warmup", "{warmup}"],
-        "prompt_tokens_flag": "--prompt-tokens"
+        "args": ["--model-dir", "{model_dir}", "--model-id", "{model_id}", "--variant", "mlxcat", "--runs", "{runs}", "--warmup", "{warmup}"],
+        "cell_flag": "--cell"
       }
     },
     "omlx": {
@@ -40,12 +40,12 @@
       "launch": {
         "bin": "omlx",
         "bin_env": "OMLX_BIN",
-        "args": ["serve", "--model-dir", "{model_root}", "--port", "{port}", "--no-cache", "--log-level", "warning"],
+        "args": ["serve", "--model-dir", "{model_root}", "--port", "{port}", "--log-level", "warning"],
         "port_base": 11800,
         "ready_timeout_s": 180
       },
       "extra_request_fields": {},
-      "notes": "Install: pipx install omlx (or brew tap jundot/omlx). Same mlx-community weights."
+      "notes": "Install: pipx install omlx (or brew tap jundot/omlx). Same mlx-community weights; default config (its caches stay on — the per-request nonce prevents cross-run prefix reuse for every engine uniformly)."
     },
     "mlx-lm": {
       "description": "Apple's mlx-lm reference server (python -m mlx_lm server).",

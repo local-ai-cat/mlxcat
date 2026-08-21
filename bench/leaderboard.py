@@ -71,6 +71,24 @@ def gib(value: Optional[int]) -> str:
     return "—" if not value else f"{value / 2**30:.2f}"
 
 
+def parsed_ts(record: Dict[str, Any]) -> float:
+    """Timestamp as epoch seconds — local-offset ISO strings must not beat UTC lexically."""
+    import datetime as _dt
+    raw = str(record.get("timestamp", ""))
+    try:
+        return _dt.datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return 0.0
+
+
+def device_label(device: Dict[str, Any]) -> str:
+    """Device identity: chip alone is ambiguous (two 'M4 Max' Macs with different RAM)."""
+    chip = device.get("chip") or device.get("model") or "unknown"
+    mem = device.get("memory_bytes")
+    mem_part = f" · {round(mem / 2**30)} GB" if mem else ""
+    return f"{chip}{mem_part}"
+
+
 def newest_per_key(records: Iterable[Dict[str, Any]]) -> Dict[Tuple, Dict[str, Any]]:
     chosen: Dict[Tuple, Dict[str, Any]] = {}
     for record in records:
@@ -78,25 +96,35 @@ def newest_per_key(records: Iterable[Dict[str, Any]]) -> Dict[Tuple, Dict[str, A
             continue
         key = (
             record["platform"],
-            record["device"].get("chip") or record["device"].get("model"),
+            device_label(record["device"]),
             record["model"]["id"],
             record["workload"]["context_tier"],
+            int(record["workload"].get("max_tokens") or 0),
             int(record["workload"]["concurrency"]),
+            record["engine"].get("transport") or "http",
             record["engine"]["name"],
         )
         current = chosen.get(key)
-        if current is None or record["timestamp"] > current["timestamp"]:
+        if current is None or parsed_ts(record) > parsed_ts(current):
             chosen[key] = record
     return chosen
 
 
 def bold_best(rows: List[Dict[str, Any]], field: str, higher_is_better: bool) -> Dict[str, bool]:
-    values = {r["engine"]["name"]: med(r["metrics"].get(field)) for r in rows}
-    clean = {k: v for k, v in values.items() if v is not None}
-    if len(clean) < 2:
-        return {}
-    best = max(clean, key=clean.get) if higher_is_better else min(clean, key=clean.get)
-    return {best: True}
+    """Best per TRANSPORT group — an in-process row must never be bolded as beating HTTP rows."""
+    marks: Dict[str, bool] = {}
+    groups: Dict[str, Dict[str, float]] = {}
+    for r in rows:
+        transport = r["engine"].get("transport") or "http"
+        value = med(r["metrics"].get(field))
+        if value is not None:
+            groups.setdefault(transport, {})[r["engine"]["name"]] = value
+    for clean in groups.values():
+        if len(clean) < 2:
+            continue
+        best = max(clean, key=clean.get) if higher_is_better else min(clean, key=clean.get)
+        marks[best] = True
+    return marks
 
 
 def render(records: List[Dict[str, Any]], matrix: Dict[str, Any]) -> str:
@@ -133,7 +161,7 @@ def render(records: List[Dict[str, Any]], matrix: Dict[str, Any]) -> str:
     tree: Dict[str, Dict[str, Dict[str, Dict[str, List[Dict[str, Any]]]]]] = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: defaultdict(list))))
     conc: Dict[str, Dict[str, Dict[str, List[Dict[str, Any]]]]] = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
     for key, record in chosen.items():
-        platform, device, model, tier, width, _engine = key
+        platform, device, model, tier, _max_tokens, width, _transport, _engine = key
         if width == 1:
             tree[platform][device][model][tier].append(record)
         else:
@@ -165,7 +193,10 @@ def render(records: List[Dict[str, Any]], matrix: Dict[str, Any]) -> str:
                     out.append("|---|---|---|---|---:|---:|---:|---:|---:|---|")
                     tier_order = [t["name"] for t in matrix.get("context_tiers", [])]
                     for tier in sorted(tiers.keys(), key=lambda t: tier_order.index(t) if t in tier_order else 99):
-                        rows = sorted(tiers[tier], key=lambda r: -(med(r["metrics"].get("decode_tps")) or 0))
+                        rows = sorted(
+                            tiers[tier],
+                            key=lambda r: (r["engine"].get("transport") or "http", -(med(r["metrics"].get("decode_tps")) or 0), r["engine"]["name"]),
+                        )
                         best_decode = bold_best(rows, "decode_tps", True)
                         best_prefill = bold_best(rows, "prefill_tps", True)
                         best_ttft = bold_best(rows, "ttft_ms", False)
@@ -192,26 +223,30 @@ def render(records: List[Dict[str, Any]], matrix: Dict[str, Any]) -> str:
                     out.append("")
                 conc_rows = conc[platform][device].get(model, [])
                 if conc_rows:
-                    by_engine: Dict[str, Dict[int, Dict[str, Any]]] = defaultdict(dict)
-                    widths = set()
+                    by_tier: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
                     for record in conc_rows:
-                        width = int(record["workload"]["concurrency"])
-                        widths.add(width)
-                        by_engine[record["engine"]["name"]][width] = record
-                    width_list = sorted(widths)
-                    tier_name = conc_rows[0]["workload"]["context_tier"]
-                    out.append(f"Concurrency (`{tier_name}` prompt, aggregate tok/s across N streams, median of runs):")
-                    out.append("")
-                    out.append("| engine | " + " | ".join(f"×{w}" for w in width_list) + " | peak GiB @max |")
-                    out.append("|---|" + "---:|" * len(width_list) + "---:|")
-                    for name in sorted(by_engine):
-                        cells = []
-                        for w in width_list:
-                            r = by_engine[name].get(w)
-                            cells.append(fmt(med(r["metrics"].get("aggregate_tps"))) if r else "—")
-                        last = by_engine[name].get(width_list[-1])
-                        out.append(f"| {name} | " + " | ".join(cells) + f" | {gib(last['metrics'].get('peak_phys_footprint_bytes')) if last else '—'} |")
-                    out.append("")
+                        by_tier[record["workload"]["context_tier"]].append(record)
+                    for tier_name in sorted(by_tier):
+                        rows_for_tier = by_tier[tier_name]
+                        by_engine: Dict[str, Dict[int, Dict[str, Any]]] = defaultdict(dict)
+                        widths = set()
+                        for record in rows_for_tier:
+                            width = int(record["workload"]["concurrency"])
+                            widths.add(width)
+                            by_engine[record["engine"]["name"]][width] = record
+                        width_list = sorted(widths)
+                        out.append(f"Concurrency (`{tier_name}` prompt, aggregate tok/s across N streams, median of runs):")
+                        out.append("")
+                        out.append("| engine | " + " | ".join(f"×{w}" for w in width_list) + " | peak GiB @max |")
+                        out.append("|---|" + "---:|" * len(width_list) + "---:|")
+                        for name in sorted(by_engine):
+                            cells = []
+                            for w in width_list:
+                                r = by_engine[name].get(w)
+                                cells.append(fmt(med(r["metrics"].get("aggregate_tps"))) if r else "—")
+                            last = by_engine[name].get(width_list[-1])
+                            out.append(f"| {name} | " + " | ".join(cells) + f" | {gib(last['metrics'].get('peak_phys_footprint_bytes')) if last else '—'} |")
+                        out.append("")
         out.append("")
 
     out.append("⚠︎ = different weight artifacts than the `mlx-community` safetensors the other rows use (e.g. Ollama library, GGUF) — compare quality class, not bits.")

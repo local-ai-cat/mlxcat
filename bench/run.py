@@ -202,6 +202,23 @@ class FootprintSampler:
         return reading["lifetime_max_phys_footprint"] if reading else None
 
 
+def ensure_metallib(binary: str) -> str:
+    """`swift build` products need mlx.metallib beside them; build it once if missing.
+
+    Only applies to binaries under this repo's .build (anything else is assumed to
+    ship its own). Mirrors Tests/MLXCatTests/Support/MLXMetalRuntime.swift.
+    """
+    binary_dir = os.path.dirname(os.path.abspath(binary))
+    if not binary_dir.startswith(str(REPO / ".build")):
+        return binary
+    if os.path.exists(os.path.join(binary_dir, "mlx.metallib")):
+        return binary
+    script = REPO / "scripts" / "build-metallib.sh"
+    print(f"mlx.metallib missing beside {os.path.basename(binary)} — running {script.name} (one-time)")
+    subprocess.run(["zsh", str(script), binary_dir], check=True)
+    return binary
+
+
 def pid_listening_on(port: int) -> Optional[int]:
     try:
         out = subprocess.check_output(
@@ -304,10 +321,10 @@ class Engine:
     def _resolve_binary(self, spec: str) -> Optional[str]:
         env_name = self.spec.get("launch", {}).get("bin_env")
         if env_name and os.environ.get(env_name):
-            return os.environ[env_name]
+            return ensure_metallib(os.environ[env_name])
         candidate = spec.format(repo=str(REPO))
         if os.path.sep in candidate:
-            return candidate if os.path.exists(candidate) else None
+            return ensure_metallib(candidate) if os.path.exists(candidate) else None
         return shutil.which(candidate)
 
     @staticmethod
@@ -356,7 +373,13 @@ class Engine:
 
     # -- measurement ------------------------------------------------------ #
 
-    def stream_once(self, model: str, prompt: str, max_tokens: int, timeout: float) -> Dict[str, Any]:
+    def stream_once(self, model: str, prompt: str, max_tokens: int, timeout: float, nonce: bool = True) -> Dict[str, Any]:
+        # Unique per-request prefix so no engine can serve the measurement from a
+        # prompt/prefix cache (mlxcat's tiered prefix cache would otherwise turn
+        # repeated identical prompts into cache-hit TTFTs while other engines do
+        # real prefill — Codex round 1 BLOCKER). Uniform across engines.
+        if nonce:
+            prompt = f"[request {uuid.uuid4().hex[:12]}] " + prompt
         body: Dict[str, Any] = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
@@ -365,7 +388,8 @@ class Engine:
             "stream": True,
             "stream_options": {"include_usage": True},
         }
-        body.update(self.spec.get("extra_request_fields") or {"enable_thinking": False})
+        extra = self.spec["extra_request_fields"] if "extra_request_fields" in self.spec else {"enable_thinking": False}
+        body.update(extra)
         request = urllib.request.Request(
             self.url.rstrip("/") + "/v1/chat/completions",
             data=json.dumps(body).encode(),
@@ -406,7 +430,10 @@ class Engine:
         prompt_tokens = int(usage.get("prompt_tokens") or 0)
         if completion_tokens <= 0:
             raise RuntimeError(f"{self.name}: usage.completion_tokens missing (needed for honest tok/s)")
-        decode_seconds = max(finished - first_output, 1e-9)
+        # Decode ends at the LAST OUTPUT CHUNK, not at [DONE]/usage framing — an
+        # engine that dawdles over its terminal frames must not read as slower decode.
+        last_output = chunk_times[-1] if chunk_times else finished
+        decode_seconds = max(last_output - first_output, 1e-9)
         ttft = first_output - started
         gaps = [b - a for a, b in zip(chunk_times, chunk_times[1:])]
         return {
@@ -565,6 +592,7 @@ def run_producer(
     if not binary:
         print(f"[{engine_name}] producer binary not found ({producer['bin']}); build it or set {env_name}", file=sys.stderr)
         return 0
+    binary = ensure_metallib(binary)
     written = 0
     target_to_tier = {int(tiers[t]["prompt_tokens"]): t for t in chosen_tiers}
     for model_id in models:
@@ -580,10 +608,13 @@ def run_producer(
             "warmup": str(args.warmup),
         }
         argv = [binary] + [a.format(**variables) for a in producer["args"]]
-        flag = producer.get("prompt_tokens_flag", "--prompt-tokens")
+        flag = producer.get("cell_flag", "--cell")
         for tier_name in chosen_tiers:
-            argv += [flag, str(int(tiers[tier_name]["prompt_tokens"]))]
+            tier = tiers[tier_name]
+            argv += [flag, f"{int(tier['prompt_tokens'])}:{int(tier.get('max_tokens', args.max_tokens))}"]
         print(f"[{engine_name}/{model_id}] {' '.join(os.path.basename(a) if i == 0 else a for i, a in enumerate(argv))}")
+        model_snapshot = host_snapshot()
+        model_violations = quiet_machine_violations(model_snapshot, args.max_load, args.min_free_pct)
         try:
             completed = subprocess.run(argv, capture_output=True, text=True, timeout=float(args.request_timeout) * 4)
         except subprocess.TimeoutExpired:
@@ -604,7 +635,9 @@ def run_producer(
             record["model"] = {**record.get("model", {}), **{k: v for k, v in model_specs.get(model_id, {}).items() if k != "id"}, "id": model_id}
             record["engine"]["name"] = engine_name
             record.update(stamp)
-            record["valid_for_leaderboard"] = bool(stamp.get("valid_for_leaderboard")) and "error" not in record.get("metrics", {})
+            record["host"] = model_snapshot
+            record["valid_for_leaderboard"] = not model_violations and "error" not in record.get("metrics", {})
+            record["invalid_reason"] = "; ".join(model_violations) or None
             with open(out_path, "a", encoding="utf-8") as handle:
                 handle.write(json.dumps(record, sort_keys=True) + "\n")
             written += 1
@@ -742,17 +775,27 @@ def main(argv: Optional[List[str]] = None) -> int:
                 }
 
                 # Calibrate chars/token for this model with a tiny probe.
-                probe = engine.stream_once(offered, build_prompt(0, 4.0), 8, args.request_timeout)
-                question_tokens = max(probe["prompt_tokens"], 1)
-                cal = engine.stream_once(offered, FILLER * 40 + QUESTION, 8, args.request_timeout)
-                filler_tokens = max(cal["prompt_tokens"] - question_tokens, 1)
-                chars_per_token = (len(FILLER) * 40) / filler_tokens
+                try:
+                    probe = engine.stream_once(offered, build_prompt(0, 4.0), 8, args.request_timeout)
+                    question_tokens = max(probe["prompt_tokens"], 1)
+                    cal = engine.stream_once(offered, FILLER * 40 + QUESTION, 8, args.request_timeout)
+                    filler_tokens = max(cal["prompt_tokens"] - question_tokens, 1)
+                    chars_per_token = (len(FILLER) * 40) / filler_tokens
+                except Exception as error:  # noqa: BLE001
+                    hint = f" (see {engine.log_path})" if engine.log_path else ""
+                    print(f"[{engine_name}/{model_id}] calibration request failed: {error}{hint} — model skipped", file=sys.stderr)
+                    continue
 
                 cells = [(tier_name, 1) for tier_name in chosen_tiers] + [(conc_tier, w) for w in widths if w > 1]
                 for tier_name, width in cells:
                     tier = tiers[tier_name]
                     prompt = build_prompt(int(tier["prompt_tokens"]), chars_per_token)
                     label = f"[{engine_name}/{model_id}/{tier_name}/c{width}]"
+                    # Re-sample the host per cell — a run that starts quiet can get
+                    # loud, and later rows must not inherit the opening verdict.
+                    cell_snapshot = host_snapshot()
+                    cell_violations = quiet_machine_violations(cell_snapshot, args.max_load, args.min_free_pct)
+                    cell_valid = not cell_violations
                     try:
                         metrics = run_cell(
                             engine, offered, model, tier, width, prompt, args,
@@ -779,9 +822,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                             "warmup": args.warmup,
                         },
                         "metrics": metrics,
-                        "host": snapshot,
-                        "valid_for_leaderboard": valid and "error" not in metrics,
-                        "invalid_reason": "; ".join(violations) or (metrics.get("error") if "error" in metrics else None),
+                        "host": cell_snapshot,
+                        "valid_for_leaderboard": cell_valid and "error" not in metrics,
+                        "invalid_reason": "; ".join(cell_violations) or (metrics.get("error") if "error" in metrics else None),
                         "harness": {"commit": harness_commit, "tag": args.tag, "argv": sys.argv[1:]},
                     }
                     with open(out_path, "a", encoding="utf-8") as handle:
