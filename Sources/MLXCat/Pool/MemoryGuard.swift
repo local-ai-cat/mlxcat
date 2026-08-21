@@ -81,8 +81,14 @@ public enum MemoryGuard {
     ///
     /// Called once, at engine/server construction, when a ceiling is known.
     /// Returns what was applied so the caller can log it (0 = left at MLX default).
-    @discardableResult
-    public static func applyAllocatorLimits(
+    /// The limits a ceiling implies — pure arithmetic, no MLX calls.
+    ///
+    /// Split out from ``applyAllocatorLimits(ceilingBytes:cacheLimitOverrideBytes:)``
+    /// so the clamping policy (the part that regresses) is testable on any machine.
+    /// Touching `Memory.cacheLimit` requires a loaded Metal library, which a hosted
+    /// CI runner does not have — reading it there aborts the process rather than
+    /// failing a test.
+    public static func plannedAllocatorLimits(
         ceilingBytes: Int64,
         cacheLimitOverrideBytes: Int64? = nil
     ) -> (memoryLimit: Int64, cacheLimit: Int64) {
@@ -99,10 +105,25 @@ public enum MemoryGuard {
         } else {
             cacheLimit = min(max(ceilingBytes / 4, 256 * 1_048_576), 4 * gibibyte)
         }
-
-        Memory.memoryLimit = Int(ceilingBytes)
-        Memory.cacheLimit = Int(cacheLimit)
         return (ceilingBytes, cacheLimit)
+    }
+
+    /// Pushes ``plannedAllocatorLimits(ceilingBytes:cacheLimitOverrideBytes:)`` into
+    /// MLX. Requires a working Metal runtime; a zero ceiling is a no-op.
+    @discardableResult
+    public static func applyAllocatorLimits(
+        ceilingBytes: Int64,
+        cacheLimitOverrideBytes: Int64? = nil
+    ) -> (memoryLimit: Int64, cacheLimit: Int64) {
+        let planned = plannedAllocatorLimits(
+            ceilingBytes: ceilingBytes,
+            cacheLimitOverrideBytes: cacheLimitOverrideBytes
+        )
+        guard planned.memoryLimit > 0 else { return planned }
+
+        Memory.memoryLimit = Int(planned.memoryLimit)
+        Memory.cacheLimit = Int(planned.cacheLimit)
+        return planned
     }
 
     /// Reads the optional cache-limit override (bytes) used to A/B the policy above.

@@ -50,6 +50,14 @@ Env gates (all optional; a suite skips loudly when its gate is unset):
 | `MLXCAT_MEMORY_BUDGET_MODEL` / `_BYTES` / `_PROMPT_TOKENS` | 16k memory budget regression |
 | `MLXSERVE_WHISPERKIT_LIVE` | WhisperKit live transcription |
 
+**A test that touches MLX state must guard on Metal.** Hosted CI runners have no
+loaded metallib, and MLX's memory APIs (`Memory.cacheLimit`, `Memory.memoryLimit`,
+anything that allocates) *abort the process* there rather than failing a test — one
+unguarded `setUp` turns the whole run red with `Failed to load the default metallib`.
+Call `try MLXMetalRuntime.requireAvailable()` first, and prefer splitting pure policy
+out of the MLX call so the logic stays testable everywhere (see `MemoryGuard`'s
+`plannedAllocatorLimits` vs `applyAllocatorLimits`).
+
 CI (`.github/workflows/ci.yml`) runs the no-model suite on GitHub-hosted Apple
 Silicon and checks that `LEADERBOARD.md` is derived from `bench/results/`.
 The model-gated suites and the benchmark run on our own Macs via
