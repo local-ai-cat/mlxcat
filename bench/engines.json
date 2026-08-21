@@ -3,70 +3,138 @@
   "engines": {
     "mlxcat": {
       "description": "mlxcat native engine over its own HTTP server (mlxcat-http).",
-      "platforms": ["macos", "ios"],
+      "platforms": [
+        "macos",
+        "ios"
+      ],
       "launch": {
         "bin": "{repo}/.build/release/mlxcat-http",
         "bin_env": "MLXCAT_HTTP_BIN",
-        "args": ["--host", "127.0.0.1", "--port", "{port}", "--model-dir", "{model_root}", "--memory-ceiling-bytes", "{memory_ceiling_bytes}"],
+        "args": [
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "{port}",
+          "--model-dir",
+          "{model_root}",
+          "--memory-ceiling-bytes",
+          "{memory_ceiling_bytes}"
+        ],
         "port_base": 11700,
         "ready_timeout_s": 120
       },
       "notes": "Build with: swift build -c release --product mlxcat-http"
     },
     "mlx-swift-lm-tokeniterator": {
-      "description": "mlx-swift-lm's raw TokenIterator loop, in-process — the mlx-swift-examples lineage and EXACTLY the mechanism behind Local AI Cat's legacy LLMEvaluator. The single-sequence baseline mlxcat must not lose to.",
-      "platforms": ["macos", "ios"],
+      "description": "mlx-swift-lm's raw TokenIterator loop, in-process \u2014 the mlx-swift-examples lineage and EXACTLY the mechanism behind Local AI Cat's legacy LLMEvaluator. The single-sequence baseline mlxcat must not lose to.",
+      "platforms": [
+        "macos",
+        "ios"
+      ],
       "producer": {
         "bin": "{repo}/.build/release/mlxcat-baseline",
         "bin_env": "MLXCAT_BASELINE_BIN",
-        "args": ["--model-dir", "{model_dir}", "--model-id", "{model_id}", "--variant", "tokeniterator", "--runs", "{runs}", "--warmup", "{warmup}"],
+        "args": [
+          "--model-dir",
+          "{model_dir}",
+          "--model-id",
+          "{model_id}",
+          "--variant",
+          "tokeniterator",
+          "--runs",
+          "{runs}",
+          "--warmup",
+          "{warmup}"
+        ],
         "cell_flag": "--cell"
       },
       "notes": "Build with: swift build -c release --product mlxcat-baseline. transport=in-process; compare to mlxcat-inprocess, not to HTTP rows."
     },
     "mlxcat-inprocess": {
-      "description": "MLXCatEngine driven in-process (no HTTP) — the engine's own cost next to the TokenIterator baseline; the HTTP row minus this row is the transport cost.",
-      "platforms": ["macos", "ios"],
+      "description": "MLXCatEngine driven in-process (no HTTP) \u2014 the engine's own cost next to the TokenIterator baseline; the HTTP row minus this row is the transport cost.",
+      "platforms": [
+        "macos",
+        "ios"
+      ],
       "producer": {
         "bin": "{repo}/.build/release/mlxcat-baseline",
         "bin_env": "MLXCAT_BASELINE_BIN",
-        "args": ["--model-dir", "{model_dir}", "--model-id", "{model_id}", "--variant", "mlxcat", "--runs", "{runs}", "--warmup", "{warmup}"],
+        "args": [
+          "--model-dir",
+          "{model_dir}",
+          "--model-id",
+          "{model_id}",
+          "--variant",
+          "mlxcat",
+          "--runs",
+          "{runs}",
+          "--warmup",
+          "{warmup}"
+        ],
         "cell_flag": "--cell"
       }
     },
     "omlx": {
-      "description": "Stock oMLX (jundot/omlx) — the Python reference mlxcat was ported from.",
-      "platforms": ["macos"],
+      "description": "Stock oMLX (jundot/omlx) \u2014 the Python reference mlxcat was ported from.",
+      "platforms": [
+        "macos"
+      ],
       "launch": {
         "bin": "omlx",
         "bin_env": "OMLX_BIN",
-        "args": ["serve", "--model-dir", "{model_root}", "--port", "{port}", "--log-level", "warning"],
+        "args": [
+          "serve",
+          "--model-dir",
+          "{model_root}",
+          "--port",
+          "{port}",
+          "--log-level",
+          "warning"
+        ],
         "port_base": 11800,
         "ready_timeout_s": 180
       },
       "extra_request_fields": {},
-      "notes": "Install: pipx install omlx (or brew tap jundot/omlx). Same mlx-community weights; default config (its caches stay on — the per-request nonce prevents cross-run prefix reuse for every engine uniformly)."
+      "notes": "brew tap jundot/omlx && brew install omlx, or pipx install git+https://github.com/jundot/omlx.git \u2014 NOT on PyPI. Same mlx-community weights; default config."
     },
     "mlx-lm": {
       "description": "Apple's mlx-lm reference server (python -m mlx_lm server).",
-      "platforms": ["macos"],
+      "platforms": [
+        "macos"
+      ],
       "launch": {
-        "bin": "python3",
-        "bin_env": "MLX_LM_PYTHON",
-        "args": ["-m", "mlx_lm", "server", "--model", "{model_dir}", "--port", "{port}", "--host", "127.0.0.1"],
+        "bin": "mlx_lm.server",
+        "bin_env": "MLX_LM_SERVER_BIN",
+        "args": [
+          "--model",
+          "{model_dir}",
+          "--port",
+          "{port}",
+          "--host",
+          "127.0.0.1"
+        ],
         "port_base": 11900,
         "ready_timeout_s": 180
       },
       "extra_request_fields": {},
-      "notes": "pip install mlx-lm in the interpreter named by MLX_LM_PYTHON. Single-sequence; no continuous batching."
+      "notes": "pipx install mlx-lm (provides the mlx_lm.server binary; `python3 -m mlx_lm` will NOT work from a pipx venv). Single-sequence; no continuous batching."
     },
     "vllm-mlx": {
-      "description": "vllm-mlx (waybarrios) — continuous batching + paged/prefix KV on MLX.",
-      "platforms": ["macos"],
+      "description": "vllm-mlx (waybarrios) \u2014 continuous batching + paged/prefix KV on MLX.",
+      "platforms": [
+        "macos"
+      ],
       "launch": {
         "bin": "vllm-mlx",
         "bin_env": "VLLM_MLX_BIN",
-        "args": ["serve", "{model_dir}", "--port", "{port}", "--host", "127.0.0.1"],
+        "args": [
+          "serve",
+          "{model_dir}",
+          "--port",
+          "{port}",
+          "--host",
+          "127.0.0.1"
+        ],
         "port_base": 12000,
         "ready_timeout_s": 240
       },
@@ -74,46 +142,64 @@
       "notes": "pip install vllm-mlx. Verify the CLI shape against the installed version before trusting a row."
     },
     "rapid-mlx": {
-      "description": "Rapid-MLX (raullenchai) — 'Ollama replacement' MLX engine with prompt caching.",
-      "platforms": ["macos"],
+      "description": "Rapid-MLX (raullenchai) \u2014 'Ollama replacement' MLX engine with prompt caching.",
+      "platforms": [
+        "macos"
+      ],
       "url": "http://127.0.0.1:8000",
       "notes": "Attach-only until its CLI is pinned; start it yourself pointing at the same weights."
     },
     "swama": {
-      "description": "swama (Trans-N-ai) — native Swift MLX engine; the closest sibling to mlxcat.",
-      "platforms": ["macos", "ios"],
+      "description": "swama (Trans-N-ai) \u2014 native Swift MLX engine; the closest sibling to mlxcat.",
+      "platforms": [
+        "macos",
+        "ios"
+      ],
       "url": "http://127.0.0.1:28100",
       "notes": "Attach-only. Ships a macOS app + CLI; iOS app exists (rows from its app would need its own producer)."
     },
     "swiftlm": {
-      "description": "SwiftLM (SharpAI) — native MLX Swift server, SSD streaming for 100B+ MoE, iOS app support.",
-      "platforms": ["macos", "ios"],
+      "description": "SwiftLM (SharpAI) \u2014 native MLX Swift server, SSD streaming for 100B+ MoE, iOS app support.",
+      "platforms": [
+        "macos",
+        "ios"
+      ],
       "url": "http://127.0.0.1:8080",
       "notes": "Attach-only."
     },
     "lmstudio": {
       "description": "LM Studio (mlx-engine) local server.",
-      "platforms": ["macos"],
+      "platforms": [
+        "macos"
+      ],
       "url": "http://127.0.0.1:1234",
       "notes": "lms server start && lms load <model>. Must point LM Studio at the same mlx-community weights (or record the quant it used)."
     },
     "ollama": {
-      "description": "Ollama — MLX backend by default on Apple Silicon since v0.30 (2026-05); llama.cpp before that.",
-      "platforms": ["macos"],
+      "description": "Ollama \u2014 MLX backend by default on Apple Silicon since v0.30 (2026-05); llama.cpp before that.",
+      "platforms": [
+        "macos"
+      ],
       "url": "http://127.0.0.1:11435",
-      "weights": "ollama library (its own artifacts — NOT the same files; compare with care)",
-      "notes": "Port 11434 is Local AI Cat's Local API on our Macs — run Ollama with OLLAMA_HOST=127.0.0.1:11435. Different weight artifacts; rows are labelled as such."
+      "weights": "ollama library (its own artifacts \u2014 NOT the same files; compare with care)",
+      "notes": "Port 11434 is Local AI Cat's Local API on our Macs \u2014 run Ollama with OLLAMA_HOST=127.0.0.1:11435. Different weight artifacts; rows are labelled as such."
     },
     "llama-cpp": {
-      "description": "llama.cpp llama-server (Metal) — the GGUF baseline.",
-      "platforms": ["macos", "ios"],
+      "description": "llama.cpp llama-server (Metal) \u2014 the GGUF baseline.",
+      "platforms": [
+        "macos",
+        "ios"
+      ],
       "url": "http://127.0.0.1:8081",
-      "weights": "GGUF (different quantization family — compare quality class, not bits)",
+      "weights": "GGUF (different quantization family \u2014 compare quality class, not bits)",
       "notes": "Attach-only. Use a Q4_K_M GGUF of the same base model; record it in --tag."
     },
     "localaicat-legacy": {
       "description": "Local AI Cat's legacy in-app LLMEvaluator (mlx-swift-lm TokenIterator) through the app's Local API.",
-      "platforms": ["macos", "ios"],
+      "platforms": [
+        "macos",
+        "ios"
+      ],
       "url": "http://127.0.0.1:11434",
       "token_env": "LOCALAI_API_TOKEN",
       "notes": "Attach to a running Local AI Cat with the engine setting forced to legacy. The alpha on :11434 must NOT be restarted by the harness."
