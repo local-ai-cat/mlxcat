@@ -1,4 +1,5 @@
 import Foundation
+import MLX
 
 public enum MemoryGuardTier: String, CaseIterable, Sendable {
     case safe
@@ -64,6 +65,57 @@ public enum MemoryGuard {
         }
 
         return EffectiveCeiling(bytes: 0, source: "off")
+    }
+
+    /// Bounds the MLX allocator itself, instead of relying on the watchdog alone.
+    ///
+    /// MLX defaults `Memory.memoryLimit` to 1.5x the device's recommended working
+    /// set, and `Memory.cacheLimit` defaults to the memory limit — on a 48 GB Mac
+    /// that permits roughly 54 GB of reclaimable buffer cache. A configured
+    /// ceiling therefore bounded nothing: `MemoryWatchdog` polls every 2 s and can
+    /// only trim AFTER the fact, while a long prefill allocates attention scratch
+    /// whose shape grows every chunk, so the pool never reuses a buffer and grows
+    /// monotonically. Measured 2026-08-21 on an M4 Pro: gpt-oss-20b at a 16k prompt
+    /// peaked at 35.8 GiB against a 24 GiB ceiling. Upstream's own guidance is to
+    /// set a much lower cache limit for long inference runs.
+    ///
+    /// Called once, at engine/server construction, when a ceiling is known.
+    /// Returns what was applied so the caller can log it (0 = left at MLX default).
+    @discardableResult
+    public static func applyAllocatorLimits(
+        ceilingBytes: Int64,
+        cacheLimitOverrideBytes: Int64? = nil
+    ) -> (memoryLimit: Int64, cacheLimit: Int64) {
+        guard ceilingBytes > 0 else { return (0, 0) }
+
+        // The ceiling is the whole budget (weights + KV + scratch). The reclaimable
+        // cache is only the part that grows without bound, so it gets a slice of it,
+        // clamped: too small starves buffer reuse and costs throughput, too large
+        // reintroduces the cliff. An explicit override exists so the value can be
+        // A/B-measured by bench/run.py rather than argued about.
+        let cacheLimit: Int64
+        if let cacheLimitOverrideBytes, cacheLimitOverrideBytes >= 0 {
+            cacheLimit = cacheLimitOverrideBytes
+        } else {
+            cacheLimit = min(max(ceilingBytes / 4, 256 * 1_048_576), 4 * gibibyte)
+        }
+
+        Memory.memoryLimit = Int(ceilingBytes)
+        Memory.cacheLimit = Int(cacheLimit)
+        return (ceilingBytes, cacheLimit)
+    }
+
+    /// Reads the optional cache-limit override (bytes) used to A/B the policy above.
+    public static func cacheLimitOverrideFromEnvironment(
+        _ environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Int64? {
+        guard let raw = environment["MLXCAT_CACHE_LIMIT_BYTES"],
+            let parsed = Int64(raw.replacingOccurrences(of: "_", with: "")),
+            parsed >= 0
+        else {
+            return nil
+        }
+        return parsed
     }
 
     public static func reserveBytes(for tier: MemoryGuardTier) -> Int64 {

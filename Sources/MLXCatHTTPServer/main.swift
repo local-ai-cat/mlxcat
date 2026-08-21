@@ -29,6 +29,13 @@ struct MLXCatHTTPServerMain {
             overrideBytes: config.memoryCeilingBytes,
             tier: config.memoryGuardTier
         )
+        // Bound the ALLOCATOR, not just the watchdog. MLX's cache limit defaults to
+        // its memory limit (1.5x the recommended working set), so a ceiling alone
+        // left the buffer pool free to grow far past it between 2 s watchdog polls.
+        let appliedLimits = MemoryGuard.applyAllocatorLimits(
+            ceilingBytes: effectiveCeiling.bytes,
+            cacheLimitOverrideBytes: MemoryGuard.cacheLimitOverrideFromEnvironment()
+        )
 
         // M5 embeddings: a separate model class, NOT part of the LLM pool.
         let embeddingBackend: NativeEmbeddingsBackend?
@@ -105,7 +112,10 @@ struct MLXCatHTTPServerMain {
 
         try await server.start()
         print("MLXCatHTTP listening on http://\(config.host):\(config.port)")
-        print("Discovered \(allDiscovered.count) model(s) (\(discovered.count) chat, \(rerankDiscovered.count) rerank); memory ceiling: \(ModelDiscovery.formatSize(effectiveCeiling.bytes)) (\(effectiveCeiling.source))")
+        let allocatorNote = appliedLimits.memoryLimit > 0
+            ? "allocator: memoryLimit \(ModelDiscovery.formatSize(appliedLimits.memoryLimit)), cacheLimit \(ModelDiscovery.formatSize(appliedLimits.cacheLimit))"
+            : "allocator: MLX defaults (unbounded cache)"
+        print("Discovered \(allDiscovered.count) model(s) (\(discovered.count) chat, \(rerankDiscovered.count) rerank); memory ceiling: \(ModelDiscovery.formatSize(effectiveCeiling.bytes)) (\(effectiveCeiling.source)); \(allocatorNote)")
         fflush(stdout)
         server.waitForever()
     }
