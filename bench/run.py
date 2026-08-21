@@ -442,9 +442,17 @@ class Engine:
         # chunks 2 µs apart carrying 128 tokens is not 64M tok/s). Require about
         # one chunk per token before publishing a decode rate.
         completion_estimate = int(usage.get("completion_tokens") or 0)
+        raw_rate = (completion_estimate - 1) / decode_seconds if decode_seconds > 0 else float("inf")
+        # Plausibility bound, not proof: chunk cadence cannot strictly prove token
+        # timing (a server could burst-flush many chunks), so on top of the
+        # one-chunk-per-token requirement the window must be >= 50 ms and the
+        # implied rate below 2,500 tok/s — an order of magnitude above any decode
+        # rate ever measured on this hardware class. Anything outside is reported
+        # as unmeasurable, never as a record-breaking number.
         decode_measurable = (
             len(chunk_times) >= max(2, completion_estimate // 2)
-            and decode_seconds > 1e-3
+            and decode_seconds >= 0.05
+            and raw_rate <= 2500
         )
         ttft = first_output - started
         gaps = [b - a for a, b in zip(chunk_times, chunk_times[1:])]
@@ -634,10 +642,13 @@ def run_producer(
         # A kill-timer bounds the whole read, since `for line in stdout` has no
         # timeout of its own.
         stderr_path = Path(os.environ.get("TMPDIR", "/tmp")) / f"mlxcat-bench-producer-{engine_name}-{os.getpid()}.err"
-        deadline = threading.Timer(float(args.request_timeout) * 4, lambda: process.kill())
         timed_out = False
         with open(stderr_path, "w", encoding="utf-8") as stderr_handle:
             process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=stderr_handle, text=True)
+            # The timer holds a BOUND method of THIS process object (created after
+            # Popen), so an expiring timer can never late-bind to a later model's
+            # process; join() after cancel closes the fired-vs-cancelled race.
+            deadline = threading.Timer(float(args.request_timeout) * 4, process.kill)
             deadline.start()
             try:
                 assert process.stdout is not None
@@ -646,8 +657,9 @@ def run_producer(
                         lines.append(line.strip() + "\t" + json.dumps(host_snapshot()))
                 process.wait()
             finally:
-                timed_out = not deadline.is_alive() and process.returncode in (-9, None)
                 deadline.cancel()
+                deadline.join(timeout=2)
+                timed_out = process.returncode == -9
         if timed_out:
             print(f"[{engine_name}/{model_id}] producer timed out (killed)", file=sys.stderr)
         if process.returncode != 0:
