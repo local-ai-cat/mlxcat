@@ -44,11 +44,13 @@
           "--runs",
           "{runs}",
           "--warmup",
-          "{warmup}"
+          "{warmup}",
+          "--memory-ceiling-bytes",
+          "{memory_ceiling_bytes}"
         ],
         "cell_flag": "--cell"
       },
-      "notes": "Build with: swift build -c release --product mlxcat-baseline. transport=in-process; compare to mlxcat-inprocess, not to HTTP rows."
+      "notes": "Build with: swift build -c release --product mlxcat-baseline. transport=in-process; compare to mlxcat-inprocess, not to HTTP rows. Runs under the same allocator policy as the server (--memory-ceiling-bytes), without which a long-context cell drives the host into memory pressure and the row measures swapping rather than the engine."
     },
     "mlxcat-inprocess": {
       "description": "MLXCatEngine driven in-process (no HTTP) \u2014 the engine's own cost next to the TokenIterator baseline; the HTTP row minus this row is the transport cost.",
@@ -69,7 +71,9 @@
           "--runs",
           "{runs}",
           "--warmup",
-          "{warmup}"
+          "{warmup}",
+          "--memory-ceiling-bytes",
+          "{memory_ceiling_bytes}"
         ],
         "cell_flag": "--cell"
       }

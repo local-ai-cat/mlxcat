@@ -626,6 +626,9 @@ def run_producer(
             "max_tokens": str(args.max_tokens),
             "runs": str(args.runs),
             "warmup": str(args.warmup),
+            # Producers must measure under the same memory policy as launched
+            # engines or the two transports are not comparable.
+            "memory_ceiling_bytes": str(args.memory_ceiling_bytes or 0),
         }
         argv = [binary] + [a.format(**variables) for a in producer["args"]]
         flag = producer.get("cell_flag", "--cell")

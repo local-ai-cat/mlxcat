@@ -38,6 +38,7 @@ struct Options {
     var warmup: Int = 1
     var variants: [String] = ["tokeniterator", "mlxcat"]
     var modelID: String = ""
+    var memoryCeilingBytes: Int64 = 0
 
     static func parse(_ args: [String]) -> Options {
         var options = Options()
@@ -69,6 +70,7 @@ struct Options {
                     exit(64)
                 }
                 cells.append((prompt, max))
+            case "--memory-ceiling-bytes": options.memoryCeilingBytes = Int64(value()) ?? 0
             case "--max-tokens": options.maxTokens = Int(value()) ?? 128
             case "--runs": options.runs = Int(value()) ?? 3
             case "--warmup": options.warmup = Int(value()) ?? 1
@@ -76,7 +78,7 @@ struct Options {
                 let v = value()
                 options.variants = v == "both" ? ["tokeniterator", "mlxcat"] : [v]
             case "--help", "-h":
-                print("usage: mlxcat-baseline --model-dir DIR [--cell PROMPT:MAX]... [--prompt-tokens N]... [--max-tokens N] [--runs N] [--warmup N] [--variant tokeniterator|mlxcat|both]")
+                print("usage: mlxcat-baseline --model-dir DIR [--cell PROMPT:MAX]... [--prompt-tokens N]... [--max-tokens N] [--runs N] [--warmup N] [--variant tokeniterator|mlxcat|both] [--memory-ceiling-bytes N]")
                 exit(0)
             default:
                 fputs("unknown argument \(args[index])\n", stderr)
@@ -187,6 +189,19 @@ let modelURL = URL(fileURLWithPath: (options.modelDir as NSString).expandingTild
 
 @MainActor
 func run() async throws {
+    // Measure under the SAME memory policy as mlxcat-http, or the in-process rows
+    // are not comparable to the server rows. Without this the tool inherits MLX's
+    // defaults (cacheLimit == memoryLimit == 1.5x recommended working set), and a
+    // 16k cell on a 20B model drives the host into memory pressure: measured
+    // 2026-08-21, gpt-oss-20b at 16k decoded 15.4 tok/s here versus 47.0 through
+    // the server on the same host and the same engine.
+    let applied = MemoryGuard.applyAllocatorLimits(
+        ceilingBytes: options.memoryCeilingBytes,
+        cacheLimitOverrideBytes: MemoryGuard.cacheLimitOverrideFromEnvironment()
+    )
+    if applied.memoryLimit > 0 {
+        fputs("allocator: memoryLimit \(applied.memoryLimit) cacheLimit \(applied.cacheLimit)\n", stderr)
+    }
     let container = try await LLMModelFactory.shared.loadContainer(from: modelURL, using: #huggingFaceTokenizerLoader())
     let loadPeak = Footprint.read()?.lifetimeMax ?? 0
     fputs("loaded \(options.modelID) (lifetime max footprint after load \(Double(loadPeak) / 1_073_741_824) GiB)\n", stderr)
@@ -263,6 +278,10 @@ func run() async throws {
                 for _ in 0 ..< options.runs { samples.append(try await oneRun()) }
                 let peak = sampler.stop()
                 let lifetimeMax = Footprint.read()?.lifetimeMax ?? 0
+
+                // One process measures every cell, so a long-context cell would
+                // otherwise leave its scratch resident and depress the next one.
+                Memory.clearCache()
 
                 let engineName = variant == "tokeniterator" ? "mlx-swift-lm-tokeniterator" : "mlxcat-inprocess"
                 let notes = variant == "tokeniterator"
