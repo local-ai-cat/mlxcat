@@ -37,6 +37,10 @@ let package = Package(
             targets: ["MLXCatBench"]
         ),
         .executable(
+            name: "mlxcat-baseline",
+            targets: ["MLXCatBaseline"]
+        ),
+        .executable(
             name: "mlxcat-http",
             targets: ["MLXCatHTTPServer"]
         )
@@ -76,6 +80,17 @@ let package = Package(
         ),
         .executableTarget(
             name: "MLXCatBench",
+            dependencies: [
+                "MLXCat",
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXHuggingFace", package: "mlx-swift-lm"),
+                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
+                .product(name: "MLXLLM", package: "mlx-swift-lm"),
+                .product(name: "Tokenizers", package: "swift-transformers"),
+            ]
+        ),
+        .executableTarget(
+            name: "MLXCatBaseline",
             dependencies: [
                 "MLXCat",
                 .product(name: "MLX", package: "mlx-swift"),
