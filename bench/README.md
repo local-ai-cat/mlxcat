@@ -54,7 +54,7 @@ of two probe requests so "16k" really is ~16k tokens on that tokenizer.
 | `decode_tps` | `(completion_tokens − 1) ÷ (end − first token)` |
 | `e2e_tps` | `completion_tokens ÷ wall` (what a client feels) |
 | `itl_p50_ms` / `itl_p95_ms` | inter-chunk gaps (chunks may carry >1 token — a jitter signal, not a token clock) |
-| `aggregate_tps` | Σ completion tokens ÷ wall for N simultaneous streams |
+| `aggregate_tps` | Σ completion tokens ÷ wall for N simultaneous streams. **Read this with the tier in mind**: prefill is per-row serial in mlxcat by design, so at a short tier a ~700 ms prefill dominates the wall of a 128-token generation and the number mostly reports *admission latency*, not batched decode. Measured 2026-08-21 (gpt-oss-20b, M4 Pro): TTFT 727/1614/3122/5883 ms at c1/2/4/8 — linear in N — while per-request decode fell only 4.3× across an 8× concurrency rise. The `longgen` tier is where batching can show its worth. |
 | `peak_phys_footprint_bytes` | max `ri_phys_footprint` of the engine process sampled every 50 ms during the measured runs |
 | `lifetime_max_phys_footprint_bytes` | `ri_lifetime_max_phys_footprint` after the cell (includes load; monotonic per process) |
 | `cold_first_request_ms` | wall of the discarded first request (shape compilation / lazy load) |

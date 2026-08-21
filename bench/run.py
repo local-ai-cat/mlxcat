@@ -699,7 +699,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--model-set", default="default", help="named model set in matrix.json (default, smoke, flagship, all)")
     parser.add_argument("--contexts", default="", help="comma-separated context tiers (default: matrix.json)")
     parser.add_argument("--concurrency", default="", help="comma-separated widths for the concurrency leg (default: matrix.json)")
-    parser.add_argument("--concurrency-tier", default="", help="context tier used for the concurrency leg (default: matrix.json)")
+    parser.add_argument("--concurrency-tier", default="", help="comma-separated context tier(s) for the concurrency leg (default: matrix.json concurrency.tiers)")
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--max-tokens", type=int, default=128)
@@ -725,7 +725,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     tiers = {t["name"]: t for t in matrix["context_tiers"]}
     chosen_tiers = [t.strip() for t in args.contexts.split(",") if t.strip()] or matrix["default_context_tiers"]
     widths = [int(w) for w in args.concurrency.split(",") if w.strip()] or matrix["concurrency"]["widths"]
-    conc_tier = args.concurrency_tier or matrix["concurrency"]["tier"]
+    # Concurrency is measured at every listed tier: at a short tier the per-request
+    # serial prefill dominates and aggregate throughput reads as admission latency
+    # rather than batched-decode throughput, so a generation-heavy tier is required
+    # to see what batching is actually worth.
+    if args.concurrency_tier:
+        conc_tiers = [t.strip() for t in args.concurrency_tier.split(",") if t.strip()]
+    else:
+        conc_tiers = matrix["concurrency"].get("tiers") or [matrix["concurrency"]["tier"]]
 
     overrides = {}
     for item in args.engine_url:
@@ -754,7 +761,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     log_dir = Path(os.environ.get("MLXCAT_BENCH_LOG_DIR", str(results_dir / ".logs")))
 
     print(f"run {run_id} on {device['chip']} ({device['model']}, {device['os']}) — valid_for_leaderboard={valid}")
-    print(f"engines={engine_names} models={models} tiers={chosen_tiers} concurrency={widths}@{conc_tier}")
+    print(f"engines={engine_names} models={models} tiers={chosen_tiers} concurrency={widths}@{conc_tiers}")
     if args.dry_run:
         return 0
 
@@ -829,7 +836,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                     print(f"[{engine_name}/{model_id}] calibration request failed: {error}{hint} — model skipped", file=sys.stderr)
                     continue
 
-                cells = [(tier_name, 1) for tier_name in chosen_tiers] + [(conc_tier, w) for w in widths if w > 1]
+                cells = [(tier_name, 1) for tier_name in chosen_tiers] + [
+        (t, w) for t in conc_tiers for w in widths if w > 1
+    ]
                 for tier_name, width in cells:
                     tier = tiers[tier_name]
                     prompt = build_prompt(int(tier["prompt_tokens"]), chars_per_token)
