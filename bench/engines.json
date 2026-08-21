@@ -95,7 +95,7 @@
         "ready_timeout_s": 180
       },
       "extra_request_fields": {},
-      "notes": "brew tap jundot/omlx && brew install omlx, or pipx install git+https://github.com/jundot/omlx.git \u2014 NOT on PyPI. Same mlx-community weights; default config."
+      "notes": "NOT on PyPI. Routes: `brew tap jundot/omlx https://github.com/jundot/omlx && brew install omlx` (the repo IS the tap \u2014 the URL is required, `brew tap jundot/omlx` alone looks for a nonexistent homebrew-omlx repo), the .dmg app, or from source: `pipx install git+https://github.com/jundot/omlx.git`. Same mlx-community weights; default config."
     },
     "mlx-lm": {
       "description": "Apple's mlx-lm reference server (python -m mlx_lm server).",
@@ -139,7 +139,7 @@
         "ready_timeout_s": 240
       },
       "extra_request_fields": {},
-      "notes": "brew tap ddalcu/mlx-serve https://github.com/ddalcu/mlx-serve && brew install mlx-serve (CLI only, no GUI cask needed). Pointed at the same mlx-community weights via --model-dir, so rows are apples-to-apples."
+      "notes": "Two install routes: `brew tap ddalcu/mlx-serve https://github.com/ddalcu/mlx-serve && brew trust ddalcu/mlx-serve && brew install mlx-serve` (brew REFUSES the formula without the trust grant, which is a standing permission to execute that tap's Ruby \u2014 prefer the second route on shared machines), or build from source: `git clone` + `brew bundle install --file=Brewfile` (cmake, webp) + `zig build -Doptimize=ReleaseFast` \u2192 zig-out/bin/mlx-serve, then point MLX_SERVE_BIN at it. Same mlx-community weights via --model-dir."
     },
     "vllm-mlx": {
       "description": "vllm-mlx (waybarrios) \u2014 continuous batching + paged/prefix KV on MLX.",
@@ -161,7 +161,7 @@
         "ready_timeout_s": 240
       },
       "extra_request_fields": {},
-      "notes": "pip install vllm-mlx. Verify the CLI shape against the installed version before trusting a row."
+      "notes": "pipx install vllm-mlx \u2014 installs to ~/.local/bin, which is NOT on a non-interactive zsh PATH; set VLLM_MLX_BIN or add it. Verify the CLI shape against the installed version before trusting a row."
     },
     "rapid-mlx": {
       "description": "Rapid-MLX (raullenchai) \u2014 'Ollama replacement' MLX engine with prompt caching.",
