@@ -108,6 +108,7 @@ def newest_per_key(records: Iterable[Dict[str, Any]]) -> Dict[Tuple, Dict[str, A
             record["model"]["id"],
             record["workload"]["context_tier"],
             int(record["workload"].get("max_tokens") or 0),
+            record["workload"].get("cache_mode", "cold"),
             int(record["workload"]["concurrency"]),
             record["engine"].get("transport") or "http",
             record["engine"]["name"],
@@ -123,7 +124,7 @@ def bold_best(rows: List[Dict[str, Any]], field: str, higher_is_better: bool) ->
     marks: Dict[Tuple, bool] = {}
     groups: Dict[Tuple, Dict[str, float]] = {}
     for r in rows:
-        scope = (r["engine"].get("transport") or "http", int(r["workload"].get("max_tokens") or 0))
+        scope = (r["engine"].get("transport") or "http", int(r["workload"].get("max_tokens") or 0), r["workload"].get("cache_mode", "cold"))
         value = med(r["metrics"].get(field))
         if value is not None:
             groups.setdefault(scope, {})[r["engine"]["name"]] = value
@@ -173,7 +174,7 @@ def render(records: List[Dict[str, Any]], matrix: Dict[str, Any]) -> str:
     tree: Dict[str, Dict[str, Dict[str, Dict[str, List[Dict[str, Any]]]]]] = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: defaultdict(list))))
     conc: Dict[str, Dict[str, Dict[str, List[Dict[str, Any]]]]] = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
     for key, record in chosen.items():
-        platform, device, model, tier, _max_tokens, width, _transport, _engine = key
+        platform, device, model, tier, _max_tokens, _cache_mode, width, _transport, _engine = key
         if width == 1:
             tree[platform][device][model][tier].append(record)
         else:
@@ -201,13 +202,18 @@ def render(records: List[Dict[str, Any]], matrix: Dict[str, Any]) -> str:
                 out.append("")
                 tiers = tree[platform][device].get(model, {})
                 if tiers:
-                    out.append("| context | gen tok | engine | transport | version | prompt tok | TTFT ms | prefill tok/s | decode tok/s | e2e tok/s | peak GiB | measured |")
-                    out.append("|---|---:|---|---|---|---:|---:|---:|---:|---:|---:|---|")
+                    out.append("| context | gen tok | cache | engine | transport | version | prompt tok | TTFT ms | prefill tok/s | decode tok/s | e2e tok/s | peak GiB | measured |")
+                    out.append("|---|---:|---|---|---|---|---:|---:|---:|---:|---:|---:|---|")
                     tier_order = [t["name"] for t in matrix.get("context_tiers", [])]
                     for tier in sorted(tiers.keys(), key=lambda t: tier_order.index(t) if t in tier_order else 99):
                         rows = sorted(
                             tiers[tier],
-                            key=lambda r: (r["engine"].get("transport") or "http", -(med(r["metrics"].get("decode_tps")) or 0), r["engine"]["name"]),
+                            key=lambda r: (
+                                r["workload"].get("cache_mode", "cold"),
+                                r["engine"].get("transport") or "http",
+                                -(med(r["metrics"].get("decode_tps")) or 0),
+                                r["engine"]["name"],
+                            ),
                         )
                         best_decode = bold_best(rows, "decode_tps", True)
                         best_e2e = bold_best(rows, "e2e_tps", True)
@@ -217,7 +223,7 @@ def render(records: List[Dict[str, Any]], matrix: Dict[str, Any]) -> str:
                             m = record["metrics"]
                             name = record["engine"]["name"]
                             transport = record["engine"].get("transport") or "http"
-                            mark_scope = (transport, int(record["workload"].get("max_tokens") or 0))
+                            mark_scope = (transport, int(record["workload"].get("max_tokens") or 0), record["workload"].get("cache_mode", "cold"))
                             decode = fmt(med(m.get("decode_tps")))
                             e2e = fmt(med(m.get("e2e_tps")))
                             if best_e2e.get(mark_scope + (name,)):
@@ -237,7 +243,7 @@ def render(records: List[Dict[str, Any]], matrix: Dict[str, Any]) -> str:
                             if record["engine"].get("weights") and "same files" not in record["engine"]["weights"]:
                                 weights_note = " ⚠︎"
                             out.append(
-                                f"| {tier} | {record['workload'].get('max_tokens', '—')} | {name}{weights_note} | {transport} | {record['engine'].get('version') or '—'} | "
+                                f"| {tier} | {record['workload'].get('max_tokens', '—')} | {record['workload'].get('cache_mode', 'cold')} | {name}{weights_note} | {transport} | {record['engine'].get('version') or '—'} | "
                                 f"{m.get('prompt_tokens', '—')} | {ttft} | {prefill} | {decode} | {e2e} | "
                                 f"{gib(m.get('peak_phys_footprint_bytes'))} | {record['timestamp'][:10]} |"
                             )
@@ -270,6 +276,11 @@ def render(records: List[Dict[str, Any]], matrix: Dict[str, Any]) -> str:
                         out.append("")
         out.append("")
 
+    out.append("`cache` column: **cold** = every request carries a unique prefix so no prefix cache can serve it (the fair "
+               "cross-engine default); **warm** = the same prompt repeated, which is the only cell where a tiered prefix "
+               "KV cache — the feature mlxcat and oMLX both exist for — can actually hit. Compare warm against cold for the "
+               "SAME engine to read what its cache is worth; compare engines within one cache mode.")
+    out.append("")
     out.append("⚠︎ = different weight artifacts than the `mlx-community` safetensors the other rows use (e.g. Ollama library, GGUF) — compare quality class, not bits. "
                "† = fewer measurable runs than requested (some runs had no token-granular decode window).")
     out.append("")

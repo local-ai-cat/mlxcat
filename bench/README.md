@@ -29,6 +29,27 @@ Defaults: `--runs 3 --warmup 1` after one discarded cold request; `temperature 0
 `max_tokens` per tier (128 short/4k, 64 at 16k/32k); models under
 `~/Library/Caches/models/mlx-community` (`--model-root` / `MLXCAT_BENCH_MODEL_ROOT`).
 
+### Cold vs warm: measuring the prefix cache
+
+Every request in **cold** mode carries a unique nonce prefix, so no prefix cache can
+serve it. That is the fair cross-engine default — without it, mlxcat's tiered prefix KV
+cache would answer a repeated benchmark prompt from cache while an engine configured
+without one did real prefill, and the leaderboard would present the two as comparable.
+
+But cold measures both engines at their worst: the cache costs (block extraction,
+memory, publishing) are paid and none of the benefit is collected. **warm** mode repeats
+the same prompt so the cache can hit, priming with the discarded cold request first, and
+answers the question the feature exists for — *does turn 2 of a conversation get
+cheaper?*
+
+```bash
+python3 bench/run.py --cache-modes cold,warm --models Qwen3.5-4B-MLX-4bit
+```
+
+Read warm against cold **for the same engine** to value its cache; read engines against
+each other **within one cache mode**. `cache_mode` is part of the leaderboard key, so
+the two never collide.
+
 ### The quiet-machine guard
 
 Throughput on an interactive Mac is load-sensitive — consecutive samples of one

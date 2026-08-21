@@ -373,7 +373,7 @@ class Engine:
 
     # -- measurement ------------------------------------------------------ #
 
-    def stream_once(self, model: str, prompt: str, max_tokens: int, timeout: float, nonce: bool = True) -> Dict[str, Any]:
+    def stream_once(self, model: str, prompt: str, max_tokens: int, timeout: float, nonce: bool = True) -> Dict[str, Any]:  # noqa: D401
         # Unique per-request prefix so no engine can serve the measurement from a
         # prompt/prefix cache (mlxcat's tiered prefix cache would otherwise turn
         # repeated identical prompts into cache-hit TTFTs while other engines do
@@ -541,24 +541,32 @@ def run_cell(
     prompt: str,
     args: argparse.Namespace,
     sampler_factory,
+    cache_mode: str = "cold",
 ) -> Dict[str, Any]:
+    """cache_mode 'cold' gives every request a unique nonce prefix so no prefix
+    cache can serve it — the fair cross-engine default. 'warm' repeats the SAME
+    prompt so an engine's prefix cache CAN hit, which is the only way to measure
+    the feature mlxcat and oMLX both exist for: does turn 2 of a conversation get
+    cheaper? The warm cell deliberately primes with the discarded cold request
+    first, so the measured runs are the hits."""
+    nonce = cache_mode == "cold"
     max_tokens = int(tier.get("max_tokens", args.max_tokens))
     timeout = float(args.request_timeout)
     # warm: first call is discarded (cold shapes/compilation), then `warmup` more.
-    cold = engine.stream_once(offered, prompt, max_tokens, timeout)
+    cold = engine.stream_once(offered, prompt, max_tokens, timeout, nonce=nonce)
     for _ in range(args.warmup):
-        engine.stream_once(offered, prompt, max_tokens, timeout)
+        engine.stream_once(offered, prompt, max_tokens, timeout, nonce=nonce)
 
     runs: List[Dict[str, Any]] = []
     aggregate_samples: List[float] = []
     with sampler_factory() as sampler:
         for _ in range(args.runs):
             if concurrency == 1:
-                runs.append(engine.stream_once(offered, prompt, max_tokens, timeout))
+                runs.append(engine.stream_once(offered, prompt, max_tokens, timeout, nonce=nonce))
             else:
                 started = time.perf_counter()
                 with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
-                    rows = list(pool.map(lambda _: engine.stream_once(offered, prompt, max_tokens, timeout), range(concurrency)))
+                    rows = list(pool.map(lambda _: engine.stream_once(offered, prompt, max_tokens, timeout, nonce=nonce), range(concurrency)))
                 elapsed = time.perf_counter() - started
                 total = sum(int(r["completion_tokens"]) for r in rows)
                 aggregate_samples.append(total / max(elapsed, 1e-9))
@@ -703,6 +711,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--contexts", default="", help="comma-separated context tiers (default: matrix.json)")
     parser.add_argument("--concurrency", default="", help="comma-separated widths for the concurrency leg (default: matrix.json)")
     parser.add_argument("--concurrency-tier", default="", help="comma-separated context tier(s) for the concurrency leg (default: matrix.json concurrency.tiers)")
+    parser.add_argument("--cache-modes", default="cold", help="cold (unique prompt per request; no prefix cache can hit) and/or warm (repeated prompt; measures prefix-cache reuse). Comma-separated.")
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--max-tokens", type=int, default=128)
@@ -845,7 +854,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 for tier_name, width in cells:
                     tier = tiers[tier_name]
                     prompt = build_prompt(int(tier["prompt_tokens"]), chars_per_token)
-                    label = f"[{engine_name}/{model_id}/{tier_name}/c{width}]"
+                    label = f"[{engine_name}/{model_id}/{tier_name}/c{width}/{cache_mode}]"
                     # Re-sample the host per cell — a run that starts quiet can get
                     # loud, and later rows must not inherit the opening verdict.
                     cell_snapshot = host_snapshot()
@@ -855,6 +864,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                         metrics = run_cell(
                             engine, offered, model, tier, width, prompt, args,
                             lambda: FootprintSampler(footprint, engine.pid),
+                            cache_mode=cache_mode,
                         )
                     except Exception as error:  # noqa: BLE001
                         print(f"{label} FAILED: {error}", file=sys.stderr)
@@ -872,6 +882,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                             "prompt_tokens_target": int(tier["prompt_tokens"]),
                             "max_tokens": int(tier.get("max_tokens", args.max_tokens)),
                             "concurrency": width,
+                            "cache_mode": cache_mode,
                             "temperature": 0,
                             "runs": args.runs,
                             "warmup": args.warmup,
