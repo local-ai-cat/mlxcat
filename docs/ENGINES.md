@@ -25,6 +25,7 @@ numbers come from in-app harnesses (see `bench/README.md` § Platforms). The
 | [oMLX](https://github.com/jundot/omlx) | the Python reference mlxcat was ported from; continuous batching, paged SSD KV cache, menu-bar server | Python (mlx-lm) | mlx-community | macOS | launcher (`omlx serve`) |
 | [mlx-lm](https://github.com/ml-explore/mlx-lm) `server` | Apple's reference server; single-sequence | Python | mlx-community | macOS | launcher (`python -m mlx_lm server`) |
 | [vllm-mlx](https://github.com/waybarrios/vllm-mlx) | continuous batching, paged + prefix KV, SSD tier, OpenAI + Anthropic APIs, MCP | Python | mlx-community | macOS | launcher (verify CLI) |
+| [mlx-serve](https://github.com/ddalcu/mlx-serve) | ddalcu's Zig core + mlx-c — the other non-Python native MLX server, and our closest architectural rival; also the source of the `docs/gotchas/` mining in pkg 100 | Zig | macOS, iOS (static lib) | launcher (`mlx-serve --serve`) |
 | [Ollama](https://ollama.com/blog/mlx) | MLX backend on Apple Silicon by default since v0.30 (2026-05-13); uses M5 neural accelerators | Go + MLX | **ollama library (⚠︎ different artifacts)** | macOS | attach (`OLLAMA_HOST=127.0.0.1:11435`) |
 | [LM Studio](https://github.com/lmstudio-ai/mlx-engine) | mlx-engine; the largest consumer MLX surface | Python/Electron | mlx-community (if pointed at them) | macOS | attach (`lms server start`) |
 | [llama.cpp](https://github.com/ggml-org/llama.cpp) `llama-server` | the GGUF/Metal baseline everybody quotes | C++ | **GGUF (⚠︎)** | macOS, iOS | attach |
@@ -39,7 +40,6 @@ numbers come from in-app harnesses (see `bench/README.md` § Platforms). The
 | [ml-explore/mlx](https://github.com/ml-explore/mlx) | core; kernel changes land here first (e.g. M5 neural-accelerator paths) | C++ | both | tracked |
 | [argmaxinc/WhisperKit](https://github.com/argmaxinc/WhisperKit) | **dependency** — `MLXCatSpeechWhisperKit` | Swift | both | pinned |
 | [huggingface/swift-transformers](https://github.com/huggingface/swift-transformers) | **dependency** via the `atlas-open-sources` fork — tokenizers/Jinja | Swift | both | pinned (fork) |
-| [ddalcu/mlx-serve](https://github.com/ddalcu/mlx-serve) | Zig core + mlx-c; ~6.8k lines of field-tested MLX serving gotchas (`docs/gotchas/`) — mined for our hybrid-SSM cache accounting, spec-decode, allocator traps | Zig | macOS, iOS (static lib) | reference |
 | [lmstudio-ai/mlx-engine](https://github.com/lmstudio-ai/mlx-engine) | disk-chunked KV (PR #326), continuous batching; 2026-08-19 "fix high memory during gemma4 image prefill" is directly relevant to our 16k memory work | Python | macOS | reference |
 | [Blaizzy/mlx-vlm](https://github.com/Blaizzy/mlx-vlm) | checkpoint authority for our VLM weights; DFlash/EAGLE-3/MTP spec-decode reference | Python | macOS | reference |
 | [Trans-N-ai/swama](https://github.com/Trans-N-ai/swama) | native **Swift** MLX engine + macOS app + iOS app — the closest sibling to mlxcat; candidate for both platforms' rows | Swift | macOS, iOS | attach when installed |

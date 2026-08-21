@@ -119,6 +119,28 @@
       "extra_request_fields": {},
       "notes": "pipx install mlx-lm (provides the mlx_lm.server binary; `python3 -m mlx_lm` will NOT work from a pipx venv). Single-sequence; no continuous batching."
     },
+    "mlx-serve": {
+      "description": "ddalcu/mlx-serve \u2014 Zig core + mlx-c; the other NON-Python native MLX server, and mlxcat's closest architectural rival.",
+      "platforms": [
+        "macos",
+        "ios"
+      ],
+      "launch": {
+        "bin": "mlx-serve",
+        "bin_env": "MLX_SERVE_BIN",
+        "args": [
+          "--serve",
+          "--model-dir",
+          "{model_root}",
+          "--port",
+          "{port}"
+        ],
+        "port_base": 12100,
+        "ready_timeout_s": 240
+      },
+      "extra_request_fields": {},
+      "notes": "brew tap ddalcu/mlx-serve https://github.com/ddalcu/mlx-serve && brew install mlx-serve (CLI only, no GUI cask needed). Pointed at the same mlx-community weights via --model-dir, so rows are apples-to-apples."
+    },
     "vllm-mlx": {
       "description": "vllm-mlx (waybarrios) \u2014 continuous batching + paged/prefix KV on MLX.",
       "platforms": [
