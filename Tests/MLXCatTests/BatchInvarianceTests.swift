@@ -189,7 +189,13 @@ final class BatchInvarianceTests: XCTestCase {
         let parameters = GenerateParameters(maxTokens: 4, temperature: 0)
         var results: [BatchGateResult] = []
 
-        for batchSize in [2, 4, 8] {
+        // Width 1 is the CONTROL, not a batch size anyone ships. One row through
+        // StaticBatchGenerator has nothing to be contaminated by, so whatever
+        // error it shows is the batched code path's own numerics against the
+        // serial reference — not batching. Without it a family whose two paths
+        // simply differ is indistinguishable from a family whose rows corrupt
+        // each other, and the gate reads the first as the second.
+        for batchSize in [1, 2, 4, 8] {
             var inputs: [LMInput] = []
             for prompt in prompts.prefix(batchSize) {
                 inputs.append(try await context.processor.prepare(input: UserInput(prompt: prompt)))
