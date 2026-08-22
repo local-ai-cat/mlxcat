@@ -178,13 +178,22 @@ final class BatchDecodeThroughputTests: XCTestCase {
             (\(String(format: "%.2f", concurrent / single))x)
             """)
 
+        // A bare `concurrent > single` passes at 1.05x, and 1.05x is a flatline
+        // wearing a pass: it is what the leaderboard recorded for every
+        // serialized family (62.6 / 62.8 / 62.9 tok/s at c2/c4/c8) while this
+        // gate stayed green. The floor is well under the 2.11x measured for this
+        // layer, so noise and a loaded host cannot trip it, and far enough above
+        // 1.0 that "the batch is a queue" cannot pass.
+        let scalingFloor = 1.4
         XCTAssertGreaterThan(
-            concurrent,
-            single,
+            concurrent / single,
+            scalingFloor,
             """
             Two requests through MLXCatEngine produced \
             \(String(format: "%.1f", concurrent)) tok/s against \
-            \(String(format: "%.1f", single)) tok/s for one. The decode loop scales at \
+            \(String(format: "%.1f", single)) tok/s for one — \
+            \(String(format: "%.2f", concurrent / single))x, under the \
+            \(String(format: "%.2f", scalingFloor))x floor. The decode loop scales at \
             this batch size, so a collapse here localizes the defect to scheduler \
             admission or the pump loop.
             """
