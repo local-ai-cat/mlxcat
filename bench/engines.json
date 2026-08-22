@@ -25,8 +25,30 @@
       },
       "notes": "Build with: swift build -c release --product mlxcat-http"
     },
+    "mlxcat-defaults": {
+      "description": "mlxcat with NO memory ceiling — the fair-fight arm. Every competitor on this board runs with MLX's own defaults (memoryLimit 1.5x the recommended working set, cacheLimit equal to it: roughly 54 GiB on a 48 GiB Mac). The `mlxcat` entry passes --memory-ceiling-bytes, which since 7f6cbb6 also clamps the MLX buffer cache to 4 GiB, so the two are not comparable measurements of the same engine. Run both: `mlxcat` is what the product ships, `mlxcat-defaults` is what the comparison is entitled to.",
+      "platforms": [
+        "macos",
+        "ios"
+      ],
+      "launch": {
+        "bin": "{repo}/.build/release/mlxcat-http",
+        "bin_env": "MLXCAT_HTTP_BIN",
+        "args": [
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "{port}",
+          "--model-dir",
+          "{model_root}"
+        ],
+        "port_base": 11760,
+        "ready_timeout_s": 120
+      },
+      "notes": "Same binary as `mlxcat`; the only difference is the absent ceiling, which leaves MemoryGuard.applyAllocatorLimits a no-op and MLX at its defaults. Read the pair as an A/B of what the memory guard costs, never as two engines."
+    },
     "mlx-swift-lm-tokeniterator": {
-      "description": "mlx-swift-lm's raw TokenIterator loop, in-process \u2014 the mlx-swift-examples lineage and EXACTLY the mechanism behind Local AI Cat's legacy LLMEvaluator. The single-sequence baseline mlxcat must not lose to.",
+      "description": "mlx-swift-lm's raw TokenIterator loop, in-process — the mlx-swift-examples lineage and EXACTLY the mechanism behind Local AI Cat's legacy LLMEvaluator. The single-sequence baseline mlxcat must not lose to.",
       "platforms": [
         "macos",
         "ios"
@@ -53,7 +75,7 @@
       "notes": "Build with: swift build -c release --product mlxcat-baseline. transport=in-process; compare to mlxcat-inprocess, not to HTTP rows. Runs under the same allocator policy as the server (--memory-ceiling-bytes), without which a long-context cell drives the host into memory pressure and the row measures swapping rather than the engine."
     },
     "mlxcat-inprocess": {
-      "description": "MLXCatEngine driven in-process (no HTTP) \u2014 the engine's own cost next to the TokenIterator baseline; the HTTP row minus this row is the transport cost.",
+      "description": "MLXCatEngine driven in-process (no HTTP) — the engine's own cost next to the TokenIterator baseline; the HTTP row minus this row is the transport cost.",
       "platforms": [
         "macos",
         "ios"
@@ -79,7 +101,7 @@
       }
     },
     "omlx": {
-      "description": "Stock oMLX (jundot/omlx) \u2014 the Python reference mlxcat was ported from.",
+      "description": "Stock oMLX (jundot/omlx) — the Python reference mlxcat was ported from.",
       "platforms": [
         "macos"
       ],
@@ -99,7 +121,7 @@
         "ready_timeout_s": 180
       },
       "extra_request_fields": {},
-      "notes": "NOT on PyPI. Routes: `brew tap jundot/omlx https://github.com/jundot/omlx && brew install omlx` (the repo IS the tap \u2014 the URL is required, `brew tap jundot/omlx` alone looks for a nonexistent homebrew-omlx repo), the .dmg app, or from source: `pipx install git+https://github.com/jundot/omlx.git`. Same mlx-community weights; default config."
+      "notes": "NOT on PyPI. Routes: `brew tap jundot/omlx https://github.com/jundot/omlx && brew install omlx` (the repo IS the tap — the URL is required, `brew tap jundot/omlx` alone looks for a nonexistent homebrew-omlx repo), the .dmg app, or from source: `pipx install git+https://github.com/jundot/omlx.git`. Same mlx-community weights; default config."
     },
     "mlx-lm": {
       "description": "Apple's mlx-lm reference server (python -m mlx_lm server).",
@@ -124,7 +146,7 @@
       "notes": "pipx install mlx-lm (provides the mlx_lm.server binary; `python3 -m mlx_lm` will NOT work from a pipx venv). Single-sequence; no continuous batching."
     },
     "mlx-serve": {
-      "description": "ddalcu/mlx-serve \u2014 Zig core + mlx-c; the other NON-Python native MLX server, and mlxcat's closest architectural rival.",
+      "description": "ddalcu/mlx-serve — Zig core + mlx-c; the other NON-Python native MLX server, and mlxcat's closest architectural rival.",
       "platforms": [
         "macos",
         "ios"
@@ -145,10 +167,10 @@
         "ready_timeout_s": 240
       },
       "extra_request_fields": {},
-      "notes": "Two install routes: `brew tap ddalcu/mlx-serve https://github.com/ddalcu/mlx-serve && brew trust ddalcu/mlx-serve && brew install mlx-serve` (brew REFUSES the formula without the trust grant, which is a standing permission to execute that tap's Ruby \u2014 prefer the second route on shared machines), or build from source: `git clone` + `brew bundle install --file=Brewfile` (cmake, webp) + `zig build -Doptimize=ReleaseFast` \u2192 zig-out/bin/mlx-serve, then point MLX_SERVE_BIN at it. Same mlx-community weights via --model-dir. NOTE: mlx-serve defaults to --host 0.0.0.0 (open to the local network); the launch template pins 127.0.0.1 so a benchmark never exposes a model server to the LAN. Prebuilt arm64 binary from its GitHub releases is the least-privilege route (no brew trust, no zig 0.17-dev nightly)."
+      "notes": "Two install routes: `brew tap ddalcu/mlx-serve https://github.com/ddalcu/mlx-serve && brew trust ddalcu/mlx-serve && brew install mlx-serve` (brew REFUSES the formula without the trust grant, which is a standing permission to execute that tap's Ruby — prefer the second route on shared machines), or build from source: `git clone` + `brew bundle install --file=Brewfile` (cmake, webp) + `zig build -Doptimize=ReleaseFast` → zig-out/bin/mlx-serve, then point MLX_SERVE_BIN at it. Same mlx-community weights via --model-dir. NOTE: mlx-serve defaults to --host 0.0.0.0 (open to the local network); the launch template pins 127.0.0.1 so a benchmark never exposes a model server to the LAN. Prebuilt arm64 binary from its GitHub releases is the least-privilege route (no brew trust, no zig 0.17-dev nightly)."
     },
     "vllm-mlx": {
-      "description": "vllm-mlx (waybarrios) \u2014 continuous batching + paged/prefix KV on MLX.",
+      "description": "vllm-mlx (waybarrios) — continuous batching + paged/prefix KV on MLX.",
       "platforms": [
         "macos"
       ],
@@ -167,7 +189,7 @@
         "ready_timeout_s": 240
       },
       "extra_request_fields": {},
-      "notes": "pipx install vllm-mlx \u2014 installs to ~/.local/bin, which is NOT on a non-interactive zsh PATH; set VLLM_MLX_BIN or add it. Verify the CLI shape against the installed version before trusting a row.",
+      "notes": "pipx install vllm-mlx — installs to ~/.local/bin, which is NOT on a non-interactive zsh PATH; set VLLM_MLX_BIN or add it. Verify the CLI shape against the installed version before trusting a row.",
       "quarantined": {
         "since": "2026-08-22",
         "reason": "Panicked the macOS GPU driver on an M4 Pro mid-suite: panic(cpu 8) \"completeMemory() prepare count underflow\" @IOGPUMemory.cpp:550, panicked task 'Python', 31 threads. It had just been launched and its first cell (Qwen3.5-4B/short/c1) timed out; the host died ~9 minutes later and took the three queued passes behind it with it. Upstream carries open GPU memory-accounting and stream-ownership defects (waybarrios/vllm-mlx #627, #712, #468) and a closed wired/Metal growth report (#442); no kernel panic is reported there, so treat ours as unreported upstream.",
@@ -175,7 +197,7 @@
       }
     },
     "rapid-mlx": {
-      "description": "Rapid-MLX (raullenchai) \u2014 'Ollama replacement' MLX engine with prompt caching.",
+      "description": "Rapid-MLX (raullenchai) — 'Ollama replacement' MLX engine with prompt caching.",
       "platforms": [
         "macos"
       ],
@@ -183,7 +205,7 @@
       "notes": "Attach-only until its CLI is pinned; start it yourself pointing at the same weights."
     },
     "swama": {
-      "description": "swama (Trans-N-ai) \u2014 native Swift MLX engine; the closest sibling to mlxcat.",
+      "description": "swama (Trans-N-ai) — native Swift MLX engine; the closest sibling to mlxcat.",
       "platforms": [
         "macos",
         "ios"
@@ -192,7 +214,7 @@
       "notes": "Attach-only. Ships a macOS app + CLI; iOS app exists (rows from its app would need its own producer)."
     },
     "swiftlm": {
-      "description": "SwiftLM (SharpAI) \u2014 native MLX Swift server, SSD streaming for 100B+ MoE, iOS app support.",
+      "description": "SwiftLM (SharpAI) — native MLX Swift server, SSD streaming for 100B+ MoE, iOS app support.",
       "platforms": [
         "macos",
         "ios"
@@ -209,22 +231,22 @@
       "notes": "lms server start && lms load <model>. Must point LM Studio at the same mlx-community weights (or record the quant it used)."
     },
     "ollama": {
-      "description": "Ollama \u2014 MLX backend by default on Apple Silicon since v0.30 (2026-05); llama.cpp before that.",
+      "description": "Ollama — MLX backend by default on Apple Silicon since v0.30 (2026-05); llama.cpp before that.",
       "platforms": [
         "macos"
       ],
       "url": "http://127.0.0.1:11435",
-      "weights": "ollama library (its own artifacts \u2014 NOT the same files; compare with care)",
-      "notes": "Port 11434 is Local AI Cat's Local API on our Macs \u2014 run Ollama with OLLAMA_HOST=127.0.0.1:11435. Different weight artifacts; rows are labelled as such."
+      "weights": "ollama library (its own artifacts — NOT the same files; compare with care)",
+      "notes": "Port 11434 is Local AI Cat's Local API on our Macs — run Ollama with OLLAMA_HOST=127.0.0.1:11435. Different weight artifacts; rows are labelled as such."
     },
     "llama-cpp": {
-      "description": "llama.cpp llama-server (Metal) \u2014 the GGUF baseline.",
+      "description": "llama.cpp llama-server (Metal) — the GGUF baseline.",
       "platforms": [
         "macos",
         "ios"
       ],
       "url": "http://127.0.0.1:8081",
-      "weights": "GGUF (different quantization family \u2014 compare quality class, not bits)",
+      "weights": "GGUF (different quantization family — compare quality class, not bits)",
       "notes": "Attach-only. Use a Q4_K_M GGUF of the same base model; record it in --tag."
     },
     "localaicat-legacy": {

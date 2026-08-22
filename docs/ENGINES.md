@@ -22,6 +22,7 @@ numbers come from in-app harnesses (see `bench/README.md` § Platforms). The
 | engine | what it is | lang | weights | platforms | harness status |
 |---|---|---|---|---|---|
 | **mlxcat** | this repo — native Swift continuous batching + tiered prefix KV cache on mlx-swift | Swift | mlx-community | macOS, iOS | launcher (`mlxcat-http`) |
+| **mlxcat-defaults** | the same binary with **no memory ceiling** — the fair-fight arm. Competitors all run at MLX's defaults (~54 GiB cache limit on a 48 GiB Mac); `mlxcat` runs at 24 GiB with a 4 GiB cache slice, which is a product choice, not a comparison baseline. Read the pair as an A/B of what the guard costs. | Swift | mlx-community | macOS, iOS | launcher (`mlxcat-http`) |
 | [oMLX](https://github.com/jundot/omlx) | the Python reference mlxcat was ported from; continuous batching, paged SSD KV cache, menu-bar server | Python (mlx-lm) | mlx-community | macOS | launcher (`omlx serve`) |
 | [mlx-lm](https://github.com/ml-explore/mlx-lm) `server` | Apple's reference server; single-sequence | Python | mlx-community | macOS | launcher (`python -m mlx_lm server`) |
 | [vllm-mlx](https://github.com/waybarrios/vllm-mlx) | continuous batching, paged + prefix KV, SSD tier, OpenAI + Anthropic APIs, MCP | Python | mlx-community | macOS | launcher (verify CLI) |

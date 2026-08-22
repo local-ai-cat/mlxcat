@@ -87,8 +87,10 @@ The two exclusion lists are not the same kind of claim:
    reaches only mlxcat's launch template (`bench/engines.json`); oMLX, mlx-lm and
    mlx-serve run with MLX's defaults, which on a 48 GiB box is roughly a 54 GiB
    cache limit. Post-fix mlxcat runs with a 4 GiB one. Buffer-cache starvation
-   costs prefill throughput, which is the metric we lose. The comparison needs a
-   control arm at MLX defaults before the single-stream gap means anything.
+   costs prefill throughput, which is the metric we lose. **The control arm now
+   exists**: `mlxcat-defaults` is the same binary with the ceiling absent, so the
+   pair measures what the memory guard costs instead of leaving it as an excuse.
+   Until both arms are on the board, no single-stream gap here is settled.
 3. **The prefix cache has never been measured.** All 223 rows are cold —
    `cache_mode` is null on every one of them. The tiered prefix KV cache is the
    feature mlxcat exists for and it contributes nothing to its current standing.
