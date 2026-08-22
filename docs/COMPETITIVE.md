@@ -153,7 +153,35 @@ This is why the A/B mattered and the logit gate alone was not enough: Qwen3.5
 reference model) and still returns no tokens under real concurrency. Four decode
 steps do not reach the hybrid-cache path.
 
-### The recommendation, and the one thing that blocks it
+### Shipped: `.multimodalOnly`
+
+The blocker below was real — batching gemma-4's **images** genuinely breaks, and
+the VLM gate that proves it had to be unpinned from `qwen2_vl` first:
+
+| policy | vlm-0 (96×96) | vlm-1 (160×112) | vlm-2 (112×160) |
+|---|---|---|---|
+| batch everything | OK 8/8 | **FAIL** 8/9 | **FAIL** 8/24 |
+| `.multimodalOnly` | OK 8/8 | **OK 9/9** | **OK 24/24** |
+
+All three ragged image rows stop at the same early token when batched — exactly
+the scalar-offset defect the exclusion was written for. So the exclusion was
+right, and far broader than the defect: it was serializing on image
+*capability* when the defect is about image *content*, and `isVLM` comes from the
+model directory, so a gemma-4 deployment that never sends an image paid the full
+cost anyway.
+
+`SerializationPolicy.multimodalOnly` gives any row carrying image/video/audio the
+batch to itself and lets text rows batch. Default behaviour on the default path,
+no env override — measured again with nothing set:
+
+| gemma-4-E2B longgen | before | after |
+|---|---|---|
+| c4 TTFT | 32,425 ms | **641 ms** |
+| c4 aggregate | 36.7 tok/s | **82.8 tok/s** |
+| c8 TTFT | 52,830 ms | **1,272 ms** |
+| c8 aggregate | 43.4 tok/s | **78.5 tok/s** |
+
+### The original blocker, for the record
 
 `gemma4` and `gemma4_unified` should come off `scalarOffsetVLMModelTypes`. The
 evidence is a 50× TTFT improvement, a 2× throughput improvement, and logit-level
@@ -172,7 +200,10 @@ gate exists.
 
 ## What would move the number, in order
 
-1. **Per-row offsets for the scalar-offset families**, starting with `gemma4`.
+1. ~~**Per-row offsets for the scalar-offset families**, starting with `gemma4`.~~
+   **Done for gemma4** — see `.multimodalOnly` above; text rows batch, image rows
+   do not, and both are gated. Still open for `qwen3_5`, where the blocker is the
+   hybrid cache returning no tokens rather than the offsets.
    Unlocks batching for four of six benchmark models and for the iOS flagship.
    Start at `docs/KNOWN-FAILURES.md` §1, not at the exclusion list: the gate that
    would prove batched decode correct for gemma is **red** — 89/160 mismatched
