@@ -201,46 +201,56 @@ kept as a regression pin for the layer that has been cleared.
 models, both serialized today at 37 s TTFT under load on an M4 Pro. It is the
 largest single win left.
 
-## 1e. `gemma4_unified` batches text by default and fails logit invariance at every width — open
+## 1e. `gemma4_unified` fails logit invariance at every batched width — capped at 4, still open
 
 `multimodalOnlyModelTypes` holds two entries, `gemma4` and `gemma4_unified`, and
 entry is documented as requiring both gates:
 `BatchInvarianceTests.testBatchInvarianceAcrossModelFamilies` for logits and
 `SchedulerEngineTests.testVLMBatchEqualityAcrossModels` for images. The logit
-evidence recorded for the grant is gemma-4-**E2B** (a `gemma4`) at
-0.69 / 0.69 / 0.95 for batch 2/4/8.
+evidence recorded for the grant is gemma-4-**E2B** (a `gemma4`). gemma-4-**12B**,
+the `gemma4_unified` that shares the grant, had never been run through it.
 
-Run across families on 2026-08-23 (M5 Max, `MLXCAT_BATCH_INVARIANCE_MODELS`),
-gemma-4-**12B**-it-qat-4bit — which is `gemma4_unified`, the other entry — fails
-at every width tested, including the narrowest:
+Run 2026-08-23 (M5 Max, `MLXCAT_BATCH_INVARIANCE_MODELS`) with a **width-1
+control arm** added to the sweep, so a path difference could be told apart from a
+batching defect. Tolerance is 1.25; `margin` is the serial top-1/top-2 gap, and a
+token can only flip where the error exceeds it:
 
-| model | batch 2 | batch 4 | batch 8 |
-|---|---|---|---|
-| gemma-4-E2B-it-qat-4bit (`gemma4`) | 0.6875 ok | 0.6875 ok | 0.953 ok |
-| **gemma-4-12B-it-qat-4bit (`gemma4_unified`)** | **1.656 over** | **1.656 over** | **1.740 over** |
-| Qwen3.5-4B-MLX-4bit | 0.0 ok | 0.375 ok | 0.656 ok |
-| Qwen3-Coder-30B-A3B (`qwen3_moe`) | 0.9375 ok | 2.6875 over | 2.6875 over |
-| gpt-oss-20b-MXFP4-Q8 | 1.7e-05 ok | 2.0e-05 ok | 2.9e-05 ok |
+| model | batch 1 (control) | batch 2 | batch 4 | batch 8 |
+|---|---|---|---|---|
+| gemma-4-E2B (`gemma4`) | 0.0 | 0.688 ok | 0.688 ok | 0.953 ok |
+| **gemma-4-12B (`gemma4_unified`)** | **0.0** | **1.656** (margin 11.5) | **1.656** (margin 11.5) | **1.740** (margin **1.125**) |
+| Qwen3.5-4B | 0.0 | 0.0 ok | 0.375 ok | 0.656 ok |
+| Qwen3-Coder-30B (`qwen3_moe`) | 0.0 | 0.938 ok | 2.688 | 2.688 |
+| gpt-oss-20b | 0.0 | 1.7e-05 ok | 2.0e-05 ok | 2.9e-05 ok |
 
-Tolerance is 1.25. `mismatched` is **0 at every width** — no wide-margin token
-flipped — which is exactly the argument this repo declined to accept for
-`qwen3_moe` ("the output may well be fine in practice, but that is not the
-standard the other families are held to"). Applying that standard consistently,
-`gemma4_unified` has not earned its `.multimodalOnly` grant on its own evidence;
-it inherited it from a sibling `model_type` that passes.
+**The control settles what this is.** Width 1 is bit-exact — 0.0, every model.
+A single row through `StaticBatchGenerator` has nothing to be contaminated by, so
+the batched code path's own numerics are not the explanation. The divergence at
+width >= 2 is rows contaminating each other, and it is real.
 
-This is deliberately **not** fixed here, because the honest fix is expensive and
-is a product call rather than a code one: `gemma4_unified` fails at width 2, so a
-`batchDecodeWidthCeilings` entry for it would have to be 1, i.e. `.always` — and
-reverting it undoes the gemma-4 concurrency win that `d630cee` just landed (TTFT
-11,999 → 870 ms at c4) on the iOS flagship family. The options are (a) revert
-`gemma4_unified` to `.always` and lose that, (b) find the numerics defect that
-separates 12B from E2B — both are QAT 4-bit, so this is not simply a size noise
-floor, and `gemma4_unified` is a distinct loader path from `gemma4`, or (c)
-decide the 1.25 tolerance is wrong for this family and say why in writing.
+**What was done: `gemma4_unified` is capped at width 4**
+(`batchDecodeWidthCeilings`), not reverted. At widths 2 and 4 the margin is ~7x
+the error; at width 8 the error EXCEEDS the margin, which is the width where a
+flip stops being impossible and starts being luck (`mismatched` is 0 everywhere,
+so nothing has flipped yet). The cap removes that width and keeps the one the
+concurrency win was measured at — `d630cee`'s c4 TTFT 11,999 -> 870 ms on the iOS
+flagship family. It is strictly safer than the previous behaviour, which was
+unbounded.
 
-Not a regression from the ceiling work: this is the first time the cross-family
-logit gate has been run against gemma-4-12B at all.
+**What is still open.** The cap does not make `gemma4_unified` clean; it bounds
+the blast radius of a defect that is still there at widths 2 and 4. Three ways to
+close it, and which one is a product call:
+
+1. Find the numerics defect. `gemma4_unified` is a distinct loader path from
+   `gemma4`, both are QAT 4-bit, and `gemma4` measures 0.69 where this measures
+   1.66 — so "bigger model, higher noise floor" does not explain it. This is the
+   only option that keeps the win AND satisfies the tolerance.
+2. Drop the ceiling to 1, i.e. `.always`, and lose `d630cee` on 12B.
+3. Decide the flat 1.25 tolerance is the wrong bar and replace it with a
+   margin-relative one — the repo already reasons that way in
+   `TrackAPrefixCacheTests` ("a flip means something: `margin > logitError * 4`").
+   That is a change to the standard every family is judged by, so it needs to be
+   argued once, in writing, not settled per-family.
 
 ## 2. Hybrid caches cannot be combined mid-batch — FIXED
 
