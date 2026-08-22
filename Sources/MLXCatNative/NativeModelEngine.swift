@@ -777,7 +777,7 @@ public struct NativeModelLoader: EnginePoolModelLoader {
     /// That is evidence, not a decision: this override exists so the benchmark
     /// can A/B the lists on real workloads instead of the question being settled
     /// by argument. Nothing changes by default.
-    static func serializationOverrides(
+    public static func serializationOverrides(
         _ environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> Set<String> {
         let raw = environment["MLXCAT_UNSERIALIZE_MODEL_TYPES"] ?? ""
@@ -788,7 +788,7 @@ public struct NativeModelLoader: EnginePoolModelLoader {
         )
     }
 
-    static func usesSerializedDecode(
+    public static func usesSerializedDecode(
         modelType: String,
         isVLM: Bool,
         overrides: Set<String> = serializationOverrides()
@@ -811,7 +811,7 @@ public struct NativeModelLoader: EnginePoolModelLoader {
     /// throughput claim, not a correctness one, and it has not been re-measured.
     /// Lifting `qwen3_5` was measured and is wrong — batched decode over its
     /// hybrid cache returns no tokens at all.
-    static func serializationPolicy(
+    public static func serializationPolicy(
         modelType: String,
         isVLM: Bool,
         overrides: Set<String> = serializationOverrides()

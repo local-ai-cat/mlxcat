@@ -116,6 +116,21 @@ struct MLXCatHTTPServerMain {
             ? "allocator: memoryLimit \(ModelDiscovery.formatSize(appliedLimits.memoryLimit)), cacheLimit \(ModelDiscovery.formatSize(appliedLimits.cacheLimit))"
             : "allocator: MLX defaults (unbounded cache)"
         print("Discovered \(allDiscovered.count) model(s) (\(discovered.count) chat, \(rerankDiscovered.count) rerank); memory ceiling: \(ModelDiscovery.formatSize(effectiveCeiling.bytes)) (\(effectiveCeiling.source)); \(allocatorNote)")
+
+        // Say out loud whether the serialization overrides were understood.
+        //
+        // On 2026-08-22 a benchmark A/B compared `mlxcat` against
+        // `mlxcat-batched`, whose only difference is the env var below — against
+        // a binary built eighteen minutes before that env var existed. The old
+        // binary ignored it in silence, both arms ran identically, and the run
+        // looked like a clean result contradicting the real one. A treatment
+        // that cannot be observed in the output is not a treatment.
+        let overrides = NativeModelLoader.serializationOverrides()
+        print(
+            overrides.isEmpty
+                ? "serialization overrides: none (MLXCAT_UNSERIALIZE_MODEL_TYPES unset or empty)"
+                : "serialization overrides: \(overrides.sorted().joined(separator: ","))"
+        )
         fflush(stdout)
         server.waitForever()
     }
