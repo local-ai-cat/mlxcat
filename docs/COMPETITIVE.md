@@ -98,7 +98,32 @@ The two exclusion lists are not the same kind of claim:
 
    The memory guard is not what is costing us. That excuse is gone, and the
    remaining gap is the serialization exclusion in item 1.
-3. **The prefix cache has never been measured.** All 223 rows are cold —
+3. ~~**The prefix cache has never been measured.**~~ **Measured 2026-08-23, and
+   it is not paying off.** The first warm-vs-cold run in this repo's history:
+
+   | cell | cold TTFT | warm TTFT | |
+   |---|---|---|---|
+   | gemma-4-E2B short | 81 ms | 72 ms | 1.13× |
+   | gemma-4-E2B 4k | 918 ms | 897 ms | 1.02× |
+   | Qwen3.5-4B short | 299 ms | 182 ms | 1.64× |
+   | Qwen3.5-4B 4k | 3,694 ms | **4,410 ms** | **0.84× — slower** |
+
+   gemma-4 is expected: `prefixCacheEnabled` excludes windowed KV caches, so it
+   has no prefix cache at all. Qwen3.5 is not. And warm costs memory — peak rises
+   1.3–1.8 GiB, because the store holds ~200 MB per model even on a 0.6B.
+
+   This is a **performance** finding, not a broken feature. `PrefixCacheHitRateTests`
+   proves the cache genuinely hits on the anonymous-slot path real traffic uses
+   (3 identical prompts → 2 fetch hits, 6 stores, 0 evictions), and
+   `TrackAPrefixCacheTests` proves reconstruct is exact. It reuses correctly and
+   the reuse does not currently pay: reconstruct costs about what prefill costs
+   at these sizes, so the cache buys memory pressure and little else. Where it
+   should win — long shared prefixes — is exactly where the 4k row went negative.
+
+   That is the honest state of mlxcat's headline feature, and it is the first
+   time anyone could say either way.
+
+   The original caveat, for the record: all 223 rows were cold —
    `cache_mode` is null on every one of them. Not because warm was never
    scheduled: `--cache-modes` was parsed, printed in the plan, documented at
    length, and bound to nothing — `cache_mode` was read four times inside the
