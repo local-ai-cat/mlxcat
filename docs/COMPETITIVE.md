@@ -115,7 +115,60 @@ The two exclusion lists are not the same kind of claim:
 | the sliding-window mask is wrong | **disproven** — gpt-oss passes while crossing its window |
 | per-row RoPE offsets are scalar in a batch | **disproven** — resolves to `.batch` (`BatchRoPEOffsetTests`) |
 | ragged rows break batched decode | **disproven** — ragged rows match over 24 steps; identical rows diverge over 64 |
-| the serialization exclusions cost us concurrency | **the live hypothesis** — five of six models, and both excluded families pass logit invariance |
+| the serialization exclusions cost us concurrency | **confirmed for gemma4** — 50× TTFT, 2.17× aggregate at c4 |
+| ...for every excluded family | **no** — lifting it for `qwen3_5` returns zero tokens; that exclusion is load-bearing |
+
+## Measured: what lifting the exclusion buys
+
+A/B on an M5 Max, 2026-08-23, same binary and same 24 GiB ceiling; the only
+difference is `MLXCAT_UNSERIALIZE_MODEL_TYPES`. longgen tier.
+
+**gemma-4-E2B — the exclusion was costing us everything:**
+
+| | serialized (ships today) | batched | |
+|---|---|---|---|
+| c4 TTFT | 32,425 ms | **640 ms** | **50.7× faster** |
+| c4 prefill | 33 tok/s | **1,599 tok/s** | 48× |
+| c4 aggregate | 36.7 tok/s | **79.5 tok/s** | **2.17×** |
+| c8 TTFT | 52,830 ms | **1,259 ms** | **42× faster** |
+| c8 prefill | 20 tok/s | **813 tok/s** | 41× |
+| c8 aggregate | 43.4 tok/s | **85.2 tok/s** | 1.96× |
+
+53 seconds to first token at c8 becomes 1.3 seconds, and aggregate throughput
+roughly doubles — inside the 1.55–3.14× band oMLX gets at this tier. Per-request
+decode falls (45.5 → 33.9 tok/s at c4), which is what batching is supposed to
+trade.
+
+**Qwen3.5-4B — the exclusion is load-bearing:**
+
+Both concurrency cells failed with `no visible output`. The server logged no
+error; the request simply completed empty. That is the same defect
+`HybridBatchIntegrationTests` reports — `Optional([]) != Optional([760, 1156])`,
+alongside `BatchKVCache cannot combine KVCacheSimple cache layout with existing
+ArraysCache layout`. Batched decode over a hybrid cache silently produces
+nothing.
+
+This is why the A/B mattered and the logit gate alone was not enough: Qwen3.5
+**passed** logit invariance at batch 2/4/8 (0.0/0.38/0.66, cleaner than the
+reference model) and still returns no tokens under real concurrency. Four decode
+steps do not reach the hybrid-cache path.
+
+### The recommendation, and the one thing that blocks it
+
+`gemma4` and `gemma4_unified` should come off `scalarOffsetVLMModelTypes`. The
+evidence is a 50× TTFT improvement, a 2× throughput improvement, and logit-level
+invariance cleaner than the model the gate was pinned to.
+
+**Held, not shipped, for one reason:** the exclusion's stated cause is MRoPE
+position ids derived from a scalar `cache.offset`, which is an *image* concern,
+and every measurement above is text-only. There is no gate that batches gemma-4
+with image input — `MLXSERVE_VLM_TEST_MODEL` only drives
+`ModelCacheCapabilitiesTests` and `ModelDiscoveryTests`, neither of which runs
+inference. Flipping the default on text evidence alone would be exactly the move
+this file keeps criticising. The unlock is a one-line change once a VLM batch
+gate exists.
+
+`qwen3_5` stays excluded, and now has a reason on file rather than an assumption.
 
 ## What would move the number, in order
 
