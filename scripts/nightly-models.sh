@@ -34,7 +34,9 @@ GATE_CANDIDATES=(
   MLXSERVE_MOE_TEST_MODEL      "Qwen3-Coder-30B-A3B-Instruct-4bit Qwen3.6-35B-A3B-4bit gpt-oss-20b-MXFP4-Q8"
   MLXSERVE_VLM_TEST_MODEL      "Qwen2-VL-2B-Instruct-4bit gemma-4-E2B-it-qat-4bit"
   MLXSERVE_RERANK_TEST_MODEL   "bge-reranker-v2-m3-4bit mxbai-rerank-base-v1"
-  MLXCAT_MEMORY_BUDGET_MODEL   "Qwen3.5-4B-MLX-4bit Qwen3-1.7B-4bit"
+  # MLXCAT_MEMORY_BUDGET_MODEL has no candidate list: it runs against EVERY
+  # model in MEMORY_BUDGETS that is on disk, because "first candidate wins" is
+  # the wrong shape for a per-model regression bar.
 )
 # which swift test --filter each gate drives (keeps one model resident at a time)
 typeset -A GATE_FILTERS
@@ -118,23 +120,48 @@ MEMORY_BUDGETS=(
   # a target. The target is at or under the configured ceiling, and getting
   # there is open work.
   gpt-oss-20b-MXFP4-Q8 34359738368   # 32 GiB (measured 30.12 GiB at 16k, ceiling 24 GiB)
+  #
+  # The three flagships below had NO budget at all until 2026-08-23, so the gate
+  # only ever measured whichever 4B `pick_model` happened to return first and a
+  # regression on the models people actually run could not fail it. Measured on
+  # an M5 Max, in-process through MLXCatEngine at 16k with no ceiling configured
+  # (the same condition as the Qwen3.5-4B entry), reported as
+  # "after load" -> "lifetime max":
+  #
+  #     Qwen3-Coder-30B-A3B-Instruct-4bit  16.09 -> 24.75 GiB   x1.5
+  #     gemma-4-12B-it-qat-4bit            10.34 -> 34.51 GiB   x3.3
+  #     Qwen3.8-27B-4bit                   14.23 -> 53.02 GiB   x3.7
+  #
+  # The spread is the finding, not the absolute numbers. The MoE grows 1.5x over
+  # its loaded weights; the two that grow 3.3-3.7x are exactly the two that are
+  # VLM-typed (`gemma4_unified`, `qwen3_5`) and therefore run with
+  # `schedulerManagedTextPrefill: false` — no chunked prefill, so admission takes
+  # the single-pass path and materializes a whole-prompt logits tensor. 38 GiB of
+  # transient on a 27B whose weights are 14 GiB is that tensor. mlxcat also ships
+  # on iOS, where exceeding the footprint is a jetsam kill rather than a slow Mac.
+  #
+  # These are REGRESSION BARS just above what we measure today, not targets.
+  Qwen3-Coder-30B-A3B-Instruct-4bit 28991029248   # 27 GiB (measured 24.75)
+  gemma-4-12B-it-qat-4bit           40802189312   # 38 GiB (measured 34.51)
+  Qwen3.8-27B-4bit                  62277025792   # 58 GiB (measured 53.02)
 )
 rc_total=0
-for gate in $GATE_ORDER; do
-  model="$(pick_model "$gate")" || { echo "| $gate | (no candidate model on disk) | — | SKIP |" >> "$OUT"; continue; }
-  filter="${GATE_FILTERS[$gate]}"
-  typeset -a budget_env
+
+# One gate against one model. Factored out of the loop because the memory-budget
+# gate runs it once PER MODEL: `pick_model` returns the first candidate on disk,
+# which meant exactly one model was ever measured for peak footprint no matter
+# how many had committed budgets — so a regression on the flagship passed
+# silently behind a 4B that did not regress.
+run_gate() {
+  local gate="$1" model="$2" filter="$3" budget="${4:-}" label="${5:-}"
+  local log rc xctest_line testing_line xctest_count testing_count total summary failures
+  local -a budget_env
   budget_env=()
-  if [[ "$gate" == MLXCAT_MEMORY_BUDGET_MODEL ]]; then
-    b="${MEMORY_BUDGETS[${model:t}]:-}"
-    if [[ -z "$b" ]]; then
-      echo "| $gate | ${model:t} | — | SKIP (no committed budget for this model — add one to MEMORY_BUDGETS) |" >> "$OUT"
-      continue
-    fi
-    budget_env=(MLXCAT_MEMORY_BUDGET_BYTES="$b")
-  fi
+  [[ -n "$budget" ]] && budget_env=(MLXCAT_MEMORY_BUDGET_BYTES="$budget")
+  # Distinct log per model, or the second model of a gate overwrites the first's
+  # evidence and the summary row points at someone else's failure.
+  log="$REPO_ROOT/.build/nightly-${gate}${label:+-$label}.log"
   wait_for_memory
-  log="$REPO_ROOT/.build/nightly-${gate}.log"
   echo "▶ $gate → ${model:t}  ($filter)"
   # Only the gate under test is set; others stay unset so their suites skip.
   env -u MLXSERVE_TEST_MODEL -u MLXSERVE_HYBRID_TEST_MODEL -u MLXSERVE_SLIDING_TEST_MODEL -u MLXSERVE_MOE_TEST_MODEL \
@@ -170,6 +197,23 @@ for gate in $GATE_ORDER; do
     failures=$(grep -cE "^.*: error:" "$log")
     echo "| $gate | ${model:t} | \`$filter\` | **FAIL** (rc=$rc, $failures assertion error line(s)) — $summary — see ${log:t} |" >> "$OUT"
   fi
+}
+
+for gate in $GATE_ORDER; do
+  filter="${GATE_FILTERS[$gate]}"
+  if [[ "$gate" == MLXCAT_MEMORY_BUDGET_MODEL ]]; then
+    # Every model with a committed budget that is on disk, not just the first.
+    ran_any=0
+    for name in ${(ok)MEMORY_BUDGETS}; do
+      [[ -f "$ROOT/$name/config.json" ]] || continue
+      ran_any=1
+      run_gate "$gate" "$ROOT/$name" "$filter" "${MEMORY_BUDGETS[$name]}" "$name"
+    done
+    (( ran_any )) || echo "| $gate | (no budgeted model on disk) | — | SKIP |" >> "$OUT"
+    continue
+  fi
+  model="$(pick_model "$gate")" || { echo "| $gate | (no candidate model on disk) | — | SKIP |" >> "$OUT"; continue; }
+  run_gate "$gate" "$model" "$filter"
 done
 # --- cross-family batch invariance ------------------------------------------ #
 present=()
