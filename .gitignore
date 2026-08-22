@@ -13,3 +13,12 @@ Tests/MLXCatTests/Models/
 guest/
 bench/results/.logs/
 __pycache__/
+
+# Queue run state is per-machine; the passes themselves are committed.
+bench/queue/**/*.done
+bench/queue/**/*.failed
+bench/queue/**/*.log
+bench/queue/**/.lock/
+bench/queue/**/.launchd.log
+
+bench/queue/**/*.skipped
