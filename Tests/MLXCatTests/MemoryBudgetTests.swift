@@ -5,6 +5,7 @@ import MLXHuggingFace
 import MLXLLM
 import MLXLMCommon
 import MLXCat
+@testable import MLXCatNative
 import Tokenizers
 import XCTest
 
@@ -44,6 +45,12 @@ final class MemoryBudgetTests: XCTestCase {
         }
     }
 
+    private static func modelType(at modelURL: URL) throws -> String {
+        let data = try Data(contentsOf: modelURL.appendingPathComponent("config.json"))
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        return object?["model_type"] as? String ?? ""
+    }
+
     func test_longContextPeakFootprintStaysWithinBudget() async throws {
         let environment = ProcessInfo.processInfo.environment
         guard let modelPath = environment["MLXCAT_MEMORY_BUDGET_MODEL"], !modelPath.isEmpty else {
@@ -53,6 +60,9 @@ final class MemoryBudgetTests: XCTestCase {
         let promptTarget = Int(environment["MLXCAT_MEMORY_BUDGET_PROMPT_TOKENS"] ?? "") ?? 16_384
         let generate = Int(environment["MLXCAT_MEMORY_BUDGET_GENERATE"] ?? "") ?? 32
         let modelURL = URL(fileURLWithPath: (modelPath as NSString).expandingTildeInPath)
+        // Read the family straight off the checkpoint, the same string
+        // NativeModelLoader keys its per-family decisions on.
+        let modelType = try Self.modelType(at: modelURL)
 
         let container = try await LLMModelFactory.shared.loadContainer(
             from: modelURL,
@@ -66,10 +76,17 @@ final class MemoryBudgetTests: XCTestCase {
             let prompt = String(repeating: filler, count: max(promptTarget / fillerTokens, 1))
                 + " Summarize the passage above in one sentence."
             let input = try await context.processor.prepare(input: UserInput(prompt: prompt))
+            // Measure the configuration the LOADER would pick for this model,
+            // not the constructor default. Idle-prefill chunking is a per-family
+            // measured decision (`NativeModelLoader.chunksIdlePrefill`): most
+            // families peak 26-40% LOWER chunked and `qwen3_moe` peaks 63%
+            // higher, so a gate that always chunked would hold the exempt family
+            // to a number its shipped path never produces.
             let engine = MLXCatEngine(
                 model: context.model,
                 parameters: GenerateParameters(maxTokens: generate, temperature: 0),
-                maxConcurrentRequests: 1
+                maxConcurrentRequests: 1,
+                chunkIdlePrefill: NativeModelLoader.chunksIdlePrefill(modelType: modelType)
             )
             let request = Request(
                 uid: "memory-budget",

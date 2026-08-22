@@ -200,3 +200,46 @@ final class SerializationOverrideTests: XCTestCase {
         XCTAssertEqual(NativeModelLoader.serializationOverrides([:]), [])
     }
 }
+
+/// The idle-prefill chunking decision, which is a per-family MEASUREMENT and not
+/// a preference — see `NativeModelLoader.chunksIdlePrefill` for the four-model
+/// table it comes from.
+final class IdlePrefillChunkingTests: XCTestCase {
+    func testChunkingIsTheDefaultAndTheExemptionIsMeasured() {
+        let none: [String: String] = [:]
+        // The three families measured to win by 26-40%.
+        XCTAssertTrue(NativeModelLoader.chunksIdlePrefill(modelType: "gemma4_unified", environment: none))
+        XCTAssertTrue(NativeModelLoader.chunksIdlePrefill(modelType: "qwen3_5", environment: none))
+        XCTAssertTrue(NativeModelLoader.chunksIdlePrefill(modelType: "gpt_oss", environment: none))
+        // The one measured to lose by 63%.
+        XCTAssertFalse(NativeModelLoader.chunksIdlePrefill(modelType: "qwen3_moe", environment: none))
+        // An unmeasured family gets the default, not the exemption.
+        XCTAssertTrue(NativeModelLoader.chunksIdlePrefill(modelType: "muse_glimmer", environment: none))
+    }
+
+    func testTheOverrideCanFlipAnyFamilyForABenchmarkArm() {
+        // Naming a family forces it single-pass...
+        XCTAssertFalse(
+            NativeModelLoader.chunksIdlePrefill(
+                modelType: "gpt_oss",
+                environment: ["MLXCAT_SINGLE_PASS_PREFILL_MODEL_TYPES": "gpt_oss"]))
+        // ...and, because the override REPLACES the list rather than adding to
+        // it, naming a different family lifts the built-in exemption. That is
+        // what makes an A/B of the exemption itself possible.
+        XCTAssertTrue(
+            NativeModelLoader.chunksIdlePrefill(
+                modelType: "qwen3_moe",
+                environment: ["MLXCAT_SINGLE_PASS_PREFILL_MODEL_TYPES": "gpt_oss"]))
+        XCTAssertFalse(
+            NativeModelLoader.chunksIdlePrefill(
+                modelType: "gemma4",
+                environment: ["MLXCAT_SINGLE_PASS_PREFILL_MODEL_TYPES": "all"]))
+    }
+
+    func testParsingIsWhitespaceAndCaseTolerant() {
+        XCTAssertFalse(
+            NativeModelLoader.chunksIdlePrefill(
+                modelType: "qwen3_moe",
+                environment: ["MLXCAT_SINGLE_PASS_PREFILL_MODEL_TYPES": " QWEN3_MOE , , "]))
+    }
+}

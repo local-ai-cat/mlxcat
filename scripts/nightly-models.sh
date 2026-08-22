@@ -105,45 +105,37 @@ typeset -A MEMORY_BUDGETS
 MEMORY_BUDGETS=(
   Qwen3.5-4B-MLX-4bit  30064771072   # 28 GiB (measured 25.05 GiB shipping path, no ceiling)
   Qwen3-1.7B-4bit      15032385536   # 14 GiB (scaled from 0.6B's measured 10.52 GiB)
-  # gpt-oss-20b is the model with the worst long-context memory behaviour we
-  # have, and it had no budget at all. Measured 2026-08-23 at 16k on an M5 Max
-  # WITH a 24 GiB ceiling configured and confirmed applied by the server's own
-  # startup line ("memory ceiling: 24.00GB (override); allocator: memoryLimit
-  # 24.00GB, cacheLimit 4.00GB"): peak physical footprint 30.12 GiB.
   #
-  # That is 25% ABOVE the configured ceiling, which is the real finding —
-  # MLX's memoryLimit bounds its allocator's caching behaviour, not the
-  # process, so a "ceiling" is advisory. On a Mac that is a slow machine; on
-  # iOS, where mlxcat also ships, exceeding the budget is a jetsam kill.
+  # The flagships below had NO budget at all until 2026-08-23, so the gate only
+  # ever measured whichever 4B `pick_model` returned first and a regression on
+  # the models people actually run could not fail it.
   #
-  # 32 GiB is set as a REGRESSION bar just above what we measure today, not as
-  # a target. The target is at or under the configured ceiling, and getting
-  # there is open work.
-  gpt-oss-20b-MXFP4-Q8 34359738368   # 32 GiB (measured 30.12 GiB at 16k, ceiling 24 GiB)
+  # All four measured on an M5 Max at 16k, in-process through MLXCatEngine with
+  # no ceiling configured (the same condition as the Qwen3.5-4B entry), on the
+  # path `NativeModelLoader.chunksIdlePrefill` selects for each — the gate reads
+  # model_type off the checkpoint so it cannot drift from what ships:
   #
-  # The three flagships below had NO budget at all until 2026-08-23, so the gate
-  # only ever measured whichever 4B `pick_model` happened to return first and a
-  # regression on the models people actually run could not fail it. Measured on
-  # an M5 Max, in-process through MLXCatEngine at 16k with no ceiling configured
-  # (the same condition as the Qwen3.5-4B entry), reported as
-  # "after load" -> "lifetime max":
+  #     model                  idle prefill   after load -> peak
+  #     Qwen3-Coder-30B-A3B    single-pass    16.09 -> 24.75 GiB
+  #     gpt-oss-20b            chunked        11.45 -> 25.38 GiB
+  #     gemma-4-12B            chunked        10.34 -> 20.74 GiB
+  #     Qwen3.8-27B            chunked        14.21 -> 39.02 GiB
   #
-  #     Qwen3-Coder-30B-A3B-Instruct-4bit  16.09 -> 24.75 GiB   x1.5
-  #     gemma-4-12B-it-qat-4bit            10.34 -> 34.51 GiB   x3.3
-  #     Qwen3.8-27B-4bit                   14.23 -> 53.02 GiB   x3.7
+  # gpt-oss's 32 GiB bar came from a 30.12 GiB SERVER measurement taken with a
+  # 24 GiB ceiling — a different condition from the one this gate runs under,
+  # where it measures 35.17 GiB single-pass. Chunked brings it to 25.38, so the
+  # bar drops to 28. The finding that made the old comment worth keeping is
+  # unchanged and lives in docs/KNOWN-FAILURES.md 1c: MLX's memoryLimit bounds
+  # its allocator's caching, not the process, so a "ceiling" is advisory. On a
+  # Mac that is a slow machine; on iOS it is a jetsam kill.
   #
-  # The spread is the finding, not the absolute numbers. The MoE grows 1.5x over
-  # its loaded weights; the two that grow 3.3-3.7x are exactly the two that are
-  # VLM-typed (`gemma4_unified`, `qwen3_5`) and therefore run with
-  # `schedulerManagedTextPrefill: false` — no chunked prefill, so admission takes
-  # the single-pass path and materializes a whole-prompt logits tensor. 38 GiB of
-  # transient on a 27B whose weights are 14 GiB is that tensor. mlxcat also ships
-  # on iOS, where exceeding the footprint is a jetsam kill rather than a slow Mac.
-  #
-  # These are REGRESSION BARS just above what we measure today, not targets.
+  # REGRESSION BARS just above what we measure today, ~9% headroom. They are NOT
+  # targets: every one of these is well above what mlx-lm and omlx measure for
+  # the same model and context, and closing THAT is the actual goal.
+  gpt-oss-20b-MXFP4-Q8              30064771072   # 28 GiB (measured 25.38)
   Qwen3-Coder-30B-A3B-Instruct-4bit 28991029248   # 27 GiB (measured 24.75)
-  gemma-4-12B-it-qat-4bit           40802189312   # 38 GiB (measured 34.51)
-  Qwen3.8-27B-4bit                  62277025792   # 58 GiB (measured 53.02)
+  gemma-4-12B-it-qat-4bit           24696061952   # 23 GiB (measured 20.74)
+  Qwen3.8-27B-4bit                  46170898432   # 43 GiB (measured 39.02)
 )
 rc_total=0
 

@@ -131,7 +131,16 @@ final class SchedulerChunkedPrefillTests: XCTestCase {
             )
         ])
 
-        XCTAssertEqual(model.drainEvents().map(\.shape), [[1, 4]])
+        // The property is that an exact hit still re-evaluates the WHOLE prompt,
+        // not that it does so in one forward pass. Admission now chunks at
+        // `prefill.stepSize` even when it is not yielding between chunks (a
+        // single `model()` call over L positions materializes a [1, L, vocab]
+        // logits tensor), so this is 2 x [1, 2] rather than 1 x [1, 4]. Assert
+        // the token count, which is the invariant, and that every call respects
+        // the configured step.
+        let events = model.drainEvents().map(\.shape)
+        XCTAssertEqual(events.reduce(0) { $0 + $1[1] }, 4, "the complete prompt must be re-evaluated")
+        XCTAssertTrue(events.allSatisfy { $0[1] <= 2 }, "no forward pass may exceed prefill.stepSize: \(events)")
         XCTAssertEqual(store.stats.fetchHitCount, 1)
         XCTAssertEqual(store.stats.releaseCount, 1)
     }

@@ -42,6 +42,7 @@ public actor Scheduler {
     private let prefixCacheEnabled: Bool
     private let serializationPolicy: SerializationPolicy
     private let schedulerManagedTextPrefill: Bool
+    private let chunkIdlePrefill: Bool
     private let pressurePolicy: PressurePolicy
     private var waiting: [Request] = []
     private var running: [String: RunningRequest] = [:]
@@ -60,6 +61,7 @@ public actor Scheduler {
         serializedDecode: Bool = false,
         serializationPolicy: SerializationPolicy? = nil,
         schedulerManagedTextPrefill: Bool = true,
+        chunkIdlePrefill: Bool = true,
         pressurePolicy: PressurePolicy = .disabled,
         speculativeDecoding: SpeculativeDecodingConfiguration = SpeculativeDecodingConfiguration()
     ) {
@@ -76,6 +78,7 @@ public actor Scheduler {
         self.prefixCacheEnabled = prefixStore != nil && !cacheCapabilities.usesWindowedKVCache
         self.serializationPolicy = serializationPolicy ?? (serializedDecode ? .always : .never)
         self.schedulerManagedTextPrefill = schedulerManagedTextPrefill
+        self.chunkIdlePrefill = chunkIdlePrefill
         self.pressurePolicy = pressurePolicy
     }
 
@@ -418,12 +421,33 @@ public actor Scheduler {
         let prefillStep: Int = max(1, parameters.prefill.stepSize ?? 512)
         let stepBudget: Int = allowPartialPrefill ? prefillStep : Int.max
         var remainingBudget = stepBudget
+        // `allowPartialPrefill` decides whether admission YIELDS between chunks
+        // so other rows can decode. Whether the forward pass itself spans the
+        // whole prompt in one `model()` call is a separate question, and
+        // `chunkIdlePrefill` answers it.
+        //
+        // They used to be the same flag, so an idle admission — every
+        // single-stream request, so every c1 cell — ran one call over L
+        // positions and materialized a [1, L, vocab] logits tensor plus
+        // full-length attention scratch. Chunking that away is worth GiBs on
+        // most models and costs GiBs on at least one, which is why the caller
+        // decides. Measured at 16k on an M5 Max, after-load -> lifetime max,
+        // both arms back to back:
+        //
+        //     model                  vocab    single-pass   chunked
+        //     gemma-4-12B           262,144    34.51         20.74   -13.8
+        //     Qwen3.8-27B           248,320    53.02         39.02   -14.0
+        //     gpt-oss-20b           201,088    35.17         25.37    -9.8
+        //     Qwen3-Coder-30B-A3B   151,936    24.75         40.34   +15.6
+        //
+        // See `NativeModelLoader.singlePassPrefillModelTypes` for why the last
+        // row is an exemption rather than a reason to abandon the change.
+        let chunked = allowPartialPrefill || chunkIdlePrefill
         while admission.nextPrefillIndex < admission.prefillRange.upperBound, remainingBudget > 0 {
             let end: Int
-            if allowPartialPrefill {
-                let chunkLimit = min(prefillStep, remainingBudget)
+            if chunked {
                 end = min(
-                    admission.nextPrefillIndex + chunkLimit,
+                    admission.nextPrefillIndex + min(prefillStep, remainingBudget),
                     admission.prefillRange.upperBound
                 )
             } else {

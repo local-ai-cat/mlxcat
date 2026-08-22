@@ -29,7 +29,8 @@ public final class NativeModelEngine: @unchecked Sendable {
         maxConcurrentRequests: Int,
         cacheCapabilities: ModelCacheCapabilities,
         serializationPolicy: SerializationPolicy,
-        schedulerManagedTextPrefill: Bool
+        schedulerManagedTextPrefill: Bool,
+        chunkIdlePrefill: Bool
     ) {
         self.context = context
         self.modelID = modelID
@@ -44,7 +45,8 @@ public final class NativeModelEngine: @unchecked Sendable {
             prefixStore: prefixStore,
             cacheCapabilities: cacheCapabilities,
             serializationPolicy: serializationPolicy,
-            schedulerManagedTextPrefill: schedulerManagedTextPrefill
+            schedulerManagedTextPrefill: schedulerManagedTextPrefill,
+            chunkIdlePrefill: chunkIdlePrefill
         )
         var eosTokenIds = context.configuration.eosTokenIds
         if let tokenizerEosTokenId = context.tokenizer.eosTokenId {
@@ -712,7 +714,8 @@ public struct NativeModelLoader: EnginePoolModelLoader {
                 maxConcurrentRequests: maxConcurrentRequests,
                 cacheCapabilities: Self.cacheCapabilities(for: modelConfiguration),
                 serializationPolicy: Self.serializationPolicy(modelType: modelType, isVLM: isVLM),
-                schedulerManagedTextPrefill: !isVLM
+                schedulerManagedTextPrefill: !isVLM,
+                chunkIdlePrefill: Self.chunksIdlePrefill(modelType: modelType)
             )
         }
     }
@@ -1086,6 +1089,61 @@ public struct NativeModelLoader: EnginePoolModelLoader {
     /// `MLXSERVE_MOE_TEST_MODEL`) at the new width. Removing the entry entirely
     /// means the width->=4 numerics were fixed; the win waiting there is the
     /// rest of that 10.9x.
+    /// Whether an IDLE admission chunks its prefill forward pass.
+    ///
+    /// Chunking removes a whole-prompt `[1, L, vocab]` logits tensor and its
+    /// full-length attention scratch, and replaces them with per-chunk
+    /// allocations whose shapes do not repeat. Which side wins is not a matter
+    /// of opinion — measured at 16k on an M5 Max, both arms back to back, twice
+    /// each for the disputed row (after-load -> lifetime max peak):
+    ///
+    ///     model                  vocab    single-pass   chunked
+    ///     gemma-4-12B           262,144    34.51         20.74   -40%
+    ///     Qwen3.8-27B           248,320    53.02         39.02   -26%
+    ///     gpt-oss-20b           201,088    35.17         25.37   -28%
+    ///     Qwen3-Coder-30B-A3B   151,936    24.75         40.34   +63%
+    ///
+    /// Three families win by 26-40% and one loses by 63%, so this defaults ON
+    /// with a measured exemption rather than either shipping the regression or
+    /// throwing the win away.
+    ///
+    /// Two tempting explanations for the outlier are both DISPROVEN, so do not
+    /// re-derive them: it is not "MoE" (gpt-oss is MoE and wins by 28%), and it
+    /// is not vocabulary alone (the three winners save ~0.05 GiB per 1k of
+    /// vocab, which predicts an 8 GiB SAVING for this model). What is actually
+    /// unusual is its single-pass arm: every other family peaks at 3.1-3.7x its
+    /// loaded weights on that path and this one peaks at 1.5x, while all four
+    /// land at 2.0-2.7x when chunked. Its single-pass path is anomalously cheap
+    /// — smallest vocab AND the narrowest KV geometry on the board (head_dim
+    /// 128 x 4 KV heads, against gemma-4-12B's 256 x 8) — not its chunked path
+    /// anomalously dear. A rule that computes the crossover from vocab and KV
+    /// width would replace this list; nobody has derived one yet.
+    ///
+    /// `MLXCAT_SINGLE_PASS_PREFILL_MODEL_TYPES` overrides the list (`all` for
+    /// every family) so the benchmark can A/B it without a rebuild.
+    static func chunksIdlePrefill(
+        modelType: String,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Bool {
+        let normalized = modelType.lowercased()
+        let raw = environment["MLXCAT_SINGLE_PASS_PREFILL_MODEL_TYPES"] ?? ""
+        let overrides = Set(
+            raw.split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+                .filter { !$0.isEmpty }
+        )
+        if !overrides.isEmpty {
+            return !(overrides.contains("all") || overrides.contains(normalized))
+        }
+        return !singlePassPrefillModelTypes.contains(normalized)
+    }
+
+    /// Families measured to peak HIGHER with a chunked idle prefill than with a
+    /// single whole-prompt pass. See `chunksIdlePrefill` for the numbers.
+    private static let singlePassPrefillModelTypes: Set<String> = [
+        "qwen3_moe",
+    ]
+
     private static let batchDecodeWidthCeilings: [String: Int] = [
         "qwen3_moe": 2,
         // gemma4_unified is here for a different reason than qwen3_moe, and the

@@ -13,6 +13,7 @@ public final class MLXCatEngine: @unchecked Sendable {
         serializedDecode: Bool = false,
         serializationPolicy: SerializationPolicy? = nil,
         schedulerManagedTextPrefill: Bool = true,
+        chunkIdlePrefill: Bool = true,
         pressurePolicy: Scheduler.PressurePolicy = .disabled,
         speculativeDecoding: SpeculativeDecodingConfiguration = SpeculativeDecodingConfiguration()
     ) {
@@ -25,6 +26,7 @@ public final class MLXCatEngine: @unchecked Sendable {
             serializedDecode: serializedDecode,
             serializationPolicy: serializationPolicy,
             schedulerManagedTextPrefill: schedulerManagedTextPrefill,
+            chunkIdlePrefill: chunkIdlePrefill,
             pressurePolicy: pressurePolicy,
             speculativeDecoding: speculativeDecoding
         )
