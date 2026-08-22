@@ -93,14 +93,60 @@ final class SerializationOverrideTests: XCTestCase {
         XCTAssertEqual(
             NativeModelLoader.serializationPolicy(modelType: "qwen3_5", isVLM: true, overrides: none),
             .always)
-        // the regression list is a throughput claim, not a correctness one, and
-        // has not been re-measured — it stays blunt until it is.
+        // what is LEFT on the regression list is a throughput claim, not a
+        // correctness one, and has not been re-measured — it stays blunt until
+        // it is. qwen3_moe is no longer on it; see the width-ceiling tests below.
         XCTAssertEqual(
-            NativeModelLoader.serializationPolicy(modelType: "qwen3_moe", isVLM: false, overrides: none),
+            NativeModelLoader.serializationPolicy(modelType: "qwen2", isVLM: false, overrides: none),
+            .always)
+        XCTAssertEqual(
+            NativeModelLoader.serializationPolicy(modelType: "qwen3", isVLM: false, overrides: none),
             .always)
         XCTAssertEqual(
             NativeModelLoader.serializationPolicy(modelType: "gpt_oss", isVLM: false, overrides: none),
             .never)
+    }
+
+    func testMoEBatchesOnlyAtTheWidthItWasMeasuredAt() {
+        // qwen3_moe measures max logit error 0.94 at width 2 (inside the 1.25
+        // tolerance) and 2.69 at widths 4 and 8. `.always` refused both; the
+        // ceiling refuses only the widths that failed.
+        XCTAssertEqual(
+            NativeModelLoader.serializationPolicy(modelType: "qwen3_moe", isVLM: false, overrides: []),
+            .maxWidth(2))
+        // The override still lifts it completely, so the benchmark can A/B the
+        // ceiling against no ceiling at all.
+        XCTAssertEqual(
+            NativeModelLoader.serializationPolicy(
+                modelType: "qwen3_moe", isVLM: false, overrides: ["qwen3_moe"]),
+            .never)
+        // The legacy Bool view must keep reading "serializes to some degree",
+        // because it does.
+        XCTAssertTrue(
+            NativeModelLoader.usesSerializedDecode(modelType: "qwen3_moe", isVLM: false, overrides: []))
+    }
+
+    func testAWidthCeilingAdmitsUpToItsWidthAndRefusesPastIt() {
+        let rows = (0 ..< 3).map { index in
+            Request(
+                uid: "row-\(index)",
+                input: .init(text: .init(tokens: MLXArray([Int32(1)]))),
+                maxTokens: 4)
+        }
+        let policy = SerializationPolicy.maxWidth(2)
+        // Nothing running: admit. One running: admit — this is the width the
+        // measurement earned, and it is exactly what `.always` was throwing away.
+        XCTAssertFalse(policy.refusesToJoin(running: []))
+        XCTAssertFalse(policy.refusesToJoin(running: [rows[0]]))
+        // At the ceiling, and past it, refuse.
+        XCTAssertTrue(policy.refusesToJoin(running: [rows[0], rows[1]]))
+        XCTAssertTrue(policy.refusesToJoin(running: rows))
+        // A capped row never demands the batch to itself — the cap belongs to
+        // the batch, not to the row.
+        XCTAssertFalse(policy.requiresSolitude(rows[0]))
+        // And the blunt policies are unchanged by any of this.
+        XCTAssertTrue(SerializationPolicy.always.refusesToJoin(running: []))
+        XCTAssertFalse(SerializationPolicy.never.refusesToJoin(running: rows))
     }
 
     func testATextOnlyGemmaDeploymentIsNotSerialized() {

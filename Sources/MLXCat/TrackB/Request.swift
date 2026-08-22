@@ -47,7 +47,7 @@ extension Request {
 /// (2026-08-23): serialising everything costs 50x TTFT and 2.17x aggregate
 /// throughput at c4, while ragged *image* rows genuinely do break (all three
 /// rows stop at the same early token) and text rows are exact against serial.
-public enum SerializationPolicy: Sendable {
+public enum SerializationPolicy: Sendable, Equatable {
     /// Batch anything. The default for families with no scalar-offset defect.
     case never
     /// Never batch. The old `serializedDecode: true`.
@@ -55,21 +55,37 @@ public enum SerializationPolicy: Sendable {
     /// Batch text rows; give any row carrying image, video or audio the batch to
     /// itself. The protection the defect actually calls for.
     case multimodalOnly
+    /// Batch, but never wider than this many rows.
+    ///
+    /// For a family whose batched numerics are sound at a narrow width and break
+    /// at a wide one, `.always` throws away the width that works. `qwen3_moe` is
+    /// the measured case: max logit error 0.94 at width 2 — inside the 1.25
+    /// tolerance every other family is held to — and 2.69 at widths 4 and 8,
+    /// which is not (`NativeModelLoader.batchDecodeRegressedModelTypes`). This
+    /// case takes the width that is earned and refuses the width that is not,
+    /// instead of refusing both.
+    case maxWidth(Int)
 
     func requiresSolitude(_ request: Request) -> Bool {
         switch self {
         case .never: return false
         case .always: return true
         case .multimodalOnly: return request.isMultimodal
+        // A capped-width row needs no protection of its own; the cap is a
+        // property of the batch it would join, and `refusesToJoin` applies it.
+        case .maxWidth: return false
         }
     }
 
-    /// True when a row already in flight must not be joined.
-    func requiresSolitude(anyRunning requests: some Collection<Request>) -> Bool {
+    /// True when a waiting row may not be admitted alongside what is already
+    /// running — either because it must have the batch to itself, or because the
+    /// batch is already at its permitted width.
+    func refusesToJoin(running requests: some Collection<Request>) -> Bool {
         switch self {
         case .never: return false
         case .always: return true
         case .multimodalOnly: return requests.contains { $0.isMultimodal }
+        case .maxWidth(let width): return requests.count >= width
         }
     }
 }

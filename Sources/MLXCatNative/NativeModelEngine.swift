@@ -807,10 +807,12 @@ public struct NativeModelLoader: EnginePoolModelLoader {
     /// three rows stop at the same early token — so those keep the batch to
     /// themselves and nothing else does.
     ///
-    /// `batchDecodeRegressedModelTypes` stays `.always`: that list is a
-    /// throughput claim, not a correctness one, and it has not been re-measured.
-    /// Lifting `qwen3_5` was measured and is wrong — batched decode over its
-    /// hybrid cache returns no tokens at all.
+    /// `batchDecodeRegressedModelTypes` stays `.always`: what is left on that
+    /// list (`qwen2`, `qwen3`) is a throughput claim, not a correctness one, and
+    /// it has not been re-measured. `qwen3_moe` moved off it to
+    /// `batchDecodeWidthCeilings` — its re-measurement produced a width, not a
+    /// verdict. Lifting `qwen3_5` was measured and is wrong — batched decode over
+    /// its hybrid cache returns no tokens at all.
     public static func serializationPolicy(
         modelType: String,
         isVLM: Bool,
@@ -819,6 +821,9 @@ public struct NativeModelLoader: EnginePoolModelLoader {
         let normalizedModelType = modelType.lowercased()
         if overrides.contains("all") || overrides.contains(normalizedModelType) {
             return .never
+        }
+        if let width = batchDecodeWidthCeilings[normalizedModelType] {
+            return .maxWidth(width)
         }
         if batchDecodeRegressedModelTypes.contains(normalizedModelType) {
             return .always
@@ -1054,14 +1059,33 @@ public struct NativeModelLoader: EnginePoolModelLoader {
     // not the standard the other families are held to.
     //
     // So the throughput justification is retired and a correctness one replaces
-    // it. Whoever fixes the numerics gets a 10.9x TTFT and 1.82x throughput win
-    // waiting for them. `qwen2` and `qwen3` have NOT been re-measured on either
-    // axis — they inherit the old, now-discredited reason and are due the same
-    // treatment.
+    // it. `qwen2` and `qwen3` have NOT been re-measured on either axis — they
+    // inherit the old, now-discredited reason and are due the same treatment.
     private static let batchDecodeRegressedModelTypes: Set<String> = [
         "qwen2",
         "qwen3",
-        "qwen3_moe",
+    ]
+
+    /// Families that batch correctly only up to a width, with the width they
+    /// have actually been measured at.
+    ///
+    /// `qwen3_moe` is the whole list, and it is here rather than in
+    /// `batchDecodeRegressedModelTypes` because the measurement above does not
+    /// say "this family cannot batch" — it says width 2 is inside the 1.25
+    /// tolerance (0.94) and widths 4 and 8 are not (2.69). Refusing width 2 as
+    /// well threw away the half of the win that is earned: serialized decode
+    /// measures 10.9x TTFT and 0.55x aggregate throughput against batched on
+    /// this family. A ceiling takes what the numbers support and nothing more.
+    ///
+    /// Raising an entry requires re-running
+    /// `BatchInvarianceTests.testBatchInvarianceAcrossModelFamilies` (logits,
+    /// via `MLXCAT_BATCH_INVARIANCE_MODELS`) and `MoEBatchIntegrationTests`
+    /// (emitted tokens through the serving engine, via
+    /// `MLXSERVE_MOE_TEST_MODEL`) at the new width. Removing the entry entirely
+    /// means the width->=4 numerics were fixed; the win waiting there is the
+    /// rest of that 10.9x.
+    private static let batchDecodeWidthCeilings: [String: Int] = [
+        "qwen3_moe": 2,
     ]
 
     private static let windowedKVModelTypes: Set<String> = [

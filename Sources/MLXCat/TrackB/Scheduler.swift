@@ -254,7 +254,7 @@ public actor Scheduler {
             // Computed from `running`, not tracked alongside it: RunningRequest
             // retains its Request, so there is no second copy of this state to
             // drift out of sync on a cancel or an error path.
-            if busy, serializationPolicy.requiresSolitude(anyRunning: running.values.map(\.request)) {
+            if busy, serializationPolicy.refusesToJoin(running: running.values.map(\.request)) {
                 return admittedResponses
             }
             if busy, let next = waiting.first, serializationPolicy.requiresSolitude(next) {
