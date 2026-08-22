@@ -151,10 +151,32 @@ final class BatchLayerCache {
             return cache.extract(row)
         }
 
-        let cache = KVCacheSimple()
-        guard row >= 0, row < batchSize else { return cache }
-        cache.state = kvCache.state.map { Self.sliceRow($0, row: row) }
-        return cache
+        guard row >= 0, row < batchSize else { return KVCacheSimple() }
+
+        // Preserve the CONCRETE cache type. Returning a KVCacheSimple here threw
+        // away what the layer actually was, and a hybrid model has layers that
+        // are not KVCacheSimple — so extracting a row and re-merging it later
+        // (which continuous batching does on every insert/remove) failed with
+        // "BatchKVCache cannot combine KVCacheSimple cache layout with existing
+        // ArraysCache layout". That is HybridBatchIntegrationTests'
+        // testHybridFixedStateInsertRemoveExtractMidBatch, and it is why batched
+        // decode for qwen3_5 silently returns no tokens at all under real
+        // concurrency (measured 2026-08-23: both bench cells produced empty
+        // completions with nothing in the server log).
+        var extracted = kvCache.copy()
+        if let arraysCache = extracted as? ArraysCache {
+            // ArraysCache owns its batch-axis slicing and rebuilds its own
+            // metaState as part of it — assigning metaState directly traps
+            // ("should not be set directly. Use restoreFromMetaState() instead"),
+            // and restoreFromMetaState is internal to MLXLMCommon.
+            arraysCache.filter(batchIndices: MLXArray([Int32(row)]))
+        } else {
+            extracted.state = kvCache.state.map { Self.sliceRow($0, row: row) }
+            if row < rowMetaStates.count {
+                extracted.metaState = rowMetaStates[row]
+            }
+        }
+        return extracted
     }
 
     func copyLayer() -> BatchLayerCache {
