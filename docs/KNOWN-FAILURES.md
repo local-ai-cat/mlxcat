@@ -146,6 +146,30 @@ What decided it (all in-tree evidence, not preference):
 The contract is now documented on `ContinuousBatchGenerator.next()` in
 `Sources/MLXCat/TrackB/BatchGenerator.swift`.
 
+## 1c. The memory ceiling is advisory, not enforcing — open
+
+Measured 2026-08-23, gpt-oss-20b at a 16k prompt, M5 Max, with a 24 GiB ceiling
+configured and confirmed applied by the server's own startup line:
+
+```
+memory ceiling: 24.00GB (override); allocator: memoryLimit 24.00GB, cacheLimit 4.00GB
+peak_phys_footprint 30.12 GiB
+```
+
+**25% above the configured ceiling.** `7f6cbb6` bounded the MLX allocator's
+cache — which was a real fix, the same cell peaked at 35.76 GiB before it — but
+`Memory.memoryLimit` governs MLX's caching behaviour, not the process. A
+configured ceiling does not cap `ri_phys_footprint`.
+
+On a Mac that is a slow machine. mlxcat also ships **embedded in an iOS app**,
+where exceeding the budget is a jetsam kill, so "advisory" is the wrong
+guarantee for the platform that matters most.
+
+gpt-oss-20b had no `MEMORY_BUDGETS` entry at all, so nothing was watching the
+worst-behaved model we have. It now has one, set at 32 GiB as a regression bar
+just above today's measurement — explicitly not a target. The target is at or
+under the configured ceiling.
+
 ## 2. Hybrid caches cannot be combined mid-batch — FIXED
 
 `BatchLayerCache.extract` built a fresh `KVCacheSimple` and copied the row's

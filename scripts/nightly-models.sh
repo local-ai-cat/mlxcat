@@ -103,6 +103,21 @@ typeset -A MEMORY_BUDGETS
 MEMORY_BUDGETS=(
   Qwen3.5-4B-MLX-4bit  30064771072   # 28 GiB (measured 25.05 GiB shipping path, no ceiling)
   Qwen3-1.7B-4bit      15032385536   # 14 GiB (scaled from 0.6B's measured 10.52 GiB)
+  # gpt-oss-20b is the model with the worst long-context memory behaviour we
+  # have, and it had no budget at all. Measured 2026-08-23 at 16k on an M5 Max
+  # WITH a 24 GiB ceiling configured and confirmed applied by the server's own
+  # startup line ("memory ceiling: 24.00GB (override); allocator: memoryLimit
+  # 24.00GB, cacheLimit 4.00GB"): peak physical footprint 30.12 GiB.
+  #
+  # That is 25% ABOVE the configured ceiling, which is the real finding —
+  # MLX's memoryLimit bounds its allocator's caching behaviour, not the
+  # process, so a "ceiling" is advisory. On a Mac that is a slow machine; on
+  # iOS, where mlxcat also ships, exceeding the budget is a jetsam kill.
+  #
+  # 32 GiB is set as a REGRESSION bar just above what we measure today, not as
+  # a target. The target is at or under the configured ceiling, and getting
+  # there is open work.
+  gpt-oss-20b-MXFP4-Q8 34359738368   # 32 GiB (measured 30.12 GiB at 16k, ceiling 24 GiB)
 )
 rc_total=0
 for gate in $GATE_ORDER; do
