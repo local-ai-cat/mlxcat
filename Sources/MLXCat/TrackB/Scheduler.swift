@@ -467,6 +467,20 @@ public actor Scheduler {
             asyncEval(admission.cache)
             remainingBudget -= end - admission.nextPrefillIndex
             admission.nextPrefillIndex = end
+            // Copied from mlx-lm's `_prefill` (guest/mlx-lm/mlx_lm/generate.py:579),
+            // which calls `mx.clear_cache()` at the end of every chunk. Each
+            // chunk attends over a longer key range than the last, so no two
+            // chunks allocate the same attention-scratch shape and MLX's buffer
+            // cache can never reuse one — it just accumulates every shape for
+            // the whole prefill. Freeing between chunks is what makes chunked
+            // prefill cheap for them and was the difference from us.
+            //
+            // Only between chunks, and only when chunking: the final chunk's
+            // buffers are about to be reused by decode, and the single-pass path
+            // allocates nothing worth freeing mid-loop.
+            if chunked, admission.nextPrefillIndex < admission.prefillRange.upperBound {
+                Memory.clearCache()
+            }
         }
 
         if admission.nextPrefillIndex < admission.prefillRange.upperBound {

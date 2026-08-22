@@ -110,32 +110,37 @@ MEMORY_BUDGETS=(
   # ever measured whichever 4B `pick_model` returned first and a regression on
   # the models people actually run could not fail it.
   #
-  # All four measured on an M5 Max at 16k, in-process through MLXCatEngine with
-  # no ceiling configured (the same condition as the Qwen3.5-4B entry), on the
-  # path `NativeModelLoader.chunksIdlePrefill` selects for each — the gate reads
-  # model_type off the checkpoint so it cannot drift from what ships:
+  # Measured on an M5 Max at 16k, in-process through MLXCatEngine with no
+  # ceiling configured (the same condition as the Qwen3.5-4B entry). The gate
+  # reads model_type off the checkpoint and asks NativeModelLoader which prefill
+  # path the family takes, so it cannot drift from what ships.
   #
-  #     model                  idle prefill   after load -> peak
-  #     Qwen3-Coder-30B-A3B    single-pass    16.09 -> 24.75 GiB
-  #     gpt-oss-20b            chunked        11.45 -> 25.38 GiB
-  #     gemma-4-12B            chunked        10.34 -> 20.74 GiB
-  #     Qwen3.8-27B            chunked        14.21 -> 39.02 GiB
+  # These fell hard once the per-chunk Memory.clearCache() landed — the one
+  # mlx-lm has always had (guest/mlx-lm/mlx_lm/generate.py:451, :586), which we
+  # simply did not:
   #
-  # gpt-oss's 32 GiB bar came from a 30.12 GiB SERVER measurement taken with a
-  # 24 GiB ceiling — a different condition from the one this gate runs under,
-  # where it measures 35.17 GiB single-pass. Chunked brings it to 25.38, so the
-  # bar drops to 28. The finding that made the old comment worth keeping is
-  # unchanged and lives in docs/KNOWN-FAILURES.md 1c: MLX's memoryLimit bounds
-  # its allocator's caching, not the process, so a "ceiling" is advisory. On a
-  # Mac that is a slow machine; on iOS it is a jetsam kill.
+  #     model                  before   after   peak / loaded weights
+  #     Qwen3.8-27B             53.02   18.90    3.7x -> 1.33x
+  #     gemma-4-12B             34.51   13.42    3.3x -> 1.30x
+  #     gpt-oss-20b             35.17   14.69    3.1x -> 1.28x
+  #     Qwen3-Coder-30B-A3B     24.75   19.71    1.5x -> 1.22x
   #
-  # REGRESSION BARS just above what we measure today, ~9% headroom. They are NOT
-  # targets: every one of these is well above what mlx-lm and omlx measure for
-  # the same model and context, and closing THAT is the actual goal.
-  gpt-oss-20b-MXFP4-Q8              30064771072   # 28 GiB (measured 25.38)
-  Qwen3-Coder-30B-A3B-Instruct-4bit 28991029248   # 27 GiB (measured 24.75)
-  gemma-4-12B-it-qat-4bit           24696061952   # 23 GiB (measured 20.74)
-  Qwen3.8-27B-4bit                  46170898432   # 43 GiB (measured 39.02)
+  # The consistency of the after column is the tell: 1.22-1.33x of loaded weights
+  # across four unrelated architectures, where before it ranged 1.5-3.7x.
+  #
+  # Bars are ~10% above measured. They are REGRESSION bars, not targets — the
+  # target is what mlx-lm and omlx measure for the same model and context, and
+  # `bench/parity.py` is the gate that scores us against them.
+  #
+  # gpt-oss's old 32 GiB bar came from a 30.12 GiB SERVER measurement with a
+  # 24 GiB ceiling — a different condition from this gate's. The finding that
+  # made it worth recording is unchanged and lives in docs/KNOWN-FAILURES.md 1c:
+  # MLX's memoryLimit bounds its allocator's caching, not the process, so a
+  # "ceiling" is advisory. On a Mac that is a slow machine; on iOS a jetsam kill.
+  gpt-oss-20b-MXFP4-Q8              17394617549   # 16.2 GiB (measured 14.69)
+  Qwen3-Coder-30B-A3B-Instruct-4bit 23300074701   # 21.7 GiB (measured 19.71)
+  gemma-4-12B-it-qat-4bit           15852223037   # 14.8 GiB (measured 13.42)
+  Qwen3.8-27B-4bit                  22333829939   # 20.8 GiB (measured 18.90)
 )
 rc_total=0
 

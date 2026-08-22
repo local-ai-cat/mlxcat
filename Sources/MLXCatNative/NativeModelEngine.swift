@@ -1092,32 +1092,30 @@ public struct NativeModelLoader: EnginePoolModelLoader {
     /// Whether an IDLE admission chunks its prefill forward pass.
     ///
     /// Chunking removes a whole-prompt `[1, L, vocab]` logits tensor and its
-    /// full-length attention scratch, and replaces them with per-chunk
-    /// allocations whose shapes do not repeat. Which side wins is not a matter
-    /// of opinion — measured at 16k on an M5 Max, both arms back to back, twice
-    /// each for the disputed row (after-load -> lifetime max peak):
+    /// full-length attention scratch. On its own that was a 26-40% cut on three
+    /// families and a 63% REGRESSION on a fourth, which looked like a trade
+    /// needing a per-family exemption list — and was not. The missing piece was
+    /// read out of the reference rather than benchmarked into existence:
+    /// `mlx-lm` calls `mx.clear_cache()` at the end of every prefill chunk
+    /// (`guest/mlx-lm/mlx_lm/generate.py:451`, `:586`). Each chunk attends over
+    /// a longer key range than the last, so no two allocate the same
+    /// attention-scratch shape and MLX's buffer cache can never reuse one; it
+    /// simply accumulates every shape for the whole prefill. Freeing between
+    /// chunks is what makes chunked prefill cheap for them, and it was the
+    /// entire difference. Measured at 16k on an M5 Max, after load -> peak:
     ///
-    ///     model                  vocab    single-pass   chunked
-    ///     gemma-4-12B           262,144    34.51         20.74   -40%
-    ///     Qwen3.8-27B           248,320    53.02         39.02   -26%
-    ///     gpt-oss-20b           201,088    35.17         25.37   -28%
-    ///     Qwen3-Coder-30B-A3B   151,936    24.75         40.34   +63%
+    ///     model                  single-pass   chunked   chunked+clear
+    ///     Qwen3.8-27B              53.02        39.02      18.90   -64%
+    ///     gemma-4-12B              34.51        20.74      13.42   -61%
+    ///     gpt-oss-20b              35.17        25.37      14.69   -58%
+    ///     Qwen3-Coder-30B-A3B      24.75        40.34      19.71   -20%
     ///
-    /// Three families win by 26-40% and one loses by 63%, so this defaults ON
-    /// with a measured exemption rather than either shipping the regression or
-    /// throwing the win away.
-    ///
-    /// Two tempting explanations for the outlier are both DISPROVEN, so do not
-    /// re-derive them: it is not "MoE" (gpt-oss is MoE and wins by 28%), and it
-    /// is not vocabulary alone (the three winners save ~0.05 GiB per 1k of
-    /// vocab, which predicts an 8 GiB SAVING for this model). What is actually
-    /// unusual is its single-pass arm: every other family peaks at 3.1-3.7x its
-    /// loaded weights on that path and this one peaks at 1.5x, while all four
-    /// land at 2.0-2.7x when chunked. Its single-pass path is anomalously cheap
-    /// — smallest vocab AND the narrowest KV geometry on the board (head_dim
-    /// 128 x 4 KV heads, against gemma-4-12B's 256 x 8) — not its chunked path
-    /// anomalously dear. A rule that computes the crossover from vocab and KV
-    /// width would replace this list; nobody has derived one yet.
+    /// Every family wins, so `singlePassPrefillModelTypes` is EMPTY. It is kept
+    /// rather than deleted because the mechanism that would refill it is
+    /// understood: a family whose chunked scratch cannot be freed between chunks
+    /// would belong here. Peak is now 1.22-1.33x loaded weights across all four,
+    /// against 1.5-3.7x before — the consistency is the tell that this addressed
+    /// the mechanism and not a symptom.
     ///
     /// `MLXCAT_SINGLE_PASS_PREFILL_MODEL_TYPES` overrides the list (`all` for
     /// every family) so the benchmark can A/B it without a rebuild.
@@ -1139,10 +1137,9 @@ public struct NativeModelLoader: EnginePoolModelLoader {
     }
 
     /// Families measured to peak HIGHER with a chunked idle prefill than with a
-    /// single whole-prompt pass. See `chunksIdlePrefill` for the numbers.
-    private static let singlePassPrefillModelTypes: Set<String> = [
-        "qwen3_moe",
-    ]
+    /// single whole-prompt pass. Empty since the per-chunk `Memory.clearCache()`
+    /// landed — see `chunksIdlePrefill` for the numbers that emptied it.
+    private static let singlePassPrefillModelTypes: Set<String> = []
 
     private static let batchDecodeWidthCeilings: [String: Int] = [
         "qwen3_moe": 2,

@@ -205,16 +205,20 @@ final class SerializationOverrideTests: XCTestCase {
 /// a preference — see `NativeModelLoader.chunksIdlePrefill` for the four-model
 /// table it comes from.
 final class IdlePrefillChunkingTests: XCTestCase {
-    func testChunkingIsTheDefaultAndTheExemptionIsMeasured() {
+    func testEveryFamilyChunksNowThatBuffersAreFreedBetweenChunks() {
         let none: [String: String] = [:]
-        // The three families measured to win by 26-40%.
-        XCTAssertTrue(NativeModelLoader.chunksIdlePrefill(modelType: "gemma4_unified", environment: none))
-        XCTAssertTrue(NativeModelLoader.chunksIdlePrefill(modelType: "qwen3_5", environment: none))
-        XCTAssertTrue(NativeModelLoader.chunksIdlePrefill(modelType: "gpt_oss", environment: none))
-        // The one measured to lose by 63%.
-        XCTAssertFalse(NativeModelLoader.chunksIdlePrefill(modelType: "qwen3_moe", environment: none))
-        // An unmeasured family gets the default, not the exemption.
-        XCTAssertTrue(NativeModelLoader.chunksIdlePrefill(modelType: "muse_glimmer", environment: none))
+        // qwen3_moe was the one family that peaked HIGHER chunked (+63%), which
+        // is why an exemption list exists at all. Adding the per-chunk
+        // Memory.clearCache() that mlx-lm has always had
+        // (guest/mlx-lm/mlx_lm/generate.py:451) took it to 19.71 GiB — below
+        // even its single-pass 24.75 — so the list is empty and nothing is
+        // exempt. If this ever fails, a family regressed and the list is how to
+        // park it while the cause is found.
+        for modelType in ["gemma4_unified", "qwen3_5", "gpt_oss", "qwen3_moe", "muse_glimmer"] {
+            XCTAssertTrue(
+                NativeModelLoader.chunksIdlePrefill(modelType: modelType, environment: none),
+                modelType)
+        }
     }
 
     func testTheOverrideCanFlipAnyFamilyForABenchmarkArm() {
@@ -223,9 +227,8 @@ final class IdlePrefillChunkingTests: XCTestCase {
             NativeModelLoader.chunksIdlePrefill(
                 modelType: "gpt_oss",
                 environment: ["MLXCAT_SINGLE_PASS_PREFILL_MODEL_TYPES": "gpt_oss"]))
-        // ...and, because the override REPLACES the list rather than adding to
-        // it, naming a different family lifts the built-in exemption. That is
-        // what makes an A/B of the exemption itself possible.
+        // ...and naming a different family leaves this one chunking, so a bench
+        // arm can put exactly one family on the single-pass path.
         XCTAssertTrue(
             NativeModelLoader.chunksIdlePrefill(
                 modelType: "qwen3_moe",

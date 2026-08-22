@@ -65,6 +65,43 @@ already have. Useful flags: `--memory-ceiling-bytes`, `--max-concurrent-requests
 The host app embeds `MLXCatNative` directly (same process, same loaded weights —
 no sidecar) on macOS **and iOS**. Pin by revision; the API is pre-1.0.
 
+## We read the competition, on purpose
+
+mlxcat exists because Local AI Cat needs one thing none of the engines below can
+give it: **all-Swift serving that runs unchanged on macOS and inside an iPhone
+app** — no Python runtime, no sidecar process, no separate iOS story. That
+constraint is the reason to write an engine. It is not a reason to invent
+mechanisms that already exist and work.
+
+So the reference engines are checked out under `guest/` and **read**, and where
+one of them does something better we take the mechanism and say where it came
+from. Every such place carries a `guest/<repo>/<path>:<line>` citation in the
+comment, so the claim is checkable and so the next person can go read the
+original rather than re-deriving it:
+
+| watched | what it is | why we read it |
+|---|---|---|
+| [`mlx-lm`](https://github.com/ml-explore/mlx-lm) | Apple's Python reference | the semantics of prefill, sampling and cache handling — the closest thing to a spec |
+| [`omlx`](https://github.com/jundot/omlx) | Python serving stack | serving architecture, engine pooling, MLX stream isolation |
+| `mlx-serve` | Zig server | the fastest single-stream numbers on our board |
+| [`vllm`](https://github.com/vllm-project/vllm) / `vllm-mlx` | the batching literature | continuous batching, chunked prefill, admission budgets |
+| [`ollama`](https://github.com/ollama/ollama) | the UX bar | model management and API surface expectations |
+| [`mlx-swift-lm`](https://github.com/ml-explore/mlx-swift-lm) | the Swift model layer | what we build on; also the floor we must not fall under |
+
+Two things keep this honest rather than aspirational:
+
+- **`bench/parity.py --check`** scores every mlxcat cell against the best OTHER
+  engine measured on the same device, model, context and concurrency, and fails
+  when we lose ground. It is the only gate here that can go red because a
+  competitor is better — every other one compares mlxcat to its own past, which
+  is how a suite stays green while losing.
+- **`docs/PARITY-LEDGER.md`** records mechanism by mechanism what each reference
+  does, what we do, and whether that is a gap or a deliberate difference — with
+  the citations verified in CI so they cannot rot as the clones move.
+
+Not affiliated with any of these projects. Apache-2.0 where we have taken an
+approach; see `NOTICE`.
+
 ## Performance — the leaderboard
 
 [`LEADERBOARD.md`](LEADERBOARD.md) is generated from raw JSONL in
