@@ -29,7 +29,54 @@ MLXSERVE_HYBRID_TEST_MODEL=$R/Qwen3.5-4B-MLX-4bit \
 
 ---
 
-## 1. Batched decode diverges from serial past the sliding window — the serious one
+## 1. Batched decode diverges from serial — and it is not the sliding window
+
+**Resolved to a cause on 2026-08-22. Read this section before acting on the raw
+failure below.**
+
+The gate is named "beyond window" and was written for gpt-oss-20b, whose sliding
+window is 128 — but `scripts/nightly-models.sh` wired
+`MLXSERVE_SLIDING_TEST_MODEL` to gemma-4-E2B, whose window is **512**. The gate
+generates 160 tokens from a ~15-token prompt, so at ~175 total context the window
+was never crossed. For its entire life this has been an ordinary
+batched-vs-serial comparison wearing a sliding-window test's name.
+
+Measured:
+
+| probe | result |
+|---|---|
+| gpt-oss-20b (window 128), same gate | **passes**, genuinely crossing its window |
+| gemma-4 width-1 batch vs serial | 0 mismatches |
+| gemma-4, 2 ragged rows, 24 steps | 0 mismatches |
+| gemma-4, 2 **identical** rows, 64 steps | 27 mismatches each |
+
+So: the sliding-window machinery is sound, the defect is not raggedness, and it
+accumulates with generation length — the signature of floating-point noise
+amplified by greedy argmax, not a logic error. `GemmaBatchDivergenceProbeTests`
+keeps those probes.
+
+What settles it is the logit level, and that gate had never been run here.
+`BatchInvarianceTests` compares logits and only asserts token equality where the
+top-1/top-2 margin is wide — and it was **hard-pinned to Qwen3-0.6B-4bit**, a
+model on neither exclusion list. The exclusion and its evidence had never
+intersected. Lifting the pin (`MLXCAT_BATCH_INVARIANCE_MODELS`):
+
+| model | batch 2 / 4 / 8 maxLogitError | mismatched | on the exclusion list? |
+|---|---|---|---|
+| gemma-4-E2B | 0.69 / 0.69 / 0.95 | 0 | **yes** |
+| Qwen3.5-4B | 0.0 / 0.38 / 0.66 | 0 | **yes** |
+| Qwen3-0.6B | 0.0 / 1.19 / 1.19 | 0 | no — the pinned reference |
+
+Both excluded families are cleaner than the model the gate was pinned to, well
+under the 1.25 tolerance. `MLXCAT_UNSERIALIZE_MODEL_TYPES` and the
+`mlxcat-batched` bench arm exist to A/B what lifting them buys on real workloads.
+
+Two follow-ups landed with this: the gate now **fails loudly** when the model's
+window is wider than the context it generates, rather than passing vacuously; and
+`nightly-models.sh` prefers gpt-oss-20b for the sliding gate and runs
+cross-family invariance so the exclusions have to be re-earned.
+
+### The raw failure, for reference
 
 `SlidingWindowBatchIntegrationTests.testSlidingWindowBatchMatchesSerialBeyondWindow`
 (gemma-4-E2B), 3 tests / 5 failures:

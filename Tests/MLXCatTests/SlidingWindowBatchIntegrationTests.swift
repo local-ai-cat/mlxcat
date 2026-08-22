@@ -6,6 +6,29 @@ import Tokenizers
 import XCTest
 
 final class SlidingWindowBatchIntegrationTests: XCTestCase {
+
+    /// Fails loudly when the configured model's sliding window is wider than the
+    /// context this gate generates — the gate would otherwise pass or fail for
+    /// reasons that have nothing to do with a sliding window.
+    static func requireWindowIsActuallyCrossed(modelPath: String, steps: Int) throws {
+        let configURL = URL(fileURLWithPath: modelPath).appendingPathComponent("config.json")
+        guard let data = try? Data(contentsOf: configURL),
+            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            throw XCTSkip("could not read config.json at \(configURL.path)")
+        }
+        let text = (root["text_config"] as? [String: Any]) ?? root
+        guard let window = (text["sliding_window"] ?? root["sliding_window"]) as? Int else {
+            throw XCTSkip("\(URL(fileURLWithPath: modelPath).lastPathComponent) declares no sliding_window")
+        }
+        XCTAssertLessThan(
+            window, steps,
+            """
+            \(URL(fileURLWithPath: modelPath).lastPathComponent) has sliding_window=\(window) but             this gate only generates \(steps) tokens, so the window is never crossed and the gate             does not test what it is named for. Point MLXSERVE_SLIDING_TEST_MODEL at a model with a             smaller window (gpt-oss-20b is 128) or raise the step count above \(window).
+            """
+        )
+    }
+
     func testSlidingWindowBatchMatchesSerialGreedyTokens() async throws {
         try MLXMetalRuntime.requireAvailable()
 
@@ -116,9 +139,17 @@ final class SlidingWindowBatchIntegrationTests: XCTestCase {
             using: #huggingFaceTokenizerLoader()
         )
 
+        // A check that cannot fail is not a check. This gate is named "beyond
+        // window" and was written for gpt-oss-20b, whose window is 128 — but
+        // scripts/nightly-models.sh wires MLXSERVE_SLIDING_TEST_MODEL to
+        // gemma-4-E2B, whose window is 512. At ~175 total tokens the window never
+        // engaged, so for its entire life this gate has been an ordinary
+        // batched-vs-serial comparison wearing a sliding-window test's name.
+        // Measured 2026-08-22: gpt-oss-20b PASSES it while genuinely crossing its
+        // window, and gemma-4-E2B fails it without ever reaching one.
+        try Self.requireWindowIsActuallyCrossed(modelPath: modelPath, steps: 160)
+
         try await container.perform { context in
-            // gpt-oss uses slidingWindow=128; 160 decode steps force the batch
-            // mask to restrict single-token decode after the window is exceeded.
             let tokenCount = 160
             let parameters = GenerateParameters(maxTokens: tokenCount, temperature: 0)
             let prompts = [

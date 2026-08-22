@@ -26,7 +26,11 @@ typeset -A GATE_CANDIDATES
 GATE_CANDIDATES=(
   MLXSERVE_TEST_MODEL          "Qwen3-0.6B-4bit Qwen3-1.7B-4bit Llama-3.2-1B-Instruct-4bit"
   MLXSERVE_HYBRID_TEST_MODEL   "Qwen3.5-4B-MLX-4bit Qwen3.8-27B-4bit"
-  MLXSERVE_SLIDING_TEST_MODEL  "gemma-4-E2B-it-qat-4bit gemma-4-E4B-it-qat-4bit"
+  # gpt-oss-20b FIRST: its sliding_window is 128, so the gate's 160 decode steps
+  # actually cross it. gemma-4's window is 512 and the gate never reached it —
+  # for its whole life this was a batched-vs-serial test wearing a window test's
+  # name. The suite now fails loudly rather than run vacuously (2026-08-22).
+  MLXSERVE_SLIDING_TEST_MODEL  "gpt-oss-20b-MXFP4-Q8 gemma-4-E2B-it-qat-4bit gemma-4-E4B-it-qat-4bit"
   MLXSERVE_MOE_TEST_MODEL      "Qwen3-Coder-30B-A3B-Instruct-4bit Qwen3.6-35B-A3B-4bit gpt-oss-20b-MXFP4-Q8"
   MLXSERVE_VLM_TEST_MODEL      "Qwen2-VL-2B-Instruct-4bit gemma-4-E2B-it-qat-4bit"
   MLXSERVE_RERANK_TEST_MODEL   "bge-reranker-v2-m3-4bit mxbai-rerank-base-v1"
@@ -42,6 +46,20 @@ GATE_FILTERS=(
   MLXSERVE_VLM_TEST_MODEL      "ModelCacheCapabilitiesTests|ModelDiscoveryTests"
   MLXSERVE_RERANK_TEST_MODEL   "RerankTests"
   MLXCAT_MEMORY_BUDGET_MODEL   "MemoryBudgetTests"
+)
+
+# Cross-family batch invariance is not gated on ONE model — it takes a list, and
+# the list is the point. NativeModelLoader.usesSerializedDecode turns batched
+# decode off for gemma4, gemma4_unified, qwen3_5, qwen3_vl, mistral3, qwen2,
+# qwen3 and qwen3_moe, and until 2026-08-22 the gate that would justify those
+# exclusions was pinned to Qwen3-0.6B-4bit — a model on neither list. Run this
+# and the exclusions have to be re-earned against real numbers.
+INVARIANCE_MODELS=(
+  Qwen3.5-4B-MLX-4bit
+  gemma-4-E2B-it-qat-4bit
+  gemma-4-12B-it-qat-4bit
+  Qwen3-Coder-30B-A3B-Instruct-4bit
+  gpt-oss-20b-MXFP4-Q8
 )
 GATE_ORDER=(MLXSERVE_TEST_MODEL MLXSERVE_HYBRID_TEST_MODEL MLXSERVE_SLIDING_TEST_MODEL MLXSERVE_VLM_TEST_MODEL MLXSERVE_RERANK_TEST_MODEL MLXCAT_MEMORY_BUDGET_MODEL MLXSERVE_MOE_TEST_MODEL)
 
@@ -138,6 +156,37 @@ for gate in $GATE_ORDER; do
     echo "| $gate | ${model:t} | \`$filter\` | **FAIL** (rc=$rc, $failures assertion error line(s)) — $summary — see ${log:t} |" >> "$OUT"
   fi
 done
+# --- cross-family batch invariance ------------------------------------------ #
+present=()
+for m in "${INVARIANCE_MODELS[@]}"; do
+  [[ -d "$ROOT/$m" ]] && present+=("$ROOT/$m")
+done
+if (( ${#present[@]} )); then
+  wait_for_memory
+  inv_log="$REPO_ROOT/.build/nightly-batch-invariance.log"
+  echo "▶ batch invariance across ${#present[@]} model(s)"
+  MLXCAT_BATCH_INVARIANCE_MODELS="${(j:,:)present}"     swift test --skip-build --filter testBatchInvarianceAcrossModelFamilies > "$inv_log" 2>&1
+  inv_rc=$?
+  echo "" >> "$OUT"
+  echo "### batch invariance by family" >> "$OUT"
+  echo "" >> "$OUT"
+  echo '```' >> "$OUT"
+  grep -E "^FAMILY" "$inv_log" >> "$OUT" || echo "(no FAMILY lines — the filter matched nothing)" >> "$OUT"
+  echo '```' >> "$OUT"
+  if (( inv_rc != 0 )); then
+    (( rc_total++ ))
+    echo "" >> "$OUT"
+    echo "**A family failed batch invariance — see ${inv_log:t}.**" >> "$OUT"
+  elif ! grep -q "^FAMILY" "$inv_log"; then
+    (( rc_total++ ))
+    echo "" >> "$OUT"
+    echo "**No families were checked — a gate that runs nothing is not a pass.**" >> "$OUT"
+  fi
+else
+  echo "" >> "$OUT"
+  echo "_batch invariance skipped: none of ${INVARIANCE_MODELS[*]} are under \`$ROOT\`_" >> "$OUT"
+fi
+
 echo "" >> "$OUT"
 echo "_root: $ROOT · host: $(sysctl -n hw.model) $(sysctl -n machdep.cpu.brand_string) · load $(sysctl -n vm.loadavg)_" >> "$OUT"
 cat "$OUT"
