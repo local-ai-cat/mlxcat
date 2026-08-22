@@ -74,6 +74,52 @@ final class SerializationOverrideTests: XCTestCase {
         XCTAssertFalse(NativeModelLoader.usesSerializedDecode(modelType: "qwen3_moe", isVLM: false, overrides: overrides))
     }
 
+    func testGemmaBatchesTextAndSerializesImages() {
+        // The whole point of the narrower policy: gemma-4's text rows batch (50x
+        // TTFT at c4) while its ragged image rows keep the batch to themselves.
+        let none: Set<String> = []
+        XCTAssertEqual(
+            NativeModelLoader.serializationPolicy(modelType: "gemma4", isVLM: true, overrides: none),
+            .multimodalOnly)
+        XCTAssertEqual(
+            NativeModelLoader.serializationPolicy(modelType: "gemma4_unified", isVLM: true, overrides: none),
+            .multimodalOnly)
+    }
+
+    func testFamiliesWithoutBothGatesStayFullySerialized() {
+        let none: Set<String> = []
+        // qwen3_5: lifting it was MEASURED and returns no tokens at all over a
+        // hybrid cache, so it is not a candidate for the narrower policy.
+        XCTAssertEqual(
+            NativeModelLoader.serializationPolicy(modelType: "qwen3_5", isVLM: true, overrides: none),
+            .always)
+        // the regression list is a throughput claim, not a correctness one, and
+        // has not been re-measured — it stays blunt until it is.
+        XCTAssertEqual(
+            NativeModelLoader.serializationPolicy(modelType: "qwen3_moe", isVLM: false, overrides: none),
+            .always)
+        XCTAssertEqual(
+            NativeModelLoader.serializationPolicy(modelType: "gpt_oss", isVLM: false, overrides: none),
+            .never)
+    }
+
+    func testATextOnlyGemmaDeploymentIsNotSerialized() {
+        // isVLM is decided by the model directory, not the request. A gemma4
+        // checkpoint always reports true, which is why "capability" was the wrong
+        // axis to serialize on in the first place.
+        XCTAssertEqual(
+            NativeModelLoader.serializationPolicy(modelType: "gemma4", isVLM: false, overrides: []),
+            .never)
+    }
+
+    func testMultimodalOnlyGivesImageRowsSolitudeAndBatchesText() {
+        let text = Request(
+            uid: "text", input: .init(text: .init(tokens: MLXArray([Int32(1)]))), maxTokens: 4)
+        XCTAssertFalse(SerializationPolicy.multimodalOnly.requiresSolitude(text))
+        XCTAssertFalse(SerializationPolicy.never.requiresSolitude(text))
+        XCTAssertTrue(SerializationPolicy.always.requiresSolitude(text))
+    }
+
     func testParsingIsWhitespaceAndCaseTolerant() {
         let parsed = NativeModelLoader.serializationOverrides(
             ["MLXCAT_UNSERIALIZE_MODEL_TYPES": " Gemma4 , QWEN3_5 ,, "])

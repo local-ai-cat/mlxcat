@@ -369,6 +369,105 @@ final class SchedulerEngineTests: XCTestCase {
         }
     }
 
+    /// Batched-vs-serial token equality **with images**, across VLM families.
+    ///
+    /// `testVLMConcurrentImageRequestsBothComplete` already does exactly this
+    /// check — and is pinned to `qwen2_vl`. That pin is why the gemma-4 batching
+    /// unlock is stuck: lifting `gemma4` off `scalarOffsetVLMModelTypes` is worth
+    /// 50x TTFT and 2.17x aggregate throughput at c4 (`docs/COMPETITIVE.md`), the
+    /// text evidence is unambiguous, and the exclusion's stated cause is MRoPE
+    /// position ids derived from a scalar `cache.offset` — an **image** concern
+    /// that no text measurement can speak to.
+    ///
+    /// So the pin is lifted here as an opt-in, leaving the pinned gate's meaning
+    /// untouched. This is the gate that decides whether the unlock ships.
+    ///
+    ///     MLXCAT_VLM_BATCH_MODELS=$R/gemma-4-E2B-it-qat-4bit \
+    ///       swift test --filter testVLMBatchEqualityAcrossModels
+    func testVLMBatchEqualityAcrossModels() async throws {
+        try MLXMetalRuntime.requireAvailable()
+
+        let raw = ProcessInfo.processInfo.environment["MLXCAT_VLM_BATCH_MODELS"] ?? ""
+        let paths = raw.split(separator: ",").map(String.init).filter { !$0.isEmpty }
+        guard !paths.isEmpty else {
+            throw XCTSkip("Set MLXCAT_VLM_BATCH_MODELS to a comma-separated list of VLM directories.")
+        }
+
+        var failures: [String] = []
+        for path in paths {
+            let url = URL(fileURLWithPath: path)
+            let name = url.lastPathComponent
+            let container = try await VLMModelFactory.shared.loadContainer(
+                from: url, using: #huggingFaceTokenizerLoader())
+
+            let modelFailures: [String] = try await container.perform { context in
+                var found: [String] = []
+                let eosTokenIds = Self.eosTokenIds(context: context)
+                // Different image sizes on purpose: equal-sized inputs would make
+                // every per-row quantity uniform and hide exactly the ragged-batch
+                // failure this gate exists to catch.
+                let inputs = try await [
+                    Self.testImage(width: 96, height: 96),
+                    Self.testImage(width: 160, height: 112),
+                    Self.testImage(width: 112, height: 160),
+                ].mapAsync { image in
+                    try await context.processor.prepare(
+                        input: UserInput(prompt: "Describe the image briefly.", images: [image]))
+                }
+                let parameters = GenerateParameters(maxTokens: 24, temperature: 0)
+                let requests = inputs.enumerated().map { index, input in
+                    Request(
+                        uid: "vlm-\(index)", input: input,
+                        maxTokens: parameters.maxTokens ?? 24,
+                        sampling: SamplingParameters(temperature: 0),
+                        eosTokenIds: eosTokenIds)
+                }
+
+                var serial: [[Int]] = []
+                for request in requests {
+                    let serialEngine = MLXCatEngine(
+                        model: context.model, parameters: parameters, maxConcurrentRequests: 1)
+                    serial.append(try await serialEngine.generate([request])[request.uid, default: []])
+                }
+
+                // `.never` is the capability question — CAN these rows share a
+                // batch? `.multimodalOnly` is the shipping question — does the
+                // policy that unlocks gemma-4's text batching still keep the
+                // image path exact? Only the second one is allowed to fail the
+                // gate; the first is recorded so the reason for the policy stays
+                // visible in the output rather than living only in a comment.
+                for policy in [SerializationPolicy.never, .multimodalOnly] {
+                    let batchedEngine = MLXCatEngine(
+                        model: context.model, parameters: parameters,
+                        maxConcurrentRequests: requests.count, serializationPolicy: policy)
+                    let batched = try await batchedEngine.generate(requests)
+
+                    for index in requests.indices {
+                        let uid = "vlm-\(index)"
+                        let got = batched[uid, default: []]
+                        let want = serial[index]
+                        let nonEOS = got.filter { !eosTokenIds.contains($0) }
+                        let ok = got == want && nonEOS.count > 1
+                        print(
+                            "VLMBATCH \(ok ? "OK  " : "FAIL") \(name) policy=\(policy) \(uid) "
+                                + "batched=\(got.count) serial=\(want.count) nonEOS=\(nonEOS.count)")
+                        if !ok, policy == .multimodalOnly {
+                            found.append(
+                                "\(name) \(uid) under \(policy): batched \(got.prefix(8))... "
+                                    + "vs serial \(want.prefix(8))...")
+                        }
+                    }
+                }
+                return found
+            }
+            failures.append(contentsOf: modelFailures)
+        }
+        XCTAssertTrue(
+            failures.isEmpty,
+            "VLM families failing batched-vs-serial equality with images:\n"
+                + failures.joined(separator: "\n"))
+    }
+
     private static func evaluateEngineGate(
         context: ModelContext,
         prompts: [String]

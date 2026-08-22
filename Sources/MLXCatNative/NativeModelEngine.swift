@@ -28,7 +28,7 @@ public final class NativeModelEngine: @unchecked Sendable {
         maxContextTokens: Int?,
         maxConcurrentRequests: Int,
         cacheCapabilities: ModelCacheCapabilities,
-        serializedDecode: Bool,
+        serializationPolicy: SerializationPolicy,
         schedulerManagedTextPrefill: Bool
     ) {
         self.context = context
@@ -43,7 +43,7 @@ public final class NativeModelEngine: @unchecked Sendable {
             maxConcurrentRequests: maxConcurrentRequests,
             prefixStore: prefixStore,
             cacheCapabilities: cacheCapabilities,
-            serializedDecode: serializedDecode,
+            serializationPolicy: serializationPolicy,
             schedulerManagedTextPrefill: schedulerManagedTextPrefill
         )
         var eosTokenIds = context.configuration.eosTokenIds
@@ -711,7 +711,7 @@ public struct NativeModelLoader: EnginePoolModelLoader {
                 maxContextTokens: try? contextWindow(in: modelURL),
                 maxConcurrentRequests: maxConcurrentRequests,
                 cacheCapabilities: Self.cacheCapabilities(for: modelConfiguration),
-                serializedDecode: Self.usesSerializedDecode(modelType: modelType, isVLM: isVLM),
+                serializationPolicy: Self.serializationPolicy(modelType: modelType, isVLM: isVLM),
                 schedulerManagedTextPrefill: !isVLM
             )
         }
@@ -793,13 +793,50 @@ public struct NativeModelLoader: EnginePoolModelLoader {
         isVLM: Bool,
         overrides: Set<String> = serializationOverrides()
     ) -> Bool {
+        serializationPolicy(modelType: modelType, isVLM: isVLM, overrides: overrides) != .never
+    }
+
+    /// How much batching a family may do.
+    ///
+    /// The scalar-offset families were treated as "never batch", which protects
+    /// the image path by disabling batching for text chat as well. That is most
+    /// of the cost: on gemma-4-E2B, serialising everything is 50x TTFT and 2.17x
+    /// aggregate throughput at c4 (`docs/COMPETITIVE.md`), and its text rows are
+    /// exact against serial and pass logit invariance more cleanly than the model
+    /// the gate was pinned to. Its ragged IMAGE rows genuinely do break — all
+    /// three rows stop at the same early token — so those keep the batch to
+    /// themselves and nothing else does.
+    ///
+    /// `batchDecodeRegressedModelTypes` stays `.always`: that list is a
+    /// throughput claim, not a correctness one, and it has not been re-measured.
+    /// Lifting `qwen3_5` was measured and is wrong — batched decode over its
+    /// hybrid cache returns no tokens at all.
+    static func serializationPolicy(
+        modelType: String,
+        isVLM: Bool,
+        overrides: Set<String> = serializationOverrides()
+    ) -> SerializationPolicy {
         let normalizedModelType = modelType.lowercased()
         if overrides.contains("all") || overrides.contains(normalizedModelType) {
-            return false
+            return .never
         }
-        let requiresScalarOffsets = isVLM && scalarOffsetVLMModelTypes.contains(normalizedModelType)
-        return requiresScalarOffsets || batchDecodeRegressedModelTypes.contains(normalizedModelType)
+        if batchDecodeRegressedModelTypes.contains(normalizedModelType) {
+            return .always
+        }
+        if isVLM, scalarOffsetVLMModelTypes.contains(normalizedModelType) {
+            return multimodalOnlyModelTypes.contains(normalizedModelType) ? .multimodalOnly : .always
+        }
+        return .never
     }
+
+    /// Scalar-offset families whose TEXT rows are proven safe to batch, so only
+    /// their multimodal rows are serialized. Entry here requires both gates:
+    /// `BatchInvarianceTests.testBatchInvarianceAcrossModelFamilies` (logits) and
+    /// `SchedulerEngineTests.testVLMBatchEqualityAcrossModels` (images).
+    private static let multimodalOnlyModelTypes: Set<String> = [
+        "gemma4",
+        "gemma4_unified",
+    ]
 
     private static func cacheCapabilities(for configuration: ModelKindConfiguration) -> ModelCacheCapabilities {
         ModelCacheCapabilities(

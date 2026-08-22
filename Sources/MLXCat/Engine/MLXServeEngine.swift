@@ -11,6 +11,7 @@ public final class MLXCatEngine: @unchecked Sendable {
         prefixStore: (any PrefixKVStore)? = nil,
         cacheCapabilities: ModelCacheCapabilities = .default,
         serializedDecode: Bool = false,
+        serializationPolicy: SerializationPolicy? = nil,
         schedulerManagedTextPrefill: Bool = true,
         pressurePolicy: Scheduler.PressurePolicy = .disabled,
         speculativeDecoding: SpeculativeDecodingConfiguration = SpeculativeDecodingConfiguration()
@@ -22,6 +23,7 @@ public final class MLXCatEngine: @unchecked Sendable {
             prefixStore: prefixStore,
             cacheCapabilities: cacheCapabilities,
             serializedDecode: serializedDecode,
+            serializationPolicy: serializationPolicy,
             schedulerManagedTextPrefill: schedulerManagedTextPrefill,
             pressurePolicy: pressurePolicy,
             speculativeDecoding: speculativeDecoding

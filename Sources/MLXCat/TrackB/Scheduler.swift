@@ -40,7 +40,7 @@ public actor Scheduler {
     private let queueLimit: Int
     private let prefixStore: (any PrefixKVStore)?
     private let prefixCacheEnabled: Bool
-    private let serializedDecode: Bool
+    private let serializationPolicy: SerializationPolicy
     private let schedulerManagedTextPrefill: Bool
     private let pressurePolicy: PressurePolicy
     private var waiting: [Request] = []
@@ -58,6 +58,7 @@ public actor Scheduler {
         prefixStore: (any PrefixKVStore)? = nil,
         cacheCapabilities: ModelCacheCapabilities = .default,
         serializedDecode: Bool = false,
+        serializationPolicy: SerializationPolicy? = nil,
         schedulerManagedTextPrefill: Bool = true,
         pressurePolicy: PressurePolicy = .disabled,
         speculativeDecoding: SpeculativeDecodingConfiguration = SpeculativeDecodingConfiguration()
@@ -73,7 +74,7 @@ public actor Scheduler {
         self.queueLimit = max(maxConcurrentRequests * 4, 32)
         self.prefixStore = prefixStore
         self.prefixCacheEnabled = prefixStore != nil && !cacheCapabilities.usesWindowedKVCache
-        self.serializedDecode = serializedDecode
+        self.serializationPolicy = serializationPolicy ?? (serializedDecode ? .always : .never)
         self.schedulerManagedTextPrefill = schedulerManagedTextPrefill
         self.pressurePolicy = pressurePolicy
     }
@@ -236,10 +237,30 @@ public actor Scheduler {
         var admittedResponses: [Response] = []
         while running.count < maxConcurrentRequests {
             // Some model architectures still derive RoPE position ids or
-            // shared-KV offsets from scalar cache.offset. Their loaders pass
-            // serializedDecode=true so mixed-offset rows are not admitted into
-            // the same decode batch.
-            if serializedDecode, !running.isEmpty || !generator.isEmpty || !admittedResponses.isEmpty {
+            // shared-KV offsets from scalar cache.offset, so mixed-offset rows
+            // must not share a decode batch.
+            //
+            // `.always` is the blunt version of that and it is expensive: on
+            // gemma-4-E2B it costs 50x TTFT and 2.17x aggregate throughput at c4
+            // (`docs/COMPETITIVE.md`). `.multimodalOnly` is the same protection
+            // aimed at the rows that actually need it — a request carrying
+            // images, video or audio has a token count that varies per row, and
+            // that is what the scalar offset gets wrong. Text rows of these same
+            // families batch correctly: they pass logit-level invariance more
+            // cleanly than the model the gate was pinned to, and pass
+            // batched-vs-serial token equality. Ragged IMAGE rows do not — all
+            // three rows stop at the same early token (measured 2026-08-23).
+            let busy = !running.isEmpty || !generator.isEmpty || !admittedResponses.isEmpty
+            // Computed from `running`, not tracked alongside it: RunningRequest
+            // retains its Request, so there is no second copy of this state to
+            // drift out of sync on a cancel or an error path.
+            if busy, serializationPolicy.requiresSolitude(anyRunning: running.values.map(\.request)) {
+                return admittedResponses
+            }
+            if busy, let next = waiting.first, serializationPolicy.requiresSolitude(next) {
+                // A row that needs solitude waits for the batch to drain rather
+                // than joining it. Head-of-line blocking is deliberate: admitting
+                // it out of order would starve it behind an unbounded text stream.
                 return admittedResponses
             }
 
