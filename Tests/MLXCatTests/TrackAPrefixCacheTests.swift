@@ -231,6 +231,19 @@ final class TrackAPrefixCacheTests: XCTestCase {
             prefixTokens.append(contentsOf: seedTokens)
         }
         prefixTokens = Array(prefixTokens.prefix(blockSize))
+        // The gate only compares tokens where the model is confident enough that
+        // a flip means something: `margin > logitError * 4`. Reconstruct error on
+        // a 4-bit 0.6B model runs ~1.0-1.75 (its batch-invariance tolerance is
+        // 1.25 for the same reason), so that threshold lands around 4-7 and most
+        // continuations do not clear it. With ten candidates exactly ONE
+        // qualified and the gate failed needing two — measured 2026-08-23, with
+        // #3 missing by 0.001 (margin 6.0 against a 6.001 threshold).
+        //
+        // The answer is more candidates, not a looser rule. Widening the pool
+        // gives the gate more chances to find a confident continuation; lowering
+        // the multiplier would change what a pass means. Kept deliberately
+        // varied — factual completions, list openers, code, and punctuation —
+        // since near-deterministic continuations are the ones with wide margins.
         let candidateSuffixes = try await [
             " The answer is",
             " Therefore",
@@ -242,6 +255,20 @@ final class TrackAPrefixCacheTests: XCTestCase {
             " because",
             " once",
             " list",
+            " The capital of France is",
+            " Swift concurrency protects",
+            " GPU kernels execute matrix",
+            " The capital",
+            " matrix operations",
+            " shared",
+            " concurrency",
+            " kernels",
+            " operations quickly",
+            " protects shared state",
+            " France",
+            " quickly",
+            " is Paris",
+            " executes",
         ].mapAsync { text in
             try await tokenIDs(for: text, context: context, parameters: parameters)
         }
@@ -263,6 +290,17 @@ final class TrackAPrefixCacheTests: XCTestCase {
                 suffixTokens: suffix,
                 parameters: parameters
             )
+            if ProcessInfo.processInfo.environment["MLXSERVE_DEBUG_PREFIX_GATE"] == "1" {
+                // Per-branch, because the aggregate cannot distinguish the two
+                // ways this gate fails: a reconstruct that is inaccurate (large
+                // logitError) from a model that is merely undecided after the
+                // prefix (small margin). It reports maxLogitError=inf and
+                // checkedTokens=0 for both, which is what made it unreadable.
+                print(
+                    "M3 branch: logitError=\(branch.logitError) checked=\(branch.checkedTokens) "
+                        + "mismatches=\(branch.mismatches)"
+                )
+            }
             if branch.checkedTokens > 0 {
                 selectedBranches.append((suffix, branch.logitError, branch.checkedTokens, branch.mismatches))
             }
@@ -271,7 +309,11 @@ final class TrackAPrefixCacheTests: XCTestCase {
             }
         }
         guard selectedBranches.count == 2 else {
-            XCTFail("expected at least two wide-margin suffixes for M3 prefix-cache gate")
+            XCTFail(
+                """
+                M3 prefix-cache gate found \(selectedBranches.count) wide-margin                 suffix(es) in \(candidateSuffixes.count) candidates, needs 2. This is the gate                 failing to run, NOT the cache failing: a branch counts only where                 margin > logitError * 4, so a model whose reconstruct error is near its own                 noise floor can leave every candidate unqualified. Re-run with                 MLXSERVE_DEBUG_PREFIX_GATE=1 to see margin and threshold per branch, and widen                 the candidate pool rather than lowering the multiplier.
+                """
+            )
             return PrefixCacheGateResult(
                 maxLogitError: Float.infinity,
                 checkedTokens: 0,
@@ -453,6 +495,9 @@ final class TrackAPrefixCacheTests: XCTestCase {
 
         let logitError = maxAbsoluteDifference(reconstructedLogits, fresh.logits)
         let margin = topOneTopTwoMargin(fresh.logits)
+        if ProcessInfo.processInfo.environment["MLXSERVE_DEBUG_PREFIX_GATE"] == "1" {
+            print("M3 compare: margin=\(margin) logitError=\(logitError) threshold=\(logitError * 4 + 1e-3)")
+        }
         let reconstructedToken = argMax(reconstructedLogits, axis: -1).item(Int.self)
         let freshToken = argMax(fresh.logits, axis: -1).item(Int.self)
 
