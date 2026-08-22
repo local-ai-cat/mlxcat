@@ -76,24 +76,46 @@ The two exclusion lists are not the same kind of claim:
   earlier "batching is worth +22%" claim on this repo wrong. oMLX gets 1.55–3.14×
   at the longgen tier. This list deserves re-measurement before it is believed.
 
-## Three caveats that all favour mlxcat
+## Three caveats — one disproven, one resolved, one still open
 
-1. **Every mlxcat row predates the allocator fix.** They were measured at harness
+1. **Every mlxcat row on the board predates the allocator fix.** They were measured at harness
    commit `e99f07c` on 08-21 13:46–15:07; `7f6cbb6` ("bound the MLX allocator")
    landed at 23:57 the same night. The memory column — mlxcat at 20.4 GiB on
    Qwen3.5-4B/16k against oMLX's 8.1 — is measuring a bug that is already fixed
    and not yet re-measured.
-2. **mlxcat is the only engine running handicapped.** `--memory-ceiling-bytes`
-   reaches only mlxcat's launch template (`bench/engines.json`); oMLX, mlx-lm and
-   mlx-serve run with MLX's defaults, which on a 48 GiB box is roughly a 54 GiB
-   cache limit. Post-fix mlxcat runs with a 4 GiB one. Buffer-cache starvation
-   costs prefill throughput, which is the metric we lose. **The control arm now
-   exists**: `mlxcat-defaults` is the same binary with the ceiling absent, so the
-   pair measures what the memory guard costs instead of leaving it as an excuse.
-   Until both arms are on the board, no single-stream gap here is settled.
+2. ~~**mlxcat is the only engine running handicapped.**~~ **Disproven
+   2026-08-22.** It was true that `--memory-ceiling-bytes` reaches only mlxcat's
+   launch template while oMLX, mlx-lm and mlx-serve run at MLX's defaults
+   (~54 GiB cache limit on a 48 GiB box against our 4 GiB), and it was a
+   reasonable suspicion that buffer-cache starvation cost us prefill. It does
+   not. `mlxcat-defaults` — the same binary with the ceiling absent — came out
+   within noise of `mlxcat` on every metric of both models:
+
+   | gemma-4-E2B longgen c1 | prefill | decode | peak |
+   |---|---|---|---|
+   | mlxcat (24 GiB ceiling) | 4707 | 80.8 | 5.80 GiB |
+   | mlxcat-defaults (no ceiling) | 4701 | 81.0 | 5.68 GiB |
+
+   The memory guard is not what is costing us. That excuse is gone, and the
+   remaining gap is the serialization exclusion in item 1.
 3. **The prefix cache has never been measured.** All 223 rows are cold —
-   `cache_mode` is null on every one of them. The tiered prefix KV cache is the
-   feature mlxcat exists for and it contributes nothing to its current standing.
+   `cache_mode` is null on every one of them. Not because warm was never
+   scheduled: `--cache-modes` was parsed, printed in the plan, documented at
+   length, and bound to nothing — `cache_mode` was read four times inside the
+   cell loop and assigned nowhere, so the first run to reach that line died with
+   a `NameError` (`666b240`). The tiered prefix KV cache is the feature mlxcat
+   exists for, no run has ever been able to exercise it, and it contributes
+   nothing to the current standing.
+
+## What has actually been ruled in and out
+
+| suspicion | verdict |
+|---|---|
+| the memory ceiling handicaps us | **disproven** — arms within noise |
+| the sliding-window mask is wrong | **disproven** — gpt-oss passes while crossing its window |
+| per-row RoPE offsets are scalar in a batch | **disproven** — resolves to `.batch` (`BatchRoPEOffsetTests`) |
+| ragged rows break batched decode | **disproven** — ragged rows match over 24 steps; identical rows diverge over 64 |
+| the serialization exclusions cost us concurrency | **the live hypothesis** — five of six models, and both excluded families pass logit invariance |
 
 ## What would move the number, in order
 
