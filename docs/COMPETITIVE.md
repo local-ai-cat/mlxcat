@@ -99,6 +99,10 @@ The two exclusion lists are not the same kind of claim:
 
 1. **Per-row offsets for the scalar-offset families**, starting with `gemma4`.
    Unlocks batching for four of six benchmark models and for the iOS flagship.
+   Start at `docs/KNOWN-FAILURES.md` §1, not at the exclusion list: the gate that
+   would prove batched decode correct for gemma is **red** — 89/160 mismatched
+   tokens with a sustained run of 87 past the sliding window, reproducible on two
+   machines and at the pre-branch commit. The exclusion is not conservatism.
 2. **Re-measure the regression list at `longgen` c2/c4/c8** and delete the
    entries that no longer earn their place.
 3. **Re-run mlxcat post-allocator-fix, with and without the ceiling** — pass 3
