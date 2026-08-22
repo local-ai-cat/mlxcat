@@ -17,6 +17,11 @@ Two arms, same binary, same day, same machine:
 Both are also the first mlxcat rows measured **after** the allocator fix
 (`7f6cbb6`). Every row currently on the board predates it by ten hours.
 
+Pass `00b` runs every model-gated Swift suite against the local weights first.
+Those gates skip under `swift test` and cannot run in hosted CI at all (no
+weights, no Metal), so they had not executed since 2026-08-12 — the engine's own
+correctness evidence was ten days stale while we argued about its throughput.
+
 ```bash
 bench/queue.sh status bench/queue/2026-08-fair-fight
 bench/queue.sh run    bench/queue/2026-08-fair-fight

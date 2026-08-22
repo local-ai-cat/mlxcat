@@ -11,3 +11,7 @@ git -c user.name="Atlas Codes AI" -c user.email="76924051+atlascodesai@users.nor
   commit -q -m "bench: fair-fight arms — mlxcat at product config and at MLX defaults" || echo "nothing to commit"
 git push -q && echo PUSHED
 python3 bench/leaderboard.py --check && echo LEADERBOARD_OK
+
+echo "=== core suites ==="
+cat .build/core-tests-verdict.txt 2>/dev/null || echo "core tests did not report"
+sed -n 1,60p .build/nightly-models.md 2>/dev/null || true
