@@ -18,4 +18,9 @@ python3 bench/run.py --engines mlxcat \
   --memory-ceiling-bytes "$CEIL" \
   --sync-after-engine "$SYNC" \
   --tag "fair-fight arm A: product config, ceiling 24G, post-allocator-fix"
-echo "armA rc=$?"
+rc=$?
+# `python3 ...; echo "rc=$?"` exits 0 no matter what python did, so the queue
+# marked a NameError-crashed pass DONE and walked straight into the next one.
+# The pass must carry its own exit code or the queue's halt-on-failure is decorative.
+echo "armA rc=$rc"
+exit $rc

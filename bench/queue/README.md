@@ -17,7 +17,12 @@ A pass should:
   benchmarking a stale harness produces rows that look real and are not;
 * pass `--resume` to `bench/run.py`, so a pass interrupted halfway does not pay
   again for cells it already recorded;
-* not poll for the previous pass — the queue orders them.
+* not poll for the previous pass — the queue orders them;
+* **exit with the status of the work it did.** `cmd; echo "rc=$?"` exits 0
+  whatever `cmd` returned, so a crashed pass reads as success and the queue's
+  halt-on-failure never fires. That happened on 2026-08-22: both fair-fight arms
+  died on a NameError in the first second and the queue recorded them `.done`.
+  Capture the code and `exit $rc`.
 
 ```bash
 bench/queue.sh status

@@ -12,6 +12,9 @@ that, so they get tests rather than trust.
 
 import json
 import subprocess
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import sys
 import tempfile
 import unittest
@@ -234,6 +237,141 @@ class ResumeIndexTests(unittest.TestCase):
             with open(Path(directory) / "rows.jsonl", "a", encoding="utf-8") as handle:
                 handle.write('{"device": {"mod')
             self.assertEqual(len(run.recorded_cells(Path(directory), "Mac16,7")), 1)
+
+
+class FakeEngineHandler(BaseHTTPRequestHandler):
+    """Just enough OpenAI-compatible surface to drive a real cell."""
+
+    protocol_version = "HTTP/1.1"
+    COMPLETION_TOKENS = 6
+
+    def log_message(self, *args):  # silence the test output
+        pass
+
+    def do_GET(self):
+        if self.path.startswith("/v1/models"):
+            self._json({"data": [{"id": "fake-model"}]})
+        else:
+            self.send_error(404)
+
+    def do_POST(self):
+        if not self.path.startswith("/v1/chat/completions"):
+            self.send_error(404)
+            return
+        length = int(self.headers.get("Content-Length") or 0)
+        body = json.loads(self.rfile.read(length) or b"{}")
+        prompt = body["messages"][0]["content"]
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Transfer-Encoding", "chunked")
+        self.end_headers()
+        for index in range(self.COMPLETION_TOKENS):
+            time.sleep(0.01)  # a measurable decode window, one chunk per token
+            self._sse({"choices": [{"delta": {"content": f"t{index} "}}]})
+        self._sse({
+            "choices": [],
+            "usage": {"prompt_tokens": max(len(prompt) // 4, 1),
+                      "completion_tokens": self.COMPLETION_TOKENS},
+        })
+        self._raw(b"data: [DONE]\n\n")
+        self._raw(b"")
+
+    def _json(self, payload):
+        blob = json.dumps(payload).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(blob)))
+        self.end_headers()
+        self.wfile.write(blob)
+
+    def _sse(self, payload):
+        self._raw(f"data: {json.dumps(payload)}\n\n".encode())
+
+    def _raw(self, chunk):
+        self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
+
+
+@unittest.skipUnless(MACOS, "run.main() builds a libproc Footprint")
+class EndToEndTests(unittest.TestCase):
+    """Drive the whole harness against a fake engine.
+
+    This exists because of a specific failure: `--cache-modes` was parsed,
+    printed in the plan, documented in bench/README.md — and `cache_mode` was
+    read four times inside the cell loop and assigned nowhere. Every gate we had
+    passed. `py_compile` passed, `--dry-run` passed (it returns before the loop),
+    CI was green, and the first machine to actually reach that line died with a
+    NameError after waiting sixteen minutes for the host to go quiet.
+
+    A harness that is only ever tested by dry-run is tested nowhere near the code
+    that produces rows.
+    """
+
+    def setUp(self):
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), FakeEngineHandler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addCleanup(self.server.shutdown)
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+        self.results = tempfile.mkdtemp()
+
+    def rows(self):
+        out = []
+        for path in Path(self.results).glob("*.jsonl"):
+            out += [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+        return out
+
+    def run_harness(self, *extra):
+        argv = [
+            "--engine-url", f"fake={self.url}",
+            "--engines", "fake",
+            "--models", "fake-model",
+            "--contexts", "short",
+            "--results-dir", self.results,
+            "--runs", "1", "--warmup", "0",
+            "--allow-loaded", "--max-load", "1e9", "--min-free-pct", "0",
+            *extra,
+        ]
+        return run.main(argv)
+
+    def test_writes_a_row_end_to_end(self):
+        self.assertEqual(self.run_harness("--concurrency", "1"), 0)
+        rows = self.rows()
+        self.assertTrue(rows)
+        metrics = rows[0]["metrics"]
+        self.assertGreater(metrics["ttft_ms"]["median"], 0)
+        self.assertEqual(metrics["completion_tokens"], FakeEngineHandler.COMPLETION_TOKENS)
+
+    def test_cold_and_warm_are_both_produced(self):
+        """The regression this class was written for."""
+        self.assertEqual(self.run_harness("--cache-modes", "cold,warm", "--concurrency", "1"), 0)
+        modes = {r["workload"]["cache_mode"] for r in self.rows()}
+        self.assertEqual(modes, {"cold", "warm"})
+
+    def test_an_unknown_cache_mode_is_rejected_not_ignored(self):
+        self.assertEqual(self.run_harness("--cache-modes", "lukewarm"), 64)
+
+    def test_concurrency_rows_carry_the_decomposed_metrics(self):
+        self.assertEqual(
+            self.run_harness("--concurrency", "2", "--concurrency-tier", "short"), 0
+        )
+        wide = [r for r in self.rows() if r["workload"]["concurrency"] > 1]
+        self.assertTrue(wide, "no concurrency row was produced")
+        metrics = wide[0]["metrics"]
+        for key in ("pp_tps", "decode_agg_tps", "ttft_p95_ms", "goodput_frac"):
+            self.assertIsNotNone(metrics.get(key), f"{key} missing from a concurrency row")
+
+    def test_resume_skips_a_cell_it_already_recorded(self):
+        self.assertEqual(self.run_harness("--concurrency", "1"), 0)
+        first = len(self.rows())
+        self.assertEqual(self.run_harness("--concurrency", "1", "--resume"), 1)
+        self.assertEqual(len(self.rows()), first, "--resume re-recorded a finished cell")
+
+    def test_open_loop_arrivals_are_recorded_on_the_row(self):
+        self.assertEqual(
+            self.run_harness("--concurrency", "2", "--concurrency-tier", "short",
+                             "--request-rate", "50"), 0
+        )
+        wide = [r for r in self.rows() if r["workload"]["concurrency"] > 1]
+        self.assertTrue(wide[0]["workload"]["arrival"].startswith("poisson:"))
 
 
 if __name__ == "__main__":

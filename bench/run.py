@@ -1166,6 +1166,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     model_specs = {m["id"]: m for m in matrix["models"]}
     tiers = {t["name"]: t for t in matrix["context_tiers"]}
     chosen_tiers = [t.strip() for t in args.contexts.split(",") if t.strip()] or matrix["default_context_tiers"]
+    # --cache-modes was parsed, printed in the plan, documented in bench/README.md
+    # and never bound to anything: `cache_mode` was read four times inside the cell
+    # loop and assigned nowhere, so the first run to reach that line died with a
+    # NameError. It was committed at 02:34 on 2026-08-22 and executed for the first
+    # time today. Every existing row is cold because no other kind could be produced.
+    cache_modes = [m.strip() for m in args.cache_modes.split(",") if m.strip()] or ["cold"]
+    unknown_modes = [m for m in cache_modes if m not in ("cold", "warm")]
+    if unknown_modes:
+        print(f"unknown --cache-modes value(s): {', '.join(unknown_modes)} (expected cold and/or warm)", file=sys.stderr)
+        return 64
     widths = [int(w) for w in args.concurrency.split(",") if w.strip()] or matrix["concurrency"]["widths"]
     # Concurrency is measured at every listed tier: at a short tier the per-request
     # serial prefill dominates and aggregate throughput reads as admission latency
@@ -1311,10 +1321,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                     print(f"[{engine_name}/{model_id}] calibration request failed: {error}{hint} — model skipped", file=sys.stderr)
                     continue
 
-                cells = [(tier_name, 1) for tier_name in chosen_tiers] + [
-        (t, w) for t in conc_tiers for w in widths if w > 1
-    ]
-                for tier_name, width in cells:
+                cells = [
+                    (tier_name, width, mode)
+                    for mode in cache_modes
+                    for tier_name, width in (
+                        [(t, 1) for t in chosen_tiers]
+                        + [(t, w) for t in conc_tiers for w in widths if w > 1]
+                    )
+                ]
+                for tier_name, width, cache_mode in cells:
                     if abandon_reason:
                         break
                     tier = tiers[tier_name]
