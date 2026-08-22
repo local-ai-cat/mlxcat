@@ -123,7 +123,20 @@ final class SlidingWindowBatchIntegrationTests: XCTestCase {
             XCTAssertEqual(generator.uids, ["sliding-0", "sliding-2"])
             XCTAssertNotNil(generator.extractCache(uid: "sliding-0"))
             XCTAssertNotNil(generator.extractCache(uid: "sliding-2"))
-            XCTAssertEqual(generator.next().count, 2)
+            // `next()` returns responses for whatever advanced THIS call, not
+            // one per active row: a row inserted while a launched-ahead step is
+            // outstanding joins the NEXT step (see `pendingEmission` in
+            // BatchGenerator), so the first call after the insert carries only
+            // the pre-existing row. The gate asserts what mid-batch mutation
+            // must preserve — both remaining rows stay live and keep producing,
+            // and the removed row emits nothing — not per-call cadence.
+            var responsesByUID: [String: Int] = [:]
+            for _ in 0 ..< 2 {
+                for response in generator.next() {
+                    responsesByUID[response.uid, default: 0] += 1
+                }
+            }
+            XCTAssertEqual(Set(responsesByUID.keys), ["sliding-0", "sliding-2"])
         }
     }
 

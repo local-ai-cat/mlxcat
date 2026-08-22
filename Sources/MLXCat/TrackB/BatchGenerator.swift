@@ -511,6 +511,25 @@ public final class ContinuousBatchGenerator {
         eval(currentTokens, cacheStorage.cacheForModel)
     }
 
+    /// Returns the responses for every row that materialized a new token in
+    /// THIS call — keyed by uid, and NOT necessarily one per active row.
+    /// Coverage is step-dependent by design: a row inserted while a
+    /// launched-ahead step is outstanding has nothing pending (its
+    /// `pendingEmission` starts false; admission already delivered any first
+    /// token via `insert`'s return value) and joins the step this call
+    /// launches, so its next token arrives one call later. A speculative step
+    /// can conversely return several tokens for a single row. The only caller
+    /// that matters, `Scheduler.step()`, consumes per-uid and assumes nothing
+    /// about per-call coverage; tests must not assert
+    /// `next().count == count` after mutating the batch mid-flight.
+    ///
+    /// Discarding the launched-ahead step on insert/remove instead would NOT
+    /// restore this cadence soundly: the launch-ahead gate
+    /// (`canPipelineDecode`) permits seeded RNG rows (whose streams the
+    /// launched sample already advanced) and cache layers outside
+    /// `discardOneStepIsExact` (a rotated `RotatingKVCache` ring and any
+    /// width-≥2 `BatchKVCache`), where a one-step `trim` cannot reproduce the
+    /// pre-step state.
     public func next() -> [Response] {
         guard !rowUIDs.isEmpty else { return [] }
         if let speculativeResponses = speculativeNext() {

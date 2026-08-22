@@ -102,44 +102,43 @@ scale 4–9×. For the `gemma4` family the exclusion is not conservatism — the
 that would prove batching correct is red, and this is what it says. Any work on
 "unlock batching for gemma-4" starts here, not at the exclusion list.
 
-## 1b. A row is lost by insert + remove + extract — general, and still open
+## 1b. "A row is lost by insert + remove + extract" — RESOLVED: the gates were wrong
 
-Separated out on 2026-08-23. `testSlidingWindowInsertRemoveExtractMidBatch` and
-`testHybridFixedStateInsertRemoveExtractMidBatch` both fail with
-`next().count == 2` returning **1**:
+Separated out on 2026-08-23; resolved the same day. `next()`'s contract is
+**"responses for whatever advanced this step"**, keyed by uid — not "one
+response per active row per step". No row is lost: one inserted while a
+launched-ahead step is outstanding joins the step that same `next()` call
+launches, so its token arrives exactly one call later, and every subsequent
+call covers the full batch. The two gates asserted an invariant the generator
+never promised; they now assert liveness across two calls (both remaining rows
+keep producing, the removed row emits nothing), and
+`InsertRemoveExtractProbeTests` pins the one-call-offset cadence explicitly.
 
-```
-insert p0; insert p1;  next().count == 2   ✓
-insert p2;  remove(p1)
-uids == [p0, p2]                            ✓
-extractCache(p0), extractCache(p2)          ✓ both non-nil
-next().count == 2                           ✗ returns 1
-```
+What decided it (all in-tree evidence, not preference):
 
-Three things it is **not**:
+* The failing assertions predate pipelining — the gates landed 2026-07-04
+  (`4772388`), pipelining 2026-08-12 (`96255a9`) — so `count == 2` encoded the
+  old synchronous cadence, which was incidental, never promised. The gates are
+  model-gated and did not run when pipelining landed.
+* `Scheduler.step()`, the only production caller, already consumes `next()`
+  per-uid with zero coverage assumptions; per-row-per-step was already false
+  anyway: `insert` returns admission tokens outside `next()`, and a
+  speculative step returns *several* responses for one row.
+* Restoring per-step cadence by discarding the launch-ahead on insert/filter
+  is **unsound**, not just ugly: `launchStepAheadIfSafe` gates only on
+  `canPipelineDecode`, which permits seeded RNG rows (the launched sample
+  already advanced their streams — a recompute would draw different numbers)
+  and cache layers outside `discardOneStepIsExact` — a rotated
+  `RotatingKVCache` ring (i.e. every sliding-window model this gate exists
+  for) and any width-≥2 `BatchKVCache`, where `trim(1)` cannot restore the
+  pre-step state. The `canPrebuildNextStep` gate documents exactly this.
+* The feared "lost token" in a rollback does not exist: a launched-ahead token
+  is neither returned nor recorded in `generatedTokenHistory` until
+  `emitPendingStep`, so discarding it loses nothing observable — the rollback
+  is blocked by cache/RNG restoration, not token loss.
 
-* **not model-family specific** — reproduces on gpt-oss-20b, which has no
-  `ArraysCache` and passes every other gate;
-* **not a token-limit boundary** — both gates use `maxTokens: 2` and call
-  `next()` once first, so the first row reaches its limit on exactly the call
-  under test. `InsertRemoveExtractProbeTests` runs the same sequence at
-  `maxTokens: 8` and still gets 1;
-* **not caused by the cache-type fix in §2** — it predates it, and that fix only
-  made it *reachable* for hybrid models by removing the throw that came first.
-
-Mechanism (`Sources/MLXCat/TrackB/BatchGenerator.swift`): `decodeOneToken` short-
-circuits on `pendingEmission.contains(true)` into `emitPendingStep`, which emits
-responses only `for row in rowUIDs.indices where pendingEmission[row]`. `insert`
-appends `pendingEmission.append(false)` for the new row, and the launch-ahead
-path sets the flag uniformly true. So a row inserted while a launched-ahead step
-is outstanding is skipped for that step.
-
-Open question, because the fix depends on it: is `next()`'s contract "one
-response per active row per step" (a real bug, the new row is stalled) or
-"responses for whatever advanced this step" (the generator is right and both
-gates assert an invariant never promised)? A naive rollback of the launch-ahead
-looks like it would lose a token that was computed but never returned to the
-caller, so this is not a change to make on a guess.
+The contract is now documented on `ContinuousBatchGenerator.next()` in
+`Sources/MLXCat/TrackB/BatchGenerator.swift`.
 
 ## 2. Hybrid caches cannot be combined mid-batch — FIXED
 
