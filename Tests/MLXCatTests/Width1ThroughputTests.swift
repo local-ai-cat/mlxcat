@@ -19,9 +19,14 @@ import XCTest
 ///  1. `ContinuousBatchGenerator.decodeOneToken()` forces `.asArray` on the
 ///     tokens it just `asyncEval`-ed, so per-token CPU work serializes with the
 ///     GPU instead of overlapping it the way `TokenIterator.next()` does.
-///  2. `Scheduler.step()` publishes prefix-cache blocks every token: a full
-///     per-row KV extraction plus a `SessionPrefixKVStore.store` per generated
-///     token, with cost growing in context length.
+///  2. `Scheduler.step()` publishes prefix-cache blocks: a full per-row KV
+///     extraction plus a `SessionPrefixKVStore.store`, with cost growing in
+///     context length. This used to fire on EVERY generated token, which is what
+///     made it the second-largest cost here; since
+///     `Scheduler.midGenerationPublishInterval` it fires every 256 tokens
+///     mid-generation, and unconditionally on the first publish and at
+///     finish/preemption. Recalibrate from that, not from the per-token figure —
+///     what remains per REQUEST is those exempt publishes, not a per-token tax.
 ///  3. No per-step `autoreleasepool` and no periodic `Memory.clearCache()`,
 ///     both of which the legacy iterator performs.
 ///
