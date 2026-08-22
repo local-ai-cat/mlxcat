@@ -48,32 +48,41 @@ extension Request {
 /// throughput at c4, while ragged *image* rows genuinely do break (all three
 /// rows stop at the same early token) and text rows are exact against serial.
 public enum SerializationPolicy: Sendable, Equatable {
-    /// Batch anything. The default for families with no scalar-offset defect.
-    case never
     /// Never batch. The old `serializedDecode: true`.
     case always
-    /// Batch text rows; give any row carrying image, video or audio the batch to
-    /// itself. The protection the defect actually calls for.
-    case multimodalOnly
-    /// Batch, but never wider than this many rows.
+    /// Batch, subject to two independent restrictions.
     ///
-    /// For a family whose batched numerics are sound at a narrow width and break
-    /// at a wide one, `.always` throws away the width that works. `qwen3_moe` is
-    /// the measured case: max logit error 0.94 at width 2 — inside the 1.25
-    /// tolerance every other family is held to — and 2.69 at widths 4 and 8,
-    /// which is not (`NativeModelLoader.batchDecodeRegressedModelTypes`). This
-    /// case takes the width that is earned and refuses the width that is not,
-    /// instead of refusing both.
-    case maxWidth(Int)
+    /// They are independent because the measurements are: a family can need a
+    /// width cap without being multimodal (`qwen3_moe`), be multimodal without
+    /// needing a cap (`gemma4`), or need both (`gemma4_unified`). Folding them
+    /// into one flat list of cases meant the third combination could not be
+    /// expressed, so the only way to protect such a family was `.always` — which
+    /// throws away every width, including the ones that measure clean.
+    ///
+    /// - `maxWidth`: refuse a row that would take the batch past this many rows.
+    ///   `nil` is unbounded.
+    /// - `multimodalSolitude`: give any row carrying image, video or audio the
+    ///   batch to itself. Those rows have per-row token counts, which is exactly
+    ///   what a scalar `cache.offset` gets wrong.
+    case batched(maxWidth: Int?, multimodalSolitude: Bool)
+
+    /// Batch anything. The default for families with no measured defect.
+    public static let never = Self.batched(maxWidth: nil, multimodalSolitude: false)
+
+    /// Batch text rows; image, video and audio rows run alone.
+    public static let multimodalOnly = Self.batched(maxWidth: nil, multimodalSolitude: true)
+
+    /// Batch, but never wider than `width` rows.
+    public static func maxWidth(_ width: Int) -> Self {
+        .batched(maxWidth: width, multimodalSolitude: false)
+    }
 
     func requiresSolitude(_ request: Request) -> Bool {
         switch self {
-        case .never: return false
         case .always: return true
-        case .multimodalOnly: return request.isMultimodal
         // A capped-width row needs no protection of its own; the cap is a
         // property of the batch it would join, and `refusesToJoin` applies it.
-        case .maxWidth: return false
+        case .batched(_, let multimodalSolitude): return multimodalSolitude && request.isMultimodal
         }
     }
 
@@ -82,10 +91,10 @@ public enum SerializationPolicy: Sendable, Equatable {
     /// batch is already at its permitted width.
     func refusesToJoin(running requests: some Collection<Request>) -> Bool {
         switch self {
-        case .never: return false
         case .always: return true
-        case .multimodalOnly: return requests.contains { $0.isMultimodal }
-        case .maxWidth(let width): return requests.count >= width
+        case .batched(let maxWidth, let multimodalSolitude):
+            if let maxWidth, requests.count >= maxWidth { return true }
+            return multimodalSolitude && requests.contains { $0.isMultimodal }
         }
     }
 }

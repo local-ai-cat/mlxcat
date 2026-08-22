@@ -139,12 +139,22 @@ final class ModelCacheCapabilitiesTests: XCTestCase {
         // them: gemma-4-12B-it-qat-4bit reports `gemma4_unified` (the e2b/e4b
         // variants are the ones that report `gemma4`), so the original assertion
         // never covered the Gemma the evidence came from.
-        for modelType in ["gemma4", "gemma4_unified", "gpt_oss", "qwen3_5"] {
+        for modelType in ["gemma4", "gpt_oss", "qwen3_5"] {
             XCTAssertFalse(
                 NativeModelLoader.usesSerializedDecode(modelType: modelType, isVLM: false),
                 modelType
             )
         }
+        // gemma4_unified is the exception, and deliberately so. Its width cap
+        // comes from a logit divergence measured on TEXT rows (gemma-4-12B:
+        // 1.656 at width 2, and at width 8 the error exceeds the top-1/top-2
+        // margin), so it is a property of the family's batched numerics rather
+        // than of whether images are in play. A text-only deployment has the
+        // same defect and gets the same cap.
+        XCTAssertEqual(
+            NativeModelLoader.serializationPolicy(modelType: "gemma4_unified", isVLM: false),
+            .maxWidth(4)
+        )
 
         // Unmeasured families keep batching — the policy is opt-in, so anything
         // new (e.g. muse_glimmer) defaults to batched rather than serialized.

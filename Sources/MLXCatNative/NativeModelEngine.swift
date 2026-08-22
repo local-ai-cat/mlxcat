@@ -822,14 +822,16 @@ public struct NativeModelLoader: EnginePoolModelLoader {
         if overrides.contains("all") || overrides.contains(normalizedModelType) {
             return .never
         }
-        if let width = batchDecodeWidthCeilings[normalizedModelType] {
-            return .maxWidth(width)
-        }
+        let ceiling = batchDecodeWidthCeilings[normalizedModelType]
         if batchDecodeRegressedModelTypes.contains(normalizedModelType) {
             return .always
         }
         if isVLM, scalarOffsetVLMModelTypes.contains(normalizedModelType) {
-            return multimodalOnlyModelTypes.contains(normalizedModelType) ? .multimodalOnly : .always
+            guard multimodalOnlyModelTypes.contains(normalizedModelType) else { return .always }
+            return .batched(maxWidth: ceiling, multimodalSolitude: true)
+        }
+        if let ceiling {
+            return .maxWidth(ceiling)
         }
         return .never
     }
@@ -1086,6 +1088,39 @@ public struct NativeModelLoader: EnginePoolModelLoader {
     /// rest of that 10.9x.
     private static let batchDecodeWidthCeilings: [String: Int] = [
         "qwen3_moe": 2,
+        // gemma4_unified is here for a different reason than qwen3_moe, and the
+        // difference is the whole argument.
+        //
+        // `multimodalOnlyModelTypes` documents entry as requiring both the logit
+        // gate and the image gate. The logit evidence on record is gemma-4-E2B —
+        // a `gemma4`. gemma-4-12B, the `gemma4_unified` that shares the grant,
+        // had never been run through it. Run 2026-08-23 on an M5 Max, with a
+        // width-1 CONTROL arm added so a path difference could be told from a
+        // batching defect:
+        //
+        //     batch 1  maxLogitError 0.0       margin  0.0    (exact; path cleared)
+        //     batch 2  maxLogitError 1.65625   margin 11.5    over 1.25
+        //     batch 4  maxLogitError 1.65625   margin 11.5    over 1.25
+        //     batch 8  maxLogitError 1.7402    margin  1.125  over 1.25, and OVER MARGIN
+        //
+        // Width 1 being bit-exact means this is rows contaminating each other,
+        // not the batched path's own numerics — the defect is real. But the
+        // widths are not equally dangerous. A token can only flip when the error
+        // exceeds the top-1/top-2 margin; at widths 2 and 4 the margin is 7x the
+        // error, and at width 8 the error EXCEEDS the margin. `mismatched` is 0
+        // everywhere, so nothing has flipped yet — at width 8 that is luck, and
+        // at widths 2 and 4 it is headroom.
+        //
+        // A ceiling of 4 removes the width where a flip is possible and keeps the
+        // one the concurrency win was measured at (c4 TTFT 11,999 -> 870 ms,
+        // `d630cee`). It is strictly safer than today, which is unbounded.
+        //
+        // It does NOT clear the 1.25 tolerance at any width >= 2, and that is
+        // still an open defect: gemma-4 is the iOS flagship and `gemma4_unified`
+        // is a distinct loader path from `gemma4`, which passes at 0.69. Whether
+        // the answer is to fix that path or to drop to 1 (i.e. `.always`) is
+        // Phil's call — see docs/KNOWN-FAILURES.md 1e.
+        "gemma4_unified": 4,
     ]
 
     private static let windowedKVModelTypes: Set<String> = [

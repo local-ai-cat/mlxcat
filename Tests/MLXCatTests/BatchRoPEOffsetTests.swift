@@ -74,6 +74,32 @@ final class SerializationOverrideTests: XCTestCase {
         XCTAssertFalse(NativeModelLoader.usesSerializedDecode(modelType: "qwen3_moe", isVLM: false, overrides: overrides))
     }
 
+    func testGemmaUnifiedIsCappedAtTheWidthBelowAFlip() {
+        // gemma-4-12B (gemma4_unified) is over the 1.25 tolerance at every width
+        // >= 2 (1.656 / 1.656 / 1.740), but a token can only FLIP where the error
+        // exceeds the top-1/top-2 margin — margin 11.5 at widths 2 and 4, and
+        // 1.125 at width 8. The cap removes the width where a flip is possible
+        // and keeps the one the concurrency win was measured at. It composes with
+        // multimodal solitude rather than replacing it: image rows still run
+        // alone.
+        let policy = NativeModelLoader.serializationPolicy(
+            modelType: "gemma4_unified", isVLM: true, overrides: [])
+        XCTAssertEqual(policy, .batched(maxWidth: 4, multimodalSolitude: true))
+
+        let text = Request(
+            uid: "text", input: .init(text: .init(tokens: MLXArray([Int32(1)]))), maxTokens: 4)
+        XCTAssertFalse(policy.requiresSolitude(text), "text rows must still batch")
+        XCTAssertFalse(policy.refusesToJoin(running: Array(repeating: text, count: 3)))
+        XCTAssertTrue(
+            policy.refusesToJoin(running: Array(repeating: text, count: 4)),
+            "width 8 is where the logit error exceeds the margin; the cap must bite before it")
+
+        // gemma4 (E2B) passes the gate on its own evidence and stays uncapped.
+        XCTAssertEqual(
+            NativeModelLoader.serializationPolicy(modelType: "gemma4", isVLM: true, overrides: []),
+            .multimodalOnly)
+    }
+
     func testGemmaBatchesTextAndSerializesImages() {
         // The whole point of the narrower policy: gemma-4's text rows batch (50x
         // TTFT at c4) while its ragged image rows keep the batch to themselves.
@@ -83,7 +109,8 @@ final class SerializationOverrideTests: XCTestCase {
             .multimodalOnly)
         XCTAssertEqual(
             NativeModelLoader.serializationPolicy(modelType: "gemma4_unified", isVLM: true, overrides: none),
-            .multimodalOnly)
+            .batched(maxWidth: 4, multimodalSolitude: true),
+            "gemma4_unified batches text like gemma4, but capped — see the width test above")
     }
 
     func testFamiliesWithoutBothGatesStayFullySerialized() {
