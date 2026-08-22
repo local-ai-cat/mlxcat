@@ -83,6 +83,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: LEADERBOARD.md matches bench/results
         run: python3 bench/leaderboard.py --check
+      # The leaderboard check only proves the rendered file is not stale. This
+      # is the one gate in the repo that can fail because a COMPETITOR is
+      # better: every other gate compares mlxcat to its own past, which is how
+      # the suite stayed green while we won 6 of 44 cells.
+      - name: parity against other engines has not regressed
+        run: python3 bench/parity.py --check
       - name: bench scripts parse
         run: |
           python3 -m py_compile bench/run.py bench/leaderboard.py
