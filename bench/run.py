@@ -1290,15 +1290,25 @@ def main(argv: Optional[List[str]] = None) -> int:
     # guard itself, and a blip costs one interval instead of everything.
     if violations and args.wait_for_quiet > 0 and not args.allow_loaded:
         deadline = time.time() + args.wait_for_quiet
-        print(f"host is loaded; waiting up to {args.wait_for_quiet / 60:.0f} min for quiet — " + "; ".join(violations))
+        # flush: this is the one place the harness deliberately does nothing for
+        # a long time, so it is the one place a buffered stdout is indistinguishable
+        # from a wedge.
+        print(
+            f"host is loaded; waiting up to {args.wait_for_quiet / 60:.0f} min for quiet — "
+            + "; ".join(violations),
+            flush=True,
+        )
         while time.time() < deadline:
             time.sleep(min(30, max(5, args.wait_for_quiet / 60)))
             snapshot = host_snapshot()
             violations = host_violations(snapshot, args)
             if not violations:
-                print(f"host quiet (loadavg {snapshot['loadavg_1m']}) — starting")
+                print(f"host quiet (loadavg {snapshot['loadavg_1m']}) — starting", flush=True)
                 break
-            print(f"  still loaded: {'; '.join(violations)} ({(deadline - time.time()) / 60:.0f} min left)")
+            print(
+                f"  still loaded: {'; '.join(violations)} ({(deadline - time.time()) / 60:.0f} min left)",
+                flush=True,
+            )
 
     valid = not violations
     if violations:

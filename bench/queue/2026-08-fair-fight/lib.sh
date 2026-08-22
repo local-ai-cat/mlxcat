@@ -13,3 +13,9 @@ SYNC='git pull --rebase -q && git add bench/results/*.jsonl && git -c user.name=
 # produced no rows. `--wait-for-quiet` inside run.py does the same job against
 # the same thresholds as the guard, and a blip now costs one interval.
 QUIET_WAIT=3600
+
+# Python block-buffers stdout when it is a file, so a pass that is patiently
+# waiting for the host to go quiet looks identical to a pass that is wedged —
+# the log stays empty for as long as the buffer takes to fill. A fast loop has
+# to be an observable one.
+export PYTHONUNBUFFERED=1
