@@ -52,6 +52,25 @@ cached buffers. omlx takes a `synchronize()` barrier first
 separate executor mid-generation; ours is inline on the issuing thread, like
 mlx-lm's.
 
+### The prefill logits tensor
+**They:** mlx-lm prefills `y.size - 1` tokens and hands the single remaining
+token to the step that samples (`guest/mlx-lm/mlx_lm/generate.py:580-587`, same
+shape at `:430-452`), and its prefill chunks evaluate only the cache —
+`mx.eval([c.state for c in cache])`. MLX is lazy, so a prefill chunk's logits are
+never computed at all; the tensor whose logits are read is always `[1, 1, vocab]`.
+**We did:** read `output.logits` from whichever chunk ended the range, so
+`[1, chunk, vocab]` — ~268 MB of fp16 for a 512-token chunk at a 262k vocab, and
+gigabytes on the single-pass path, all discarded except one row.
+**Closed:** the last prompt token is now prefilled alone, so the sampled forward
+is `[1, 1, vocab]`. Measured at 16k on an M5 Max: gemma-4-12B 13.40 → **12.92**
+GiB, Qwen3.8-27B 19.13 → **18.83**. Small because chunking had already bounded
+it; the ordering matches the mechanism (gemma's 262k vocab saves more than the
+27B's 248k).
+**Gate:** the model-backed correctness gates cover it, because this changes which
+forward produces the sampled token — 22 core tests on Qwen3-0.6B including
+`BatchInvarianceTests`, plus `MoEBatchIntegrationTests` token equality at widths
+2/4/8 against the real 30B. Both green.
+
 ---
 
 ## Open — ranked
@@ -107,15 +126,6 @@ is right for a 4-bit MoE is not the width that is right for a head-dim-256
 composed-causal model, and we use one number for all of them. And the TTFT half
 of this is unmeasured: the memory cost above is measured, the latency win is not,
 because it needs a concurrent bench run.
-
-### 3. The prefill logits tensor
-**They:** mlx-lm prefills `y.size - 1` tokens and lets the single remaining token
-produce logits, and evaluates only the cache — `mx.eval([c.state for c in cache])`
-(`guest/mlx-lm/mlx_lm/generate.py:579`, `:430`). MLX is lazy, so the prefill
-chunks' logits are never computed at all; the logits tensor is always
-`[1, 1, vocab]`.
-**We:** take `output.logits` from the final chunk (`Scheduler.swift:461`), so it is
-`[1, N, vocab]` — up to `[1, L, vocab]` on the single-pass path.
 
 ### 4. Packed multi-request prefill
 **They:** mlx-lm right-pads up to `prefill_batch_size = 8` rows into ONE forward

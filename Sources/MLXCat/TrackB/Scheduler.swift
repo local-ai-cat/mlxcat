@@ -464,15 +464,33 @@ public actor Scheduler {
         // See `NativeModelLoader.singlePassPrefillModelTypes` for why the last
         // row is an exemption rather than a reason to abandon the change.
         let chunked = allowPartialPrefill || chunkIdlePrefill
+        // The LAST prompt token is prefilled alone, so the one forward whose
+        // logits we actually read produces `[1, 1, vocab]` instead of
+        // `[1, chunk, vocab]`.
+        //
+        // mlx-lm structures prefill exactly this way — it loops `while y.size > 1`
+        // and hands the single remaining token to the step that samples
+        // (`guest/mlx-lm/mlx_lm/generate.py:580-587`, and the same shape at
+        // `:430-452`). Its prefill chunks evaluate only the cache
+        // (`mx.eval([c.state for c in cache])`), never the logits, so MLX's
+        // laziness means a prefill chunk's logits are never computed at all.
+        //
+        // We read `output.logits` on whichever chunk ends the range, which at a
+        // 262k vocab is ~268 MB of fp16 for a 512-token chunk and gigabytes on
+        // the single-pass path — all of it discarded except one row.
+        let logitsBoundary = admission.prefillRange.upperBound - 1
         while admission.nextPrefillIndex < admission.prefillRange.upperBound, remainingBudget > 0 {
             let end: Int
-            if chunked {
+            if admission.nextPrefillIndex == logitsBoundary {
+                // The final token, alone. This is the forward we sample from.
+                end = admission.prefillRange.upperBound
+            } else if chunked {
                 end = min(
                     admission.nextPrefillIndex + min(prefillStep, remainingBudget),
-                    admission.prefillRange.upperBound
+                    logitsBoundary
                 )
             } else {
-                end = admission.prefillRange.upperBound
+                end = logitsBoundary
             }
             let input = LMInput.Text(
                 tokens: admission.promptTokensArray[admission.nextPrefillIndex ..< end]
