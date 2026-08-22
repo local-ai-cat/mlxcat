@@ -195,7 +195,7 @@ class ResumeIndexTests(unittest.TestCase):
     def write(self, directory, **overrides):
         row = {
             "device": {"model": "Mac16,7"},
-            "engine": {"name": "mlxcat"},
+            "engine": {"name": "mlxcat", "build_id": None},
             "model": {"id": "Qwen3.5-4B-MLX-4bit"},
             "workload": {"context_tier": "short", "concurrency": 1, "cache_mode": "cold", "max_tokens": 128},
             "valid_for_leaderboard": True,
@@ -208,12 +208,26 @@ class ResumeIndexTests(unittest.TestCase):
         with open(Path(directory) / "rows.jsonl", "a", encoding="utf-8") as handle:
             handle.write(json.dumps(row) + "\n")
 
+    def test_a_row_from_a_different_build_is_not_a_match(self):
+        """The 2026-08-22 trap: --resume skipped 220 cells that had been measured
+        by the binary from BEFORE the allocator fix, so the run designed to
+        re-measure them reused them instead."""
+        with tempfile.TemporaryDirectory() as directory:
+            self.write(directory, engine={"name": "mlxcat", "build_id": "aaaaaaaaaaaa"})
+            done = run.recorded_cells(Path(directory), "Mac16,7")
+            self.assertIn(
+                ("mlxcat", "aaaaaaaaaaaa", "Qwen3.5-4B-MLX-4bit", "short", 1, "cold", 128), done
+            )
+            self.assertNotIn(
+                ("mlxcat", "bbbbbbbbbbbb", "Qwen3.5-4B-MLX-4bit", "short", 1, "cold", 128), done
+            )
+
     def test_indexes_a_good_row(self):
         with tempfile.TemporaryDirectory() as directory:
             self.write(directory)
             self.assertEqual(
                 run.recorded_cells(Path(directory), "Mac16,7"),
-                {("mlxcat", "Qwen3.5-4B-MLX-4bit", "short", 1, "cold", 128)},
+                {("mlxcat", None, "Qwen3.5-4B-MLX-4bit", "short", 1, "cold", 128)},
             )
 
     def test_ignores_invalid_rows_and_other_devices(self):
@@ -228,7 +242,7 @@ class ResumeIndexTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             self.write(directory, workload={"cache_mode": "warm"})
             done = run.recorded_cells(Path(directory), "Mac16,7")
-            self.assertNotIn(("mlxcat", "Qwen3.5-4B-MLX-4bit", "short", 1, "cold", 128), done)
+            self.assertNotIn(("mlxcat", None, "Qwen3.5-4B-MLX-4bit", "short", 1, "cold", 128), done)
 
     def test_survives_a_truncated_line(self):
         """A row half-written when the host died must not poison the index."""

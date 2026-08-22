@@ -85,7 +85,7 @@ they are tested in `bench/test_run.py` rather than trusted.
 | **thrash invalidates** | `--swap-growth-invalid-gb` | 2 GiB | Well below the kill line — a swapping host produces junk numbers long before it threatens itself, so those rows are recorded and not ranked. |
 | **failure budget** | `--engine-failure-budget` | 3 | Abandons an engine after that many consecutive failed cells, and moves to the next engine. A sick engine gets a short leash. |
 | **quarantine** | `--allow-quarantined` | off | An engine that destabilised the *host* is marked in `engines.json` and refused by default. Quarantine is about safety, not score. |
-| **resume** | `--resume` | off | Skips cells already recorded for this device, so a host that dies mid-matrix costs the cells it had left, not the ones already paid for. |
+| **resume** | `--resume` | off | Skips cells already recorded for this device **by the same engine binary**, so a host that dies mid-matrix costs the cells it had left. The build identity is not optional: without it, resume reused 220 cells measured by the binary from before the allocator fix, and the run that existed to re-measure them silently did not. |
 | **checkpoint sync** | `--sync-after-engine CMD` | none | Runs `CMD` after each engine with `MLXCAT_BENCH_RESULT` set. An engine is the natural checkpoint; results that only exist on one machine are one panic from gone. |
 
 The runaway guard watches an engine for its **whole life**, at 1 Hz, from launch
@@ -151,6 +151,13 @@ listening on their port.
   "harness": {"commit": "abc1234", "tag": "", "argv": ["--engines", "mlxcat"]}
 }
 ```
+
+`engine.build_id` is the short SHA-256 of the launched binary. mlxcat-http
+reports no version on any endpoint we probe, so `engine.version` is null on every
+row it produces and the hash is what makes a row attributable to a build — and
+what stops `--resume` recognising a cell measured by a different one. (Making the
+server report a real version is worth doing; the hash is what the leaderboard
+needs either way, since it cannot be forgotten at release time.)
 
 `engine.transport` is `http` for everything this script produces. In-process
 producers (the iOS app harness, `mlxcat-bench`) write `in-process` and are

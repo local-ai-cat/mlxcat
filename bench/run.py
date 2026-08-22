@@ -23,6 +23,7 @@ import argparse
 import concurrent.futures
 import ctypes
 import ctypes.util
+import hashlib
 import datetime as dt
 import json
 import os
@@ -260,8 +261,10 @@ def recorded_cells(results_dir: Path, device_model: str) -> set:
             if (row.get("device") or {}).get("model") != device_model:
                 continue
             workload = row.get("workload") or {}
+            engine_row = row.get("engine") or {}
             done.add((
-                (row.get("engine") or {}).get("name"),
+                engine_row.get("name"),
+                engine_row.get("build_id") or engine_row.get("version"),
                 (row.get("model") or {}).get("id"),
                 workload.get("context_tier"),
                 int(workload.get("concurrency") or 1),
@@ -414,6 +417,30 @@ class RunawayGuard:
             )
 
 
+def binary_build_id(path: str) -> Optional[str]:
+    """Content hash of the engine binary, short.
+
+    mlxcat-http reports no version on any endpoint we probe, so `engine.version`
+    is null on every row it produces and a row cannot be attributed to a build.
+    That is not cosmetic: `--resume` skipped 220 cells on 2026-08-22 because they
+    matched on (engine, model, tier, width, cache mode) — and every one of them
+    had been measured by a DIFFERENT binary, the one from before the allocator
+    fix. The run designed to re-measure them reused them instead.
+
+    Hashing the file we are about to launch fixes both: rows carry the identity
+    of the build that produced them, and resume stops recognising cells measured
+    by a different one.
+    """
+    try:
+        digest = hashlib.sha256()
+        with open(path, "rb") as handle:
+            for block in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(block)
+        return digest.hexdigest()[:12]
+    except OSError:
+        return None
+
+
 def reject_debug_build(binary: str, engine_name: str) -> None:
     """Refuse to benchmark a debug binary of our own engine.
 
@@ -490,6 +517,7 @@ class Engine:
         self.version: Optional[str] = None
         self.port: Optional[int] = None
         self.guard: Optional[RunawayGuard] = None
+        self.build_id: Optional[str] = None
 
     # -- lifecycle -------------------------------------------------------- #
 
@@ -506,6 +534,7 @@ class Engine:
         binary = self._resolve_binary(launch["bin"])
         if binary is None:
             raise EngineUnavailable(f"{self.name}: binary not found ({launch['bin']}); set {launch.get('bin_env', 'the path')}")
+        self.build_id = binary_build_id(binary)
         self.port = free_port(int(launch.get("port_base", 11700)))
         variables = {
             "port": str(self.port),
@@ -1302,6 +1331,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 engine_block = {
                     "name": engine_name,
                     "version": engine.version,
+                    "build_id": engine.build_id,
                     "transport": "http",
                     "url": engine.url,
                     "weights": spec.get("weights", "mlx-community safetensors (same files for every engine)"),
@@ -1334,7 +1364,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                         break
                     tier = tiers[tier_name]
                     max_tokens = int(tier.get("max_tokens", args.max_tokens))
-                    if (engine_name, model_id, tier_name, width, cache_mode, max_tokens) in already:
+                    cell_key = (
+                        engine_name, engine.build_id or engine.version,
+                        model_id, tier_name, width, cache_mode, max_tokens,
+                    )
+                    if cell_key in already:
                         print(f"[{engine_name}/{model_id}/{tier_name}/c{width}/{cache_mode}] already recorded — skipped (--resume)")
                         continue
                     prompt = build_prompt(int(tier["prompt_tokens"]), chars_per_token)
