@@ -167,7 +167,12 @@
         "ready_timeout_s": 240
       },
       "extra_request_fields": {},
-      "notes": "pipx install vllm-mlx \u2014 installs to ~/.local/bin, which is NOT on a non-interactive zsh PATH; set VLLM_MLX_BIN or add it. Verify the CLI shape against the installed version before trusting a row."
+      "notes": "pipx install vllm-mlx \u2014 installs to ~/.local/bin, which is NOT on a non-interactive zsh PATH; set VLLM_MLX_BIN or add it. Verify the CLI shape against the installed version before trusting a row.",
+      "quarantined": {
+        "since": "2026-08-22",
+        "reason": "Panicked the macOS GPU driver on an M4 Pro mid-suite: panic(cpu 8) \"completeMemory() prepare count underflow\" @IOGPUMemory.cpp:550, panicked task 'Python', 31 threads. It had just been launched and its first cell (Qwen3.5-4B/short/c1) timed out; the host died ~9 minutes later and took the three queued passes behind it with it. Upstream carries open GPU memory-accounting and stream-ownership defects (waybarrios/vllm-mlx #627, #712, #468) and a closed wired/Metal growth report (#442); no kernel panic is reported there, so treat ours as unreported upstream.",
+        "override": "--allow-quarantined"
+      }
     },
     "rapid-mlx": {
       "description": "Rapid-MLX (raullenchai) \u2014 'Ollama replacement' MLX engine with prompt caching.",

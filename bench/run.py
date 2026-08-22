@@ -719,6 +719,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--model-root", default=os.environ.get("MLXCAT_BENCH_MODEL_ROOT", str(Path.home() / "Library/Caches/models/mlx-community")))
     parser.add_argument("--memory-ceiling-bytes", type=int, default=0, help="passed to launchers that support a ceiling (0 = engine default)")
     parser.add_argument("--results-dir", default=str(DEFAULT_RESULTS_DIR))
+    parser.add_argument(
+        "--allow-quarantined",
+        action="store_true",
+        help="run engines marked 'quarantined' in engines.json. They are quarantined because they "
+             "destabilised the HOST, not because they scored badly — run them alone, never ahead of "
+             "work you care about.",
+    )
     parser.add_argument("--engines-file", default=str(DEFAULT_ENGINES))
     parser.add_argument("--matrix-file", default=str(DEFAULT_MATRIX))
     parser.add_argument("--max-load", type=float, default=8.0, help="quiet-machine guard: 1-minute load average ceiling")
@@ -789,6 +796,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         if engine_name in overrides:
             spec["url"] = overrides[engine_name]
             spec.pop("launch", None)
+        quarantine = spec.get("quarantined")
+        if quarantine and not args.allow_quarantined:
+            print(
+                f"[{engine_name}] QUARANTINED since {quarantine.get('since')} — skipped.\n"
+                f"    {quarantine.get('reason')}\n"
+                f"    Re-run it deliberately and alone with {quarantine.get('override')}.",
+                file=sys.stderr,
+            )
+            continue
         if spec.get("platforms") and "macos" not in spec["platforms"]:
             print(f"[{engine_name}] not a macOS engine — skipped (rows come from its own producer)")
             continue
