@@ -4,7 +4,34 @@ Derived from the 223 valid HTTP rows in `bench/results/` (M4 Pro, 48 GiB,
 2026-08-21/22), newest-per-cell. Regenerate the numbers from the JSONL; do not
 trust this file over the data.
 
-## The headline
+## Status 2026-08-23 — read this before the headline below
+
+The headline that follows was measured on 2026-08-22, before
+`SerializationPolicy.multimodalOnly` and the allocator fix. It describes an
+engine that no longer exists. Corroborated on the M4 Pro, same machine, same
+model, same tier, control arm with no env override:
+
+**gemma-4-E2B, longgen — TTFT ms / aggregate tok/s**
+
+| | mlxcat *before* | **mlxcat now** | mlx-serve | oMLX | mlx-lm |
+|---|---|---|---|---|---|
+| c2 | 3,231 / 79 | **434 / 84** | 396 / 85 | 865 / 125 | 780 / 127 |
+| c4 | 11,999 / 79 | **870 / 137** | 704 / 86 | — | 1,552 / 209 |
+| c8 | 39,346 / 70 | **2,439 / 123** | 1,358 / 85 | 3,134 / 254 | — |
+
+* **TTFT: from worst by 15–30× to second**, ahead of oMLX and mlx-lm at c2 and
+  c8, behind mlx-serve.
+* **Aggregate throughput beats mlx-serve outright** — 137 vs 86 at c4, 123 vs 85
+  at c8. mlx-lm (209) and oMLX (254) still lead at the high end.
+* **Scaling: 195× → 11.2×** TTFT growth from c1 to c8. Competitors run 3.8–6.2×,
+  so headroom remains.
+
+Eight concurrent requests took 39 seconds to first token this morning and
+produced the throughput of one stream. They now take 2.4 seconds and produce
+1.8×. The rest of this file is still accurate for every model except gemma-4;
+a full re-measure on the default profile is queued (`bench/queue/…/05-…`).
+
+## The headline (2026-08-22, pre-fix — superseded above for gemma-4)
 
 Against the best of oMLX / mlx-lm / mlx-serve, cell by cell, geometric mean:
 
