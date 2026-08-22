@@ -201,6 +201,47 @@ kept as a regression pin for the layer that has been cleared.
 models, both serialized today at 37 s TTFT under load on an M4 Pro. It is the
 largest single win left.
 
+## 1e. `gemma4_unified` batches text by default and fails logit invariance at every width — open
+
+`multimodalOnlyModelTypes` holds two entries, `gemma4` and `gemma4_unified`, and
+entry is documented as requiring both gates:
+`BatchInvarianceTests.testBatchInvarianceAcrossModelFamilies` for logits and
+`SchedulerEngineTests.testVLMBatchEqualityAcrossModels` for images. The logit
+evidence recorded for the grant is gemma-4-**E2B** (a `gemma4`) at
+0.69 / 0.69 / 0.95 for batch 2/4/8.
+
+Run across families on 2026-08-23 (M5 Max, `MLXCAT_BATCH_INVARIANCE_MODELS`),
+gemma-4-**12B**-it-qat-4bit — which is `gemma4_unified`, the other entry — fails
+at every width tested, including the narrowest:
+
+| model | batch 2 | batch 4 | batch 8 |
+|---|---|---|---|
+| gemma-4-E2B-it-qat-4bit (`gemma4`) | 0.6875 ok | 0.6875 ok | 0.953 ok |
+| **gemma-4-12B-it-qat-4bit (`gemma4_unified`)** | **1.656 over** | **1.656 over** | **1.740 over** |
+| Qwen3.5-4B-MLX-4bit | 0.0 ok | 0.375 ok | 0.656 ok |
+| Qwen3-Coder-30B-A3B (`qwen3_moe`) | 0.9375 ok | 2.6875 over | 2.6875 over |
+| gpt-oss-20b-MXFP4-Q8 | 1.7e-05 ok | 2.0e-05 ok | 2.9e-05 ok |
+
+Tolerance is 1.25. `mismatched` is **0 at every width** — no wide-margin token
+flipped — which is exactly the argument this repo declined to accept for
+`qwen3_moe` ("the output may well be fine in practice, but that is not the
+standard the other families are held to"). Applying that standard consistently,
+`gemma4_unified` has not earned its `.multimodalOnly` grant on its own evidence;
+it inherited it from a sibling `model_type` that passes.
+
+This is deliberately **not** fixed here, because the honest fix is expensive and
+is a product call rather than a code one: `gemma4_unified` fails at width 2, so a
+`batchDecodeWidthCeilings` entry for it would have to be 1, i.e. `.always` — and
+reverting it undoes the gemma-4 concurrency win that `d630cee` just landed (TTFT
+11,999 → 870 ms at c4) on the iOS flagship family. The options are (a) revert
+`gemma4_unified` to `.always` and lose that, (b) find the numerics defect that
+separates 12B from E2B — both are QAT 4-bit, so this is not simply a size noise
+floor, and `gemma4_unified` is a distinct loader path from `gemma4`, or (c)
+decide the 1.25 tolerance is wrong for this family and say why in writing.
+
+Not a regression from the ceiling work: this is the first time the cross-family
+logit gate has been run against gemma-4-12B at all.
+
 ## 2. Hybrid caches cannot be combined mid-batch — FIXED
 
 `BatchLayerCache.extract` built a fresh `KVCacheSimple` and copied the row's
