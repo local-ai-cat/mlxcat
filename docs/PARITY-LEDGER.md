@@ -74,15 +74,39 @@ recorded in our own `bench/matrix.json:194`. Against mlx-serve at c8 we are 13×
 worse while per-stream decode is fine.
 **Note:** mlx-serve does **not** pack prefills — it is batch=1 per slot, like us.
 Packed prefill is not the prerequisite; multi-admission plus run-to-completion is.
+**Narrowed 2026-08-23:** `SchedulerAdmissionShapeTests.testIdleSchedulerAdmitsEveryWaitingRequestInOneStep`
+shows an idle scheduler DOES admit all 8 waiting requests in one step, so the
+staircase is not an admission-count problem on the cold path. What remains is
+that the eight prefills run serially within that step, so the last request's TTFT
+is the sum of all eight — which is exactly the linearity our bench recorded. The
+open question is therefore why mlx-serve's serial prefills are sublinear where
+ours are linear, and the first suspects are (2) chunk width and the blocking
+`eval(admission.cache)` per admission (`Scheduler.swift:491`).
 
-### 2. Busy-prefill chunk width
+### 2. Busy-prefill chunk width — partly closed
 **They:** mlx-lm and omlx use **2048** (`guest/mlx-lm/mlx_lm/generate.py:1509`,
 `guest/omlx/omlx/scheduler.py:1304`); mlx-serve uses **8192**
 (`guest/mlx-serve/src/generate.zig:34`) with per-model caps —
 MoE → 4096, composed-causal head-dim-256 → 2048 (`generate.zig:111`).
-**We:** **512** (`Scheduler.swift:421`). Combined with (1) that is one decode tick
-plus one actor round trip per 512 prefill tokens, against mlx-serve's one per
-8192 — a 16× difference in scheduling overhead.
+**We did:** 512 everywhere.
+**Now:** 512 idle, **2048 busy** — because one number was answering two questions
+that want opposite answers. Idle prefill has no stream waiting on a tick, so
+width is a pure memory question; busy prefill pays a decode tick and an actor
+round trip per boundary, so width is a scheduling question. Measured cost of
+widening the IDLE path at 16k on an M5 Max, which is why it stayed narrow:
+
+| model | idle 512 | idle 2048 |
+|---|---:|---:|
+| gemma-4-12B | 13.42 | 15.56 (+16%) |
+| Qwen3.8-27B | 18.90 | 22.91 (+21%) |
+
+**Gate:** `SchedulerAdmissionShapeTests.testPrefillChunkWidthMatchesTheReferenceRange`
+pins the busy width against the reference range.
+**Still open:** mlx-serve's per-model caps (`generate.zig:111`) — the width that
+is right for a 4-bit MoE is not the width that is right for a head-dim-256
+composed-causal model, and we use one number for all of them. And the TTFT half
+of this is unmeasured: the memory cost above is measured, the latency win is not,
+because it needs a concurrent bench run.
 
 ### 3. The prefill logits tensor
 **They:** mlx-lm prefills `y.size - 1` tokens and lets the single remaining token

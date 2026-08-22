@@ -415,10 +415,31 @@ public actor Scheduler {
     private func advanceAdmission(allowPartialPrefill: Bool) throws -> PreparedBatchRow? {
         guard var admission = admissionInProgress else { return nil }
 
-        // `prefill.stepSize` is optional upstream (nil = model default), but
-        // this scheduler needs a concrete chunk size; 512 was the non-optional
-        // default it was written against, so this preserves the prior behavior.
-        let prefillStep: Int = max(1, parameters.prefill.stepSize ?? 512)
+        // Two different questions wear one number here, and they want opposite
+        // answers, so they get two.
+        //
+        // IDLE prefill (nothing decoding) is a pure memory question: no stream
+        // is waiting on a tick, so a narrow chunk costs only per-chunk overhead
+        // and saves attention scratch. Measured at 16k on an M5 Max, widening it
+        // from 512 to 2048 cost gemma-4-12B 13.42 -> 15.56 GiB and Qwen3.8-27B
+        // 18.90 -> 22.91 GiB. So idle stays narrow.
+        //
+        // BUSY prefill (something is decoding) is a scheduling question: every
+        // chunk boundary costs a decode tick and an actor round trip, so at 512
+        // a 16k prompt pays that 32 times. mlx-lm and omlx use 2048
+        // (`guest/mlx-lm/mlx_lm/generate.py:1509`,
+        // `guest/omlx/omlx/scheduler.py:1304`); mlx-serve uses 8192 with
+        // per-model caps (`guest/mlx-serve/src/generate.zig:34`, `:111`). 2048 is
+        // the conservative end — what the two engines closest to our stack use.
+        //
+        // An explicit `prefill.stepSize` overrides both: a caller that names a
+        // width means it.
+        let idlePrefillStep = 512
+        let busyPrefillStep = 2048
+        let prefillStep: Int = max(
+            1,
+            parameters.prefill.stepSize ?? (allowPartialPrefill ? busyPrefillStep : idlePrefillStep)
+        )
         let stepBudget: Int = allowPartialPrefill ? prefillStep : Int.max
         var remainingBudget = stepBudget
         // `allowPartialPrefill` decides whether admission YIELDS between chunks
