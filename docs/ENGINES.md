@@ -61,6 +61,13 @@ numbers come from in-app harnesses (see `bench/README.md` § Platforms). The
 * GGUF beyond the existing `LLMEvaluator` escape hatch in the app.
 * GPU-resident paged attention: mlx-lm #610/#629 were closed upstream; mlxcat (like oMLX) reconstructs contiguous K/V from cached blocks.
 
+## Where we actually stand
+
+`docs/COMPETITIVE.md` reads the committed rows and says so plainly: fourth of
+four on a cell-by-cell geometric mean, competitive at c1 and collapsing under
+concurrency — because `usesSerializedDecode` has batched decode switched off for
+five of the six benchmark models. Read it before optimising anything.
+
 ## Keeping this honest
 
 * `scripts/donor-drift.sh` prints, for every pinned dependency and every
