@@ -69,6 +69,11 @@ cmd_run() {
     fi
     log "START ${pass:t}"
     ran=1
+    # Logs append so a campaign keeps its history, but a re-run's output butting
+    # straight onto the previous attempt's is how a stale "Ran 19 tests / OK"
+    # got read as this run's verdict on 2026-08-22. Mark the boundary.
+    print -r -- "" >>"$base.log"
+    print -r -- "===== run $(date -u +%Y-%m-%dT%H:%M:%SZ) @ $(git -C "$REPO" rev-parse --short HEAD 2>/dev/null) =====" >>"$base.log"
     if zsh "$pass" >>"$base.log" 2>&1; then
       date -u +%Y-%m-%dT%H:%M:%SZ > "$base.done"
       log "DONE ${pass:t}"

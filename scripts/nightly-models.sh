@@ -108,12 +108,34 @@ for gate in $GATE_ORDER; do
       -u MLXSERVE_VLM_TEST_MODEL -u MLXSERVE_RERANK_TEST_MODEL -u MLXCAT_MEMORY_BUDGET_MODEL \
       "${budget_env[@]}" "$gate=$model" swift test --skip-build --filter "$filter" > "$log" 2>&1
   rc=$?
-  summary=$(grep -E "Executed [0-9]+ tests|Test run with [0-9]+ tests" "$log" | tail -1)
-  if (( rc == 0 )); then
-    echo "| $gate | ${model:t} | \`$filter\` | PASS — $summary |" >> "$OUT"
+  # This package runs BOTH test libraries, so `swift test` prints two summaries:
+  # XCTest's "Executed N tests, with M failures" and then swift-testing's
+  # "Test run with N tests in M suites". Taking `tail -1` took the swift-testing
+  # line — which is 0/0 whenever the filter matches no swift-testing suite, i.e.
+  # for every gate here. On 2026-08-22 that printed "PASS — 0 tests in 0 suites"
+  # over a run that had executed 100 XCTest cases with 7 failures.
+  #
+  # Note "Executed 1 test" is SINGULAR; a `tests` regex silently misses any gate
+  # with exactly one test, which is most of the integration gates.
+  xctest_line=$(grep -E "Executed [0-9]+ tests?," "$log" | tail -1)
+  testing_line=$(grep -E "Test run with [0-9]+ tests? in [0-9]+ suites?" "$log" | tail -1)
+  xctest_count=$(sed -nE 's/.*Executed ([0-9]+) tests?,.*/\1/p' <<< "$xctest_line")
+  testing_count=$(sed -nE 's/.*Test run with ([0-9]+) tests?.*/\1/p' <<< "$testing_line")
+  total=$(( ${xctest_count:-0} + ${testing_count:-0} ))
+  summary="${xctest_line:-$testing_line}"
+  summary="${summary##[[:space:]]#}"
+
+  if (( total == 0 )); then
+    # Zero tests exits 0. A gate that ran nothing is the one result we must never
+    # record as PASS — that is how a filter that stopped matching goes unnoticed.
+    (( rc_total++ ))
+    echo "| $gate | ${model:t} | \`$filter\` | **NO TESTS RAN** — the filter matched nothing; a gate that runs nothing is not a pass — see ${log:t} |" >> "$OUT"
+  elif (( rc == 0 )); then
+    echo "| $gate | ${model:t} | \`$filter\` | PASS ($total tests) — $summary |" >> "$OUT"
   else
     (( rc_total++ ))
-    echo "| $gate | ${model:t} | \`$filter\` | **FAIL** (rc=$rc) — $summary — see ${log:t} |" >> "$OUT"
+    failures=$(grep -cE "^.*: error:" "$log")
+    echo "| $gate | ${model:t} | \`$filter\` | **FAIL** (rc=$rc, $failures assertion error line(s)) — $summary — see ${log:t} |" >> "$OUT"
   fi
 done
 echo "" >> "$OUT"
