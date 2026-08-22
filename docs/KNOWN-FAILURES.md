@@ -102,7 +102,59 @@ scale 4–9×. For the `gemma4` family the exclusion is not conservatism — the
 that would prove batching correct is red, and this is what it says. Any work on
 "unlock batching for gemma-4" starts here, not at the exclusion list.
 
-## 2. Hybrid caches cannot be combined mid-batch
+## 1b. A row is lost by insert + remove + extract — general, and still open
+
+Separated out on 2026-08-23. `testSlidingWindowInsertRemoveExtractMidBatch` and
+`testHybridFixedStateInsertRemoveExtractMidBatch` both fail with
+`next().count == 2` returning **1**:
+
+```
+insert p0; insert p1;  next().count == 2   ✓
+insert p2;  remove(p1)
+uids == [p0, p2]                            ✓
+extractCache(p0), extractCache(p2)          ✓ both non-nil
+next().count == 2                           ✗ returns 1
+```
+
+Three things it is **not**:
+
+* **not model-family specific** — reproduces on gpt-oss-20b, which has no
+  `ArraysCache` and passes every other gate;
+* **not a token-limit boundary** — both gates use `maxTokens: 2` and call
+  `next()` once first, so the first row reaches its limit on exactly the call
+  under test. `InsertRemoveExtractProbeTests` runs the same sequence at
+  `maxTokens: 8` and still gets 1;
+* **not caused by the cache-type fix in §2** — it predates it, and that fix only
+  made it *reachable* for hybrid models by removing the throw that came first.
+
+Mechanism (`Sources/MLXCat/TrackB/BatchGenerator.swift`): `decodeOneToken` short-
+circuits on `pendingEmission.contains(true)` into `emitPendingStep`, which emits
+responses only `for row in rowUIDs.indices where pendingEmission[row]`. `insert`
+appends `pendingEmission.append(false)` for the new row, and the launch-ahead
+path sets the flag uniformly true. So a row inserted while a launched-ahead step
+is outstanding is skipped for that step.
+
+Open question, because the fix depends on it: is `next()`'s contract "one
+response per active row per step" (a real bug, the new row is stalled) or
+"responses for whatever advanced this step" (the generator is right and both
+gates assert an invariant never promised)? A naive rollback of the launch-ahead
+looks like it would lose a token that was computed but never returned to the
+caller, so this is not a change to make on a guess.
+
+## 2. Hybrid caches cannot be combined mid-batch — FIXED
+
+`BatchLayerCache.extract` built a fresh `KVCacheSimple` and copied the row's
+state into it, discarding what the layer actually was. Harmless when every layer
+is a `KVCacheSimple`; fatal for a hybrid model, where a layer may be an
+`ArraysCache` — and continuous batching extracts and re-merges on every insert
+and remove, so the next merge threw. `extract` now copies the concrete cache and
+slices that, routing `ArraysCache` through its own `filter(batchIndices:)`.
+
+`testHybridBatchMatchesSerialGreedyTokens` — the `Optional([])` one, and the
+reason batched `qwen3_5` returned no tokens at all under real concurrency — now
+passes. The other test in the suite fails later, at §1b above.
+
+### The original failure, for reference
 
 `HybridBatchIntegrationTests` (Qwen3.5-4B), 2 tests / 2 failures:
 
