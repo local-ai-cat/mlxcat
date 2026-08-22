@@ -74,6 +74,33 @@
       },
       "notes": "Same binary and same ceiling as `mlxcat`; the only difference is the env override. Read the pair as an A/B of the exclusion lists, never as two engines."
     },
+    "mlxcat-moe-uncapped": {
+      "description": "mlxcat with the qwen3_moe batching cap REMOVED (MLXCAT_UNSERIALIZE_MODEL_TYPES=qwen3_moe). qwen3_moe used to be `.always` — never batched — on the strength of a throughput claim the repo retired; re-measuring it produced a width rather than a verdict (max logit error 0.94 at batch 2, inside the 1.25 tolerance, and 2.69 at batch 4 and 8, outside it), so the default is now `.maxWidth(2)`. This arm is the same binary with no cap at all. Read the pair `mlxcat` vs `mlxcat-moe-uncapped` as: what does the CAP cost, on top of what serialization cost. The third point — fully serialized — is the pre-ceiling rows measured on the same machine at 78b779f.",
+      "platforms": [
+        "macos",
+        "ios"
+      ],
+      "launch": {
+        "bin": "{repo}/.build/release/mlxcat-http",
+        "bin_env": "MLXCAT_HTTP_BIN",
+        "args": [
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "{port}",
+          "--model-dir",
+          "{model_root}",
+          "--memory-ceiling-bytes",
+          "{memory_ceiling_bytes}"
+        ],
+        "env": {
+          "MLXCAT_UNSERIALIZE_MODEL_TYPES": "qwen3_moe"
+        },
+        "port_base": 11800,
+        "ready_timeout_s": 120
+      },
+      "notes": "Same binary and same ceiling as `mlxcat`; the only difference is the env override. Uncapping is NOT a proposal — width 4 and 8 fail the logit tolerance. This arm exists to price the cap, so the cost of the correctness bar is a number rather than an argument."
+    },
     "mlx-swift-lm-tokeniterator": {
       "description": "mlx-swift-lm's raw TokenIterator loop, in-process — the mlx-swift-examples lineage and EXACTLY the mechanism behind Local AI Cat's legacy LLMEvaluator. The single-sequence baseline mlxcat must not lose to.",
       "platforms": [
