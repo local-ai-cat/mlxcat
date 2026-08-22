@@ -87,6 +87,70 @@ final class BatchInvarianceTests: XCTestCase {
         }
     }
 
+    /// The same logit-level check, across model FAMILIES.
+    ///
+    /// `testStaticBatchedDecodeMatchesSerialWithinMarginGate` is pinned to
+    /// Qwen3-0.6B-4bit — and `NativeModelEngine.usesSerializedDecode` disables
+    /// batched decode for `qwen3_5`, `qwen3_vl`, `gemma4`, `gemma4_unified`,
+    /// `mistral3`, `qwen2`, `qwen3` and `qwen3_moe`. The two sets do not
+    /// intersect: the gate that decides whether batching is numerically sound has
+    /// never been run against a single family that batching is switched off for.
+    /// Those exclusions have therefore never been re-earned, and on the 2026-08-22
+    /// leaderboard they cost five of six benchmark models their concurrency —
+    /// mlxcat's TTFT scales 15-86x from c1 to c8 where every competitor scales
+    /// 4-9x (`docs/COMPETITIVE.md`).
+    ///
+    /// Nothing in the fixture is model-specific: the prompts are generic and the
+    /// evaluation compares logits and only asserts token equality where the
+    /// top-1/top-2 margin is wide. So the pin is lifted here as an opt-in, leaving
+    /// the pinned gate's meaning untouched.
+    ///
+    ///     MLXCAT_BATCH_INVARIANCE_MODELS=$R/gemma-4-E2B-it-qat-4bit,$R/Qwen3.5-4B-MLX-4bit     ///       swift test --filter testBatchInvarianceAcrossModelFamilies
+    func testBatchInvarianceAcrossModelFamilies() async throws {
+        try MLXMetalRuntime.requireAvailable()
+
+        let raw = ProcessInfo.processInfo.environment["MLXCAT_BATCH_INVARIANCE_MODELS"] ?? ""
+        let paths = raw.split(separator: ",").map(String.init).filter { !$0.isEmpty }
+        guard !paths.isEmpty else {
+            throw XCTSkip(
+                "Set MLXCAT_BATCH_INVARIANCE_MODELS to a comma-separated list of model directories."
+            )
+        }
+
+        var failures: [String] = []
+        for path in paths {
+            let url = URL(fileURLWithPath: path)
+            let name = url.lastPathComponent
+            let container = try await LLMModelFactory.shared.loadContainer(
+                from: url, using: #huggingFaceTokenizerLoader())
+            let prompts = Self.prompts
+            let results = try await container.perform { context in
+                try await Self.evaluateBatchGate(context: context, prompts: prompts)
+            }
+            for result in results {
+                let verdict =
+                    result.maxLogitError < 1.25 && result.checkedTokenCount > 0
+                    && result.mismatchedCheckedTokens == 0 ? "OK  " : "FAIL"
+                // Printed unconditionally: the point of this test is the table.
+                print(
+                    "FAMILY \(verdict) \(name) batch=\(result.batchSize) "
+                        + "maxLogitError=\(result.maxLogitError) "
+                        + "checked=\(result.checkedTokenCount) "
+                        + "mismatched=\(result.mismatchedCheckedTokens) "
+                        + "step=\(result.maxErrorStep) margin=\(result.maxErrorMargin)"
+                )
+                if verdict == "FAIL" {
+                    failures.append(
+                        "\(name) batch=\(result.batchSize): logitError=\(result.maxLogitError), "
+                            + "checked=\(result.checkedTokenCount), "
+                            + "mismatched=\(result.mismatchedCheckedTokens)"
+                    )
+                }
+            }
+        }
+        XCTAssertTrue(failures.isEmpty, "families failing batch invariance:\n" + failures.joined(separator: "\n"))
+    }
+
     func testContinuousBatchingSupportsInsertAndRemoveMidBatch() async throws {
         try MLXMetalRuntime.requireAvailable()
 

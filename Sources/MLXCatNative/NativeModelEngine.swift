@@ -760,8 +760,43 @@ public struct NativeModelLoader: EnginePoolModelLoader {
         return hasProcessorConfiguration(in: modelURL)
     }
 
-    static func usesSerializedDecode(modelType: String, isVLM: Bool) -> Bool {
+    /// Families whose serialization exclusion has been lifted for a measurement,
+    /// comma-separated model types, or `all`.
+    ///
+    /// The two exclusion lists below switch batched decode off for five of the
+    /// six models on the leaderboard, and that costs mlxcat its concurrency:
+    /// TTFT scales 15-86x from c1 to c8 where every competitor scales 4-9x
+    /// (`docs/COMPETITIVE.md`). Neither list has been re-earned. The logit-level
+    /// gate that would justify them, `BatchInvarianceTests`, was pinned to
+    /// Qwen3-0.6B-4bit — a model on neither list — so it had never been run
+    /// against a single excluded family. Run across families on 2026-08-22,
+    /// gemma-4-E2B (0.69/0.69/0.95 at batch 2/4/8) and Qwen3.5-4B
+    /// (0.0/0.38/0.66) both come in UNDER the 1.25 tolerance and under
+    /// Qwen3-0.6B's own 1.19, with zero mismatched wide-margin tokens.
+    ///
+    /// That is evidence, not a decision: this override exists so the benchmark
+    /// can A/B the lists on real workloads instead of the question being settled
+    /// by argument. Nothing changes by default.
+    static func serializationOverrides(
+        _ environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Set<String> {
+        let raw = environment["MLXCAT_UNSERIALIZE_MODEL_TYPES"] ?? ""
+        return Set(
+            raw.split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+                .filter { !$0.isEmpty }
+        )
+    }
+
+    static func usesSerializedDecode(
+        modelType: String,
+        isVLM: Bool,
+        overrides: Set<String> = serializationOverrides()
+    ) -> Bool {
         let normalizedModelType = modelType.lowercased()
+        if overrides.contains("all") || overrides.contains(normalizedModelType) {
+            return false
+        }
         let requiresScalarOffsets = isVLM && scalarOffsetVLMModelTypes.contains(normalizedModelType)
         return requiresScalarOffsets || batchDecodeRegressedModelTypes.contains(normalizedModelType)
     }

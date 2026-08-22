@@ -47,6 +47,33 @@
       },
       "notes": "Same binary as `mlxcat`; the only difference is the absent ceiling, which leaves MemoryGuard.applyAllocatorLimits a no-op and MLX at its defaults. Read the pair as an A/B of what the memory guard costs, never as two engines."
     },
+    "mlxcat-batched": {
+      "description": "mlxcat with the batched-decode serialization exclusions LIFTED for gemma4 and qwen3_5 (MLXCAT_UNSERIALIZE_MODEL_TYPES). NativeModelLoader.usesSerializedDecode switches batched decode off for five of the six leaderboard models, which is why mlxcat's TTFT scales 15-86x from c1 to c8 while every competitor scales 4-9x. Neither exclusion list has been re-earned: the logit-level gate that would justify them was pinned to Qwen3-0.6B-4bit, a model on neither list. Run across families on 2026-08-22, gemma-4-E2B and Qwen3.5-4B both pass under the 1.25 tolerance and under Qwen3-0.6B's own 1.19. This arm measures what lifting them buys.",
+      "platforms": [
+        "macos",
+        "ios"
+      ],
+      "launch": {
+        "bin": "{repo}/.build/release/mlxcat-http",
+        "bin_env": "MLXCAT_HTTP_BIN",
+        "args": [
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "{port}",
+          "--model-dir",
+          "{model_root}",
+          "--memory-ceiling-bytes",
+          "{memory_ceiling_bytes}"
+        ],
+        "env": {
+          "MLXCAT_UNSERIALIZE_MODEL_TYPES": "gemma4,gemma4_unified,qwen3_5"
+        },
+        "port_base": 11780,
+        "ready_timeout_s": 120
+      },
+      "notes": "Same binary and same ceiling as `mlxcat`; the only difference is the env override. Read the pair as an A/B of the exclusion lists, never as two engines."
+    },
     "mlx-swift-lm-tokeniterator": {
       "description": "mlx-swift-lm's raw TokenIterator loop, in-process — the mlx-swift-examples lineage and EXACTLY the mechanism behind Local AI Cat's legacy LLMEvaluator. The single-sequence baseline mlxcat must not lose to.",
       "platforms": [
