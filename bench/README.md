@@ -57,6 +57,22 @@ vLLM's serving benchmark and mlx-serve's release table — and, more usefully, w
 it still owes them: an accuracy axis, a time series instead of a snapshot, and
 realistic prompt distributions.
 
+### Profiles: the cost of a run should be a decision
+
+Measured per-cell medians on an M4 Pro (2026-08-22): short 27 s, 4k 46 s,
+longgen 152 s, 16k 201 s. **Qwen3.8-27B alone is 76 of the default matrix's 154
+minutes** — its 16k c1 (918 s) and longgen c8 (1224 s) are 36 minutes for two
+cells. An iteration loop that includes it is not an iteration loop.
+
+```bash
+python3 bench/run.py --profile quick     # ~4 min/engine — enough to see a change
+python3 bench/run.py --profile default   # ~2.6 h/engine — what a leaderboard row may come from
+python3 bench/run.py --profile full      # overnight, on a machine nobody needs
+```
+
+Explicit flags still beat the profile, so `--profile quick --contexts 16k` means
+what it says.
+
 ### The quiet-machine guard
 
 Throughput on an interactive Mac is load-sensitive — consecutive samples of one
@@ -65,7 +81,11 @@ configuration ranged 0.95×–1.31× on 2026-08-12, and a whole overnight matrix
 refuses to run unless the 1-minute load average is ≤ `--max-load` (8), memory
 free ≥ `--min-free-pct` (35 %) and `pmset -g therm` reports no CPU speed limit.
 `--allow-loaded` runs anyway and stamps every record `valid_for_leaderboard:false`
-(kept for audit, never ranked).
+(kept for audit, never ranked). `--wait-for-quiet SECONDS` waits instead of
+refusing — use it on a host that also runs CI. It replaces the shell poll loops
+the campaign passes used to carry, which needed three consecutive quiet readings
+and reset to zero on a single blip: on 2026-08-22 that spent 90 minutes on a
+CI-busy box and produced no rows at all.
 
 ### Safeguards: the run must not be able to kill the machine
 

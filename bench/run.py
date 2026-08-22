@@ -1106,6 +1106,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--min-free-pct", type=float, default=35.0, help="quiet-machine guard: memory_pressure free %% floor")
     parser.add_argument("--allow-loaded", action="store_true", help="run even if the guard trips; rows are marked invalid for the leaderboard")
     parser.add_argument(
+        "--wait-for-quiet",
+        type=float,
+        default=0,
+        help="seconds to wait for the host to go quiet before giving up, instead of refusing "
+             "immediately. Replaces the shell poll loops the campaign passes used to carry, which "
+             "reset their counter on a single blip and could wait forever on a host that also runs "
+             "CI. 0 (default) keeps the old refuse-now behaviour.",
+    )
+    parser.add_argument(
+        "--profile",
+        default="",
+        help="a named plan from matrix.json profiles: 'quick' for a few-minute iteration loop, "
+             "'default' for the weekly matrix, 'full' for the long ladder. Sets models, contexts "
+             "and concurrency together; explicit flags still win.",
+    )
+    parser.add_argument(
         "--engine-memory-cap-pct",
         type=float,
         default=92.0,
@@ -1191,6 +1207,31 @@ def main(argv: Optional[List[str]] = None) -> int:
     matrix = load_json(Path(args.matrix_file))
     model_root = Path(args.model_root).expanduser()
 
+    # A profile sets the whole plan; an explicit flag still wins over it, so
+    # `--profile quick --contexts 16k` means what it says.
+    profile = {}
+    if args.profile:
+        profiles = matrix.get("profiles") or {}
+        if args.profile not in profiles:
+            named = ", ".join(k for k in profiles if not k.startswith("_"))
+            print(f"unknown --profile {args.profile!r} (matrix.json has: {named})", file=sys.stderr)
+            return 64
+        profile = profiles[args.profile]
+        cost = profile.get("_cost")
+        print(f"profile {args.profile}: {cost}" if cost else f"profile {args.profile}")
+        if not args.models:
+            args.models = ",".join(profile["models"])
+        if not args.contexts:
+            args.contexts = ",".join(profile["contexts"])
+        if not args.concurrency:
+            args.concurrency = ",".join(str(w) for w in profile["concurrency"])
+        if not args.concurrency_tier:
+            args.concurrency_tier = ",".join(profile["concurrency_tiers"])
+        if parser.get_default("runs") == args.runs:
+            args.runs = int(profile["runs"])
+        if parser.get_default("warmup") == args.warmup:
+            args.warmup = int(profile["warmup"])
+
     models = [m.strip() for m in args.models.split(",") if m.strip()] or matrix["model_sets"][args.model_set]
     model_specs = {m["id"]: m for m in matrix["models"]}
     tiers = {t["name"]: t for t in matrix["context_tiers"]}
@@ -1240,6 +1281,25 @@ def main(argv: Optional[List[str]] = None) -> int:
     }
 
     violations = host_violations(snapshot, args)
+
+    # Waiting for quiet belongs here, not in a shell loop around this script.
+    # The campaign passes used to poll `load < 5` and require three consecutive
+    # readings, resetting to zero on any single blip — on a host that also runs
+    # CI that is an unbounded wait, and on 2026-08-22 it burned 90 minutes and
+    # produced no rows at all. One implementation, the same thresholds as the
+    # guard itself, and a blip costs one interval instead of everything.
+    if violations and args.wait_for_quiet > 0 and not args.allow_loaded:
+        deadline = time.time() + args.wait_for_quiet
+        print(f"host is loaded; waiting up to {args.wait_for_quiet / 60:.0f} min for quiet — " + "; ".join(violations))
+        while time.time() < deadline:
+            time.sleep(min(30, max(5, args.wait_for_quiet / 60)))
+            snapshot = host_snapshot()
+            violations = host_violations(snapshot, args)
+            if not violations:
+                print(f"host quiet (loadavg {snapshot['loadavg_1m']}) — starting")
+                break
+            print(f"  still loaded: {'; '.join(violations)} ({(deadline - time.time()) / 60:.0f} min left)")
+
     valid = not violations
     if violations:
         print("quiet-machine guard tripped: " + "; ".join(violations), file=sys.stderr)

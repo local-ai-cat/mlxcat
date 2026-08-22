@@ -379,6 +379,20 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual(self.run_harness("--concurrency", "1", "--resume"), 1)
         self.assertEqual(len(self.rows()), first, "--resume re-recorded a finished cell")
 
+    def test_a_profile_sets_the_plan_and_an_explicit_flag_still_wins(self):
+        argv = ["--engine-url", f"fake={self.url}", "--engines", "fake",
+                "--models", "fake-model", "--results-dir", self.results,
+                "--allow-loaded", "--max-load", "1e9", "--min-free-pct", "0",
+                "--profile", "quick", "--contexts", "short", "--concurrency", "1"]
+        self.assertEqual(run.main(argv), 0)
+        rows = self.rows()
+        # profile supplied runs=1/warmup=0; the explicit --contexts beat its tiers
+        self.assertTrue(all(r["workload"]["context_tier"] == "short" for r in rows))
+        self.assertTrue(all(r["workload"]["runs"] == 1 for r in rows))
+
+    def test_an_unknown_profile_is_rejected(self):
+        self.assertEqual(self.run_harness("--profile", "lukewarm"), 64)
+
     def test_open_loop_arrivals_are_recorded_on_the_row(self):
         self.assertEqual(
             self.run_harness("--concurrency", "2", "--concurrency-tier", "short",

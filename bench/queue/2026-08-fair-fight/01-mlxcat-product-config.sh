@@ -11,10 +11,9 @@ export PATH="$HOME/.local/bin:$PATH"
 cd ~/src/mlxcat
 source bench/queue/2026-08-fair-fight/lib.sh
 
-wait_for_quiet
 python3 bench/run.py --engines mlxcat \
   --models "$MODELS" --contexts short,4k,16k,longgen --concurrency 2,4,8 \
-  --runs 3 --warmup 1 --max-load 6 --resume \
+  --runs 3 --warmup 1 --max-load 6 --resume --wait-for-quiet "$QUIET_WAIT" \
   --memory-ceiling-bytes "$CEIL" \
   --sync-after-engine "$SYNC" \
   --tag "fair-fight arm A: product config, ceiling 24G, post-allocator-fix"

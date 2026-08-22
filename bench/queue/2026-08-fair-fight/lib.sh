@@ -7,13 +7,9 @@ CEIL=25769803776   # 24 GiB — the same ceiling every existing mlxcat row used
 # for twelve hours. Failure here is reported, never fatal.
 SYNC='git pull --rebase -q && git add bench/results/*.jsonl && git -c user.name="Atlas Codes AI" -c user.email="76924051+atlascodesai@users.noreply.github.com" commit -q -m "bench: checkpoint ${MLXCAT_BENCH_ENGINE} rows" && git push -q'
 
-wait_for_quiet() {
-  # run.py REFUSES a loaded host rather than waiting, and this box also runs CI.
-  local quiet=0 l
-  while (( quiet < 3 )); do
-    l=$(sysctl -n vm.loadavg | awk '{print $2}')
-    if (( $(echo "$l < 5.0" | bc -l) )); then quiet=$((quiet+1)); else quiet=0; fi
-    echo "$(date +%H:%M) load=$l quiet=$quiet/3"
-    (( quiet < 3 )) && sleep 120
-  done
-}
+# The shell quiet-poll that used to live here required three consecutive
+# loadavg readings under 5.0 and reset to zero on any blip. On a host that also
+# runs CI that is an unbounded wait: on 2026-08-22 it spent 90 minutes and
+# produced no rows. `--wait-for-quiet` inside run.py does the same job against
+# the same thresholds as the guard, and a blip now costs one interval.
+QUIET_WAIT=3600
