@@ -29,6 +29,7 @@ import os
 import platform
 import re
 import shutil
+import signal
 import socket
 import statistics
 import subprocess
@@ -98,6 +99,26 @@ def memory_free_percent() -> Optional[float]:
     return float(match.group(1)) if match else None
 
 
+def swap_used_bytes() -> Optional[int]:
+    """Swap in use, from `sysctl vm.swapusage`.
+
+    Absolute swap is not comparable across machines (a laptop idles with tens of
+    GiB paged out and is perfectly healthy), so callers compare against the
+    baseline taken when the run started. Growth is the signal: a benchmark that
+    pushes the host into fresh swap is both measuring garbage and walking toward
+    the memory-accounting panic that killed the M4 on 2026-08-22.
+    """
+    try:
+        out = subprocess.check_output(["sysctl", "-n", "vm.swapusage"], text=True)
+    except Exception:
+        return None
+    match = re.search(r"used\s*=\s*([\d.]+)([KMG])", out)
+    if not match:
+        return None
+    scale = {"K": 1024, "M": 1024 ** 2, "G": 1024 ** 3}[match.group(2)]
+    return int(float(match.group(1)) * scale)
+
+
 def thermal_cpu_speed_limit() -> Optional[int]:
     try:
         out = subprocess.check_output(["pmset", "-g", "therm"], text=True)
@@ -113,12 +134,30 @@ def host_snapshot() -> Dict[str, Any]:
         "loadavg_1m": round(load1, 2),
         "loadavg_5m": round(load5, 2),
         "memory_free_pct": memory_free_percent(),
+        "swap_used_bytes": swap_used_bytes(),
         "thermal_cpu_speed_limit": thermal_cpu_speed_limit(),
     }
 
 
-def quiet_machine_violations(snapshot: Dict[str, Any], max_load: float, min_free_pct: float) -> List[str]:
+def quiet_machine_violations(
+    snapshot: Dict[str, Any],
+    max_load: float,
+    min_free_pct: float,
+    swap_baseline_bytes: Optional[int] = None,
+    max_swap_growth_bytes: Optional[int] = None,
+) -> List[str]:
     problems: List[str] = []
+    if (
+        swap_baseline_bytes is not None
+        and max_swap_growth_bytes
+        and snapshot.get("swap_used_bytes") is not None
+    ):
+        growth = snapshot["swap_used_bytes"] - swap_baseline_bytes
+        if growth > max_swap_growth_bytes:
+            problems.append(
+                f"swap grew {growth / 2 ** 30:.1f} GiB since the run started "
+                f"(> {max_swap_growth_bytes / 2 ** 30:.1f} GiB)"
+            )
     if snapshot["loadavg_1m"] > max_load:
         problems.append(f"loadavg_1m {snapshot['loadavg_1m']} > {max_load}")
     free = snapshot.get("memory_free_pct")
@@ -202,6 +241,178 @@ class FootprintSampler:
         return reading["lifetime_max_phys_footprint"] if reading else None
 
 
+def recorded_cells(results_dir: Path, device_model: str) -> set:
+    """Cells this device already has a *good* row for, keyed the way the
+    leaderboard keys them. Feeds `--resume`, so a host that dies mid-matrix costs
+    only the cells it had left."""
+    done = set()
+    for path in sorted(results_dir.glob("*.jsonl")):
+        for line in path.read_text(errors="replace").splitlines():
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not row.get("valid_for_leaderboard"):
+                continue
+            if (row.get("device") or {}).get("model") != device_model:
+                continue
+            workload = row.get("workload") or {}
+            done.add((
+                (row.get("engine") or {}).get("name"),
+                (row.get("model") or {}).get("id"),
+                workload.get("context_tier"),
+                int(workload.get("concurrency") or 1),
+                workload.get("cache_mode") or "cold",
+                int(workload.get("max_tokens") or 0),
+            ))
+    return done
+
+
+def sync_results(args: argparse.Namespace, out_path: Path, engine_name: str) -> None:
+    """Checkpoint finished rows off this machine while there is still a machine.
+
+    Rows are appended per cell, so nothing is lost to a crash locally — but the
+    file is only useful where someone can read it, and on 2026-08-22 that turned
+    out to be nowhere for twelve hours. The command is the caller's choice (git,
+    rsync, scp) so the harness carries no opinion about where results live.
+    """
+    if not args.sync_after_engine:
+        return
+    environment = dict(os.environ, MLXCAT_BENCH_RESULT=str(out_path), MLXCAT_BENCH_ENGINE=engine_name)
+    try:
+        completed = subprocess.run(
+            args.sync_after_engine, shell=True, env=environment,
+            capture_output=True, text=True, timeout=600,
+        )
+    except Exception as error:  # noqa: BLE001
+        print(f"[{engine_name}] result sync failed to start: {error}", file=sys.stderr)
+        return
+    if completed.returncode == 0:
+        print(f"[{engine_name}] results synced")
+    else:
+        print(
+            f"[{engine_name}] result sync exited {completed.returncode} — rows are still in "
+            f"{out_path}\n{(completed.stderr or completed.stdout).strip()[:500]}",
+            file=sys.stderr,
+        )
+
+
+def host_violations(snapshot: Dict[str, Any], args: argparse.Namespace) -> List[str]:
+    """`quiet_machine_violations` bound to the run's flags and swap baseline."""
+    return quiet_machine_violations(
+        snapshot,
+        args.max_load,
+        args.min_free_pct,
+        getattr(args, "_swap_baseline_bytes", None),
+        getattr(args, "_swap_growth_invalid_bytes", None),
+    )
+
+
+class RunawayGuard:
+    """Kills an engine process before it can take the host down with it.
+
+    On 2026-08-22 vllm-mlx panicked the macOS GPU driver on the M4 Pro
+    (`completeMemory() prepare count underflow` @IOGPUMemory.cpp:550) roughly
+    nine minutes after its first cell timed out, and the reboot took the three
+    benchmark passes queued behind it. Nothing in the harness was watching: the
+    quiet-machine guard samples between cells, and `FootprintSampler` only runs
+    during the measured requests — not during launch, calibration, the discarded
+    cold request, or the warmup, which is exactly where that engine died.
+
+    So this runs for the whole life of an engine process, at 1 Hz, and kills it
+    on either of the two signals that precede a host death:
+
+    * the engine's own physical footprint crosses a fraction of installed RAM;
+    * the machine has paged out materially more than it had when the run began.
+
+    Swap is measured as *growth* from a baseline because absolute swap is not
+    comparable between machines — a laptop can idle with 20 GiB paged out and be
+    fine, while the M4 worker sits at zero.
+
+    A breach is recorded, not just acted on: the cell it interrupts is written
+    with `invalid_reason`, and the caller abandons the engine rather than
+    relaunching into the same wall.
+    """
+
+    def __init__(
+        self,
+        footprint: "Footprint",
+        pid: Optional[int],
+        label: str,
+        cap_bytes: Optional[int],
+        swap_baseline_bytes: Optional[int],
+        swap_growth_kill_bytes: Optional[int],
+        interval: float = 1.0,
+    ) -> None:
+        self._footprint = footprint
+        self._pid = pid
+        self._label = label
+        self._cap = cap_bytes
+        self._swap_baseline = swap_baseline_bytes
+        self._swap_kill = swap_growth_kill_bytes
+        self._interval = interval
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self.breach: Optional[str] = None
+
+    def start(self) -> "RunawayGuard":
+        if self._pid and (self._cap or self._swap_kill):
+            self._thread = threading.Thread(target=self._run, daemon=True)
+            self._thread.start()
+        return self
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=3)
+            self._thread = None
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            reason = self._check()
+            if reason:
+                self.breach = reason
+                print(f"[{self._label}] RUNAWAY GUARD: {reason} — killing pid {self._pid}", file=sys.stderr)
+                self._kill()
+                return
+            self._stop.wait(self._interval)
+
+    def _check(self) -> Optional[str]:
+        if self._cap:
+            reading = self._footprint.read(self._pid or 0)
+            if reading is None:
+                return None  # process already gone; nothing to guard
+            used = reading["phys_footprint"]
+            if used > self._cap:
+                return (
+                    f"engine footprint {used / 2 ** 30:.1f} GiB exceeded the cap "
+                    f"{self._cap / 2 ** 30:.1f} GiB"
+                )
+        if self._swap_kill and self._swap_baseline is not None:
+            current = swap_used_bytes()
+            if current is not None and current - self._swap_baseline > self._swap_kill:
+                return (
+                    f"host swapped {(current - self._swap_baseline) / 2 ** 30:.1f} GiB "
+                    f"since the run started (> {self._swap_kill / 2 ** 30:.1f} GiB)"
+                )
+        return None
+
+    def _kill(self) -> None:
+        if not self._pid:
+            return
+        try:
+            os.kill(self._pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            print(
+                f"[{self._label}] cannot kill pid {self._pid} (not ours) — stop it by hand",
+                file=sys.stderr,
+            )
+
+
 def ensure_metallib(binary: str) -> str:
     """`swift build` products need mlx.metallib beside them; build it once if missing.
 
@@ -258,6 +469,7 @@ class Engine:
         self.log_path: Optional[Path] = None
         self.version: Optional[str] = None
         self.port: Optional[int] = None
+        self.guard: Optional[RunawayGuard] = None
 
     # -- lifecycle -------------------------------------------------------- #
 
@@ -268,6 +480,7 @@ class Engine:
             if not self.url:
                 raise RuntimeError(f"{self.name}: neither 'launch' nor 'url' configured")
             self.pid = pid_listening_on(self._port_from_url(self.url))
+            self._arm_guard()
             self.wait_ready()
             return
         binary = self._resolve_binary(launch["bin"])
@@ -291,9 +504,27 @@ class Engine:
         self.process = subprocess.Popen(argv, stdout=handle, stderr=subprocess.STDOUT, env=env)
         self.pid = self.process.pid
         self.url = f"http://127.0.0.1:{self.port}"
+        self._arm_guard()
         self.wait_ready(timeout=float(launch.get("ready_timeout_s", 180)))
 
+    def _arm_guard(self) -> None:
+        """Watch this process for the whole time it exists, not just while a cell
+        is being measured — the engine that killed the host died during launch."""
+        guard_context = getattr(self.args, "_guard_context", None)
+        if not guard_context or not self.pid:
+            return
+        self.guard = RunawayGuard(
+            footprint=guard_context["footprint"],
+            pid=self.pid,
+            label=self.name,
+            cap_bytes=guard_context["cap_bytes"],
+            swap_baseline_bytes=guard_context["swap_baseline_bytes"],
+            swap_growth_kill_bytes=guard_context["swap_growth_kill_bytes"],
+        ).start()
+
     def stop(self) -> None:
+        if self.guard:
+            self.guard.stop()
         if self.process and self.process.poll() is None:
             self.process.terminate()
             try:
@@ -679,7 +910,7 @@ def run_producer(
         for tagged in lines:
             line, _, snap_json = tagged.partition("\t")
             row_snapshot = json.loads(snap_json)
-            row_violations = quiet_machine_violations(row_snapshot, args.max_load, args.min_free_pct)
+            row_violations = host_violations(row_snapshot, args)
             try:
                 record = json.loads(line)
             except json.JSONDecodeError:
@@ -731,6 +962,55 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--max-load", type=float, default=8.0, help="quiet-machine guard: 1-minute load average ceiling")
     parser.add_argument("--min-free-pct", type=float, default=35.0, help="quiet-machine guard: memory_pressure free %% floor")
     parser.add_argument("--allow-loaded", action="store_true", help="run even if the guard trips; rows are marked invalid for the leaderboard")
+    parser.add_argument(
+        "--engine-memory-cap-pct",
+        type=float,
+        default=92.0,
+        help="runaway guard: SIGKILL an engine whose physical footprint passes this %% of installed "
+             "RAM. The highest honest row we have measured is 90.8%% (mlx-serve, gemma-4-12B, c4 on "
+             "48 GiB), so this sits just above it: it is a host-survival line, not a memory budget. "
+             "0 disables.",
+    )
+    parser.add_argument(
+        "--swap-growth-kill-gb",
+        type=float,
+        default=8.0,
+        help="runaway guard: SIGKILL an engine once the host has paged out this much MORE than it "
+             "had when the run started. Growth, not absolute, because a laptop idles with tens of "
+             "GiB swapped and the worker idles at zero. 0 disables.",
+    )
+    parser.add_argument(
+        "--swap-growth-invalid-gb",
+        type=float,
+        default=2.0,
+        help="quiet-machine guard: rows measured after the host swapped this much are recorded but "
+             "not ranked. Well below the kill line — thrash corrupts numbers long before it "
+             "threatens the machine.",
+    )
+    parser.add_argument(
+        "--engine-failure-budget",
+        type=int,
+        default=3,
+        help="abandon an engine after this many consecutive failed cells. vllm-mlx was allowed to "
+             "keep failing for nine minutes before it panicked the host; a sick engine gets a short "
+             "leash and the run moves on to the next one.",
+    )
+    parser.add_argument(
+        "--sync-after-engine",
+        default="",
+        metavar="CMD",
+        help="shell command run after each engine finishes, with MLXCAT_BENCH_RESULT set to the "
+             "output file. The 2026-08-22 panic stranded 160 finished rows on an unreachable "
+             "machine for twelve hours because the suite only synced at the end; an engine is the "
+             "natural checkpoint. Failures are reported, never fatal — a sync problem must not cost "
+             "the run.",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="skip cells already recorded for this device in --results-dir. A host that dies "
+             "mid-matrix then costs the cells it had left, not the ones it had already paid for.",
+    )
     parser.add_argument("--tag", default="", help="free-text tag stored on every record (e.g. 'pin a481734 + ceiling')")
     parser.add_argument("--dry-run", action="store_true", help="print the plan and exit")
     args = parser.parse_args(argv)
@@ -763,7 +1043,21 @@ def main(argv: Optional[List[str]] = None) -> int:
             engine_names.append(name)
 
     snapshot = host_snapshot()
-    violations = quiet_machine_violations(snapshot, args.max_load, args.min_free_pct)
+    swap_baseline = snapshot.get("swap_used_bytes")
+    physical_memory = int(sysctl("hw.memsize") or 0)
+    guard_cap = int(physical_memory * args.engine_memory_cap_pct / 100) if args.engine_memory_cap_pct > 0 else None
+    swap_kill = int(args.swap_growth_kill_gb * 2 ** 30) if args.swap_growth_kill_gb > 0 else None
+    swap_invalid = int(args.swap_growth_invalid_gb * 2 ** 30) if args.swap_growth_invalid_gb > 0 else None
+    args._swap_baseline_bytes = swap_baseline
+    args._swap_growth_invalid_bytes = swap_invalid
+    args._guard_context = {
+        "footprint": Footprint(),
+        "cap_bytes": guard_cap,
+        "swap_baseline_bytes": swap_baseline,
+        "swap_growth_kill_bytes": swap_kill,
+    }
+
+    violations = host_violations(snapshot, args)
     valid = not violations
     if violations:
         print("quiet-machine guard tripped: " + "; ".join(violations), file=sys.stderr)
@@ -787,6 +1081,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     footprint = Footprint()
     harness_commit = git_commit(REPO)
     records_written = 0
+    already = recorded_cells(results_dir, device["model"]) if args.resume else set()
+    if already:
+        print(f"resume: {len(already)} cell(s) already recorded for {device['model']} will be skipped")
 
     for engine_name in engine_names:
         spec = dict(engines_spec.get(engine_name) or {})
@@ -821,8 +1118,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             records_written += run_producer(engine_name, spec, models, model_specs, tiers, chosen_tiers, model_root, args, stamp, out_path)
             continue
         engine = Engine(engine_name, spec, args, model_root)
+        # A sick engine gets a short leash. vllm-mlx was allowed to keep failing
+        # for nine minutes on 2026-08-22 before it panicked the GPU driver and
+        # rebooted the host, taking three queued passes with it.
+        consecutive_failures = 0
+        abandon_reason: Optional[str] = None
 
         for model_id in models:
+            if abandon_reason:
+                break
             model = model_specs.get(model_id, {"id": model_id})
             if spec.get("launch") and not (model_root / model_id).exists():
                 print(f"[{engine_name}/{model_id}] model dir missing under {model_root} — skipped")
@@ -868,13 +1172,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         (t, w) for t in conc_tiers for w in widths if w > 1
     ]
                 for tier_name, width in cells:
+                    if abandon_reason:
+                        break
                     tier = tiers[tier_name]
+                    max_tokens = int(tier.get("max_tokens", args.max_tokens))
+                    if (engine_name, model_id, tier_name, width, cache_mode, max_tokens) in already:
+                        print(f"[{engine_name}/{model_id}/{tier_name}/c{width}/{cache_mode}] already recorded — skipped (--resume)")
+                        continue
                     prompt = build_prompt(int(tier["prompt_tokens"]), chars_per_token)
                     label = f"[{engine_name}/{model_id}/{tier_name}/c{width}/{cache_mode}]"
                     # Re-sample the host per cell — a run that starts quiet can get
                     # loud, and later rows must not inherit the opening verdict.
                     cell_snapshot = host_snapshot()
-                    cell_violations = quiet_machine_violations(cell_snapshot, args.max_load, args.min_free_pct)
+                    cell_violations = host_violations(cell_snapshot, args)
                     cell_valid = not cell_violations
                     try:
                         metrics = run_cell(
@@ -885,6 +1195,25 @@ def main(argv: Optional[List[str]] = None) -> int:
                     except Exception as error:  # noqa: BLE001
                         print(f"{label} FAILED: {error}", file=sys.stderr)
                         metrics = {"error": str(error)}
+
+                    # The runaway guard has been watching this pid since launch.
+                    # A breach outranks whatever the cell reported: the engine is
+                    # dead, the row is not evidence, and we do not relaunch it.
+                    breach = engine.guard.breach if engine.guard else None
+                    if breach:
+                        metrics = {"error": f"runaway guard: {breach}"}
+                        abandon_reason = breach
+                    if "error" in metrics:
+                        consecutive_failures += 1
+                    else:
+                        consecutive_failures = 0
+                    if (
+                        abandon_reason is None
+                        and args.engine_failure_budget > 0
+                        and consecutive_failures >= args.engine_failure_budget
+                    ):
+                        abandon_reason = f"{consecutive_failures} consecutive failed cells"
+
                     record = {
                         "schema": SCHEMA,
                         "run_id": run_id,
@@ -920,6 +1249,16 @@ def main(argv: Optional[List[str]] = None) -> int:
                         print(f"{label} prompt {metrics['prompt_tokens']} tok · TTFT {metrics['ttft_ms']['median']:.0f} ms · prefill {pre:.0f} tok/s · decode {dec:.1f} tok/s · peak {peak:.2f} GiB{agg}")
             finally:
                 engine.stop()
+
+        sync_results(args, out_path, engine_name)
+
+        if abandon_reason:
+            print(
+                f"[{engine_name}] ABANDONED: {abandon_reason}. Remaining cells for this engine were "
+                f"not attempted; the run continues with the next engine. If this is a host-stability "
+                f"failure rather than a bad build, quarantine it in {args.engines_file}.",
+                file=sys.stderr,
+            )
 
     print(f"wrote {records_written} record(s) → {out_path}")
     if records_written:

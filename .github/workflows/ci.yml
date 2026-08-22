@@ -88,6 +88,8 @@ jobs:
           python3 -m py_compile bench/run.py bench/leaderboard.py
           python3 -c "import json; json.load(open('bench/engines.json')); json.load(open('bench/matrix.json')); print('engines.json + matrix.json ok')"
           python3 bench/run.py --dry-run --engines mlxcat --model-set smoke --allow-loaded >/dev/null && echo "run.py --dry-run ok"
+      - name: harness safeguards (the macOS-only guard tests skip here)
+        run: python3 bench/test_run.py
 
   shell:
     name: shell scripts parse
@@ -95,4 +97,10 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - run: for f in scripts/*.sh scripts/**/*.sh; do [ -f "$f" ] && zsh -n "$f" && echo "ok $f"; done
+      - run: for f in scripts/*.sh scripts/**/*.sh bench/*.sh bench/queue/**/*.sh; do [ -f "$f" ] && zsh -n "$f" && echo "ok $f"; done
+
+      # The runaway guard is the one piece of the harness whose failure mode is a
+      # dead machine rather than a bad number, so it is tested where it runs:
+      # `proc_pid_rusage` is macOS-only and the Linux job above skips those cases.
+      - name: harness safeguards (full, incl. the runaway guard)
+        run: python3 bench/test_run.py

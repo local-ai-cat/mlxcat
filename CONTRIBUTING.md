@@ -13,6 +13,12 @@ macOS **and** embedded in an iOS app, so every change is judged on both.
   have caught the bug.
 * **Measure on a quiet machine.** Performance claims come from `bench/run.py`
   rows (see `bench/README.md`), never from a single `swift test` print.
+* **A benchmark must not be able to kill the host.** The harness kills a runaway
+  engine, abandons a failing one, invalidates rows measured while the machine
+  swaps, resumes after a crash, and checkpoints results off the box between
+  engines (`bench/README.md` § Safeguards; tests in `bench/test_run.py`). If you
+  change any of that, change the test with it — the failure mode here is a dead
+  machine, not a wrong number.
 * **Both platforms.** If a change can affect the iOS embed (memory, threading,
   Metal stream use), say so in the PR and how you checked.
 * Two strings never change without a migration: the prefix-cache hash seed
@@ -67,8 +73,10 @@ self-hosted runners, so those results arrive as commits, not as checks.
 ## Benchmarks and the leaderboard
 
 ```bash
-python3 bench/run.py --engines mlxcat,omlx --model-set default
+python3 bench/run.py --engines mlxcat,omlx --model-set default --resume
 python3 bench/leaderboard.py
+python3 bench/test_run.py                      # the harness's own safeguards
+bench/queue.sh status bench/queue/<campaign>   # long unattended campaigns
 ```
 
 Commit the new `bench/results/*.jsonl` together with the regenerated

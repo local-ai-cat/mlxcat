@@ -60,6 +60,40 @@ free ≥ `--min-free-pct` (35 %) and `pmset -g therm` reports no CPU speed limit
 `--allow-loaded` runs anyway and stamps every record `valid_for_leaderboard:false`
 (kept for audit, never ranked).
 
+### Safeguards: the run must not be able to kill the machine
+
+On **2026-08-22** vllm-mlx panicked the macOS GPU driver on the M4 Pro worker
+(`completeMemory() prepare count underflow` @ IOGPUMemory.cpp:550) about nine
+minutes after its first cell timed out. The host rebooted without auto-login and
+was unreachable for twelve hours; the three passes queued behind it died with the
+shell that was waiting on them, and 160 finished rows sat stranded on the
+machine because the suite only synced at the end. None of that was measured
+wrongly — it was simply lost. The guards below are what the harness learned, and
+they are tested in `bench/test_run.py` rather than trusted.
+
+| guard | flag | default | what it does |
+|---|---|---|---|
+| **runaway kill — footprint** | `--engine-memory-cap-pct` | 92 % of installed RAM | SIGKILLs an engine whose physical footprint crosses the line. The highest *honest* row we have measured is 90.8 % (mlx-serve, gemma-4-12B, c4 on 48 GiB), so this is a host-survival line, not a memory budget. |
+| **runaway kill — swap** | `--swap-growth-kill-gb` | 8 GiB | SIGKILLs the engine once the host has paged out materially more than when the run began. Growth, not absolute: a laptop idles with 20 GiB swapped and the worker idles at zero. |
+| **thrash invalidates** | `--swap-growth-invalid-gb` | 2 GiB | Well below the kill line — a swapping host produces junk numbers long before it threatens itself, so those rows are recorded and not ranked. |
+| **failure budget** | `--engine-failure-budget` | 3 | Abandons an engine after that many consecutive failed cells, and moves to the next engine. A sick engine gets a short leash. |
+| **quarantine** | `--allow-quarantined` | off | An engine that destabilised the *host* is marked in `engines.json` and refused by default. Quarantine is about safety, not score. |
+| **resume** | `--resume` | off | Skips cells already recorded for this device, so a host that dies mid-matrix costs the cells it had left, not the ones already paid for. |
+| **checkpoint sync** | `--sync-after-engine CMD` | none | Runs `CMD` after each engine with `MLXCAT_BENCH_RESULT` set. An engine is the natural checkpoint; results that only exist on one machine are one panic from gone. |
+
+The runaway guard watches an engine for its **whole life**, at 1 Hz, from launch
+to shutdown — not only while a cell is being measured. `FootprintSampler` covers
+just the measured requests, which is precisely the window vllm-mlx did *not* die
+in: it died during launch and calibration. A breach kills the process, marks the
+cell invalid with the reason, and abandons the engine rather than relaunching it
+into the same wall.
+
+Passes themselves are ordered on disk by `bench/queue.sh`, not chained in a
+shell — see `bench/queue/README.md`. A pass that finishes is marked `.done` and
+never re-run, a pass that fails **halts** the queue instead of letting dependent
+passes measure the wrong binaries, and `queue.sh install` makes login resume the
+queue so a reboot costs one pass rather than the campaign.
+
 ### What is measured, and how
 
 Every engine is driven the same way: one streaming OpenAI `/v1/chat/completions`
