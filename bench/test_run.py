@@ -120,6 +120,71 @@ class RunawayGuardTests(unittest.TestCase):
         self.assertIsNone(guard.breach)
 
 
+class ConcurrencyDecompositionTests(unittest.TestCase):
+    """The metric that made an earlier claim on this repo wrong.
+
+    `aggregate_tps` is total completion tokens over wall clock. When prefill is
+    serial, request N's first token lands after request 1 has been decoding for
+    seconds, so that ratio mostly reports admission latency. Splitting the
+    prefill wall from the decode wall is what tells the two engines apart.
+    """
+
+    def row(self, start, first, last, prompt=1000, completion=101):
+        return {"t_start": start, "t_first": first, "t_last": last,
+                "prompt_tokens": prompt, "completion_tokens": completion}
+
+    def test_serial_and_batched_admission_look_identical_on_wall_clock(self):
+        # Both finish at t=5 with the same tokens, so tokens/wall is equal...
+        serial = [self.row(0, 1 + i, 5) for i in range(4)]        # prefills queue up
+        batched = [self.row(0, 1, 5) for _ in range(4)]           # prefills overlap
+        wall = lambda rows: sum(r["completion_tokens"] for r in rows) / (
+            max(r["t_last"] for r in rows) - min(r["t_start"] for r in rows))
+        self.assertAlmostEqual(wall(serial), wall(batched))
+
+        # ...and the decomposition separates them cleanly.
+        a = run.concurrency_metrics(serial, 1e9, 1e9)
+        b = run.concurrency_metrics(batched, 1e9, 1e9)
+        self.assertAlmostEqual(a["prefill_wall_ms"], 4000)   # last first-token at t=4
+        self.assertAlmostEqual(b["prefill_wall_ms"], 1000)
+        self.assertGreater(b["pp_tps"], a["pp_tps"] * 3)
+
+    def test_goodput_excludes_requests_that_missed_the_sla(self):
+        rows = [self.row(0, 0.5, 5), self.row(0, 0.5, 5), self.row(0, 9.0, 12), self.row(0, 9.0, 12)]
+        metrics = run.concurrency_metrics(rows, sla_ttft_ms=2000, sla_tpot_ms=1e9)
+        self.assertAlmostEqual(metrics["goodput_frac"], 0.5)
+
+    def test_tail_is_reported_not_just_the_middle(self):
+        rows = [self.row(0, 0.1, 5) for _ in range(9)] + [self.row(0, 4.0, 5)]
+        metrics = run.concurrency_metrics(rows, 1e9, 1e9)
+        # 9 fast + 1 slow: the mean barely moves, the tail does. p95 interpolates
+        # between the 9th and 10th samples, so it lands at 2245 ms, not 4000.
+        self.assertAlmostEqual(metrics["ttft_mean_ms"], 490)
+        self.assertGreater(metrics["ttft_p95_ms"], 2000)
+
+    def test_single_completion_token_rows_do_not_divide_by_zero(self):
+        rows = [self.row(0, 1, 1, completion=1) for _ in range(2)]
+        metrics = run.concurrency_metrics(rows, 1e9, 1e9)
+        self.assertIsNone(metrics["tpot_mean_ms"])
+        self.assertEqual(metrics["goodput_frac"], 1.0)
+
+    def test_empty_input_is_not_a_crash(self):
+        self.assertEqual(run.concurrency_metrics([], 1, 1), {})
+
+
+class DebugBuildGuardTests(unittest.TestCase):
+    """A debug binary of our own engine is a 2-4x handicap that reads as losing."""
+
+    def test_rejects_a_debug_path(self):
+        with self.assertRaises(run.EngineUnavailable):
+            run.reject_debug_build("/repo/.build/debug/mlxcat-http", "mlxcat")
+
+    def test_accepts_a_release_path(self):
+        run.reject_debug_build("/repo/.build/release/mlxcat-http", "mlxcat")
+
+    def test_does_not_trip_on_a_directory_merely_containing_the_word(self):
+        run.reject_debug_build("/repo/.build/release/debugger-tools-mlxcat-http", "mlxcat")
+
+
 class ResumeIndexTests(unittest.TestCase):
     """`--resume` is the other half of surviving a panic: the cells already paid
     for are not paid for twice."""

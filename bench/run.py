@@ -27,6 +27,7 @@ import datetime as dt
 import json
 import os
 import platform
+import random
 import re
 import shutil
 import signal
@@ -413,6 +414,25 @@ class RunawayGuard:
             )
 
 
+def reject_debug_build(binary: str, engine_name: str) -> None:
+    """Refuse to benchmark a debug binary of our own engine.
+
+    mlx-serve's benchmark notes put it plainly: "Debug is 2-4x slower = a fake
+    regression". Our launcher resolves `{repo}/.build/release/...`, but
+    MLXCAT_HTTP_BIN can point anywhere, and `swift build` without `-c release`
+    leaves a debug binary sitting in a path a tired operator will happily export.
+    A silent 3x handicap on our own engine is the worst possible measurement
+    error here: it looks exactly like losing.
+    """
+    resolved = os.path.realpath(binary)
+    if f"{os.sep}debug{os.sep}" in resolved + os.sep:
+        raise EngineUnavailable(
+            f"{engine_name}: {resolved} is a DEBUG build — 2-4x slower than release and "
+            f"indistinguishable from a real regression in the results. "
+            f"Build with `swift build -c release` and re-point MLXCAT_HTTP_BIN."
+        )
+
+
 def ensure_metallib(binary: str) -> str:
     """`swift build` products need mlx.metallib beside them; build it once if missing.
 
@@ -552,10 +572,14 @@ class Engine:
     def _resolve_binary(self, spec: str) -> Optional[str]:
         env_name = self.spec.get("launch", {}).get("bin_env")
         if env_name and os.environ.get(env_name):
+            reject_debug_build(os.environ[env_name], self.name)
             return ensure_metallib(os.environ[env_name])
         candidate = spec.format(repo=str(REPO))
         if os.path.sep in candidate:
-            return ensure_metallib(candidate) if os.path.exists(candidate) else None
+            if not os.path.exists(candidate):
+                return None
+            reject_debug_build(candidate, self.name)
+            return ensure_metallib(candidate)
         return shutil.which(candidate)
 
     @staticmethod
@@ -688,6 +712,14 @@ class Engine:
         ttft = first_output - started
         gaps = [b - a for a, b in zip(chunk_times, chunk_times[1:])]
         return {
+            # Absolute perf_counter marks. A concurrency leg needs them to tell
+            # prefill wall from decode wall: with per-row serial prefill the last
+            # request's first token can arrive after the first request has been
+            # decoding for seconds, and a single tokens/wall figure blends the two
+            # into a number that reports admission latency and calls it throughput.
+            "t_start": started,
+            "t_first": first_output,
+            "t_last": last_output,
             "ttft_ms": ttft * 1000,
             "wall_ms": (finished - started) * 1000,
             "prompt_tokens": prompt_tokens,
@@ -763,6 +795,60 @@ def load_json(path: Path) -> Dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def concurrency_metrics(rows: List[Dict[str, Any]], sla_ttft_ms: float, sla_tpot_ms: float) -> Dict[str, Any]:
+    """Decompose one concurrent burst the way oMLX and vLLM do.
+
+    A single `total tokens / wall` figure is what this harness shipped first, and
+    it is close to meaningless when prefill is serial: request 8's first token can
+    land after request 1 has been decoding for seconds, so the ratio mostly
+    reports how long admission took. Splitting the two windows is what makes
+    "batching is worth +22%" impossible to conclude from a short-tier burst.
+
+      prefill wall  = first token of the LAST request  -  earliest request start
+      decode  wall  = last token of the LAST request   -  first token of the LAST request
+
+    Percentiles and goodput come from vLLM's serving benchmark: a median hides the
+    tail, and tail latency is exactly where serial admission hurts. Goodput counts
+    only the requests that met an SLA — throughput bought by making some requests
+    unusably slow should not read as throughput.
+    """
+    if not rows:
+        return {}
+    start = min(r["t_start"] for r in rows)
+    last_first = max(r["t_first"] for r in rows)
+    end = max(r["t_last"] for r in rows)
+    prompt_tokens = sum(int(r["prompt_tokens"]) for r in rows)
+    completion_tokens = sum(int(r["completion_tokens"]) for r in rows)
+    ttfts = sorted((r["t_first"] - r["t_start"]) * 1000 for r in rows)
+    tpots = [
+        ((r["t_last"] - r["t_first"]) * 1000) / (int(r["completion_tokens"]) - 1)
+        for r in rows
+        if int(r["completion_tokens"]) > 1 and r["t_last"] > r["t_first"]
+    ]
+    prefill_wall = max(last_first - start, 1e-9)
+    decode_wall = max(end - last_first, 1e-9)
+    met = sum(
+        1
+        for r in rows
+        if (r["t_first"] - r["t_start"]) * 1000 <= sla_ttft_ms
+        and (
+            int(r["completion_tokens"]) <= 1
+            or ((r["t_last"] - r["t_first"]) * 1000) / (int(r["completion_tokens"]) - 1) <= sla_tpot_ms
+        )
+    )
+    return {
+        "pp_tps": prompt_tokens / prefill_wall,
+        "decode_agg_tps": completion_tokens / decode_wall,
+        "prefill_wall_ms": prefill_wall * 1000,
+        "decode_wall_ms": decode_wall * 1000,
+        "ttft_mean_ms": statistics.fmean(ttfts),
+        "ttft_p95_ms": percentile(ttfts, 95),
+        "tpot_mean_ms": statistics.fmean(tpots) if tpots else None,
+        "tpot_p95_ms": percentile(tpots, 95) if tpots else None,
+        "goodput_frac": met / len(rows),
+    }
+
+
 def run_cell(
     engine: Engine,
     offered: str,
@@ -788,8 +874,28 @@ def run_cell(
     for _ in range(args.warmup):
         engine.stream_once(offered, prompt, max_tokens, timeout, nonce=nonce)
 
+    # Arrival process. Firing N requests at the same instant is a closed-loop
+    # burst — the worst case for an engine that admits serially, and not how a
+    # server is actually used. vLLM's serving benchmark models an OPEN loop
+    # instead: requests arrive at a rate, with a burstiness factor shaping the
+    # gap distribution (gamma; 1.0 is Poisson, <1 burstier, >1 smoother). Both
+    # are worth measuring, so --request-rate 0 keeps the burst and any positive
+    # rate staggers arrivals.
+    rate = float(getattr(args, "request_rate", 0) or 0)
+    burstiness = max(float(getattr(args, "burstiness", 1.0) or 1.0), 1e-6)
+
+    def fire(index: int) -> Dict[str, Any]:
+        if rate > 0 and index > 0:
+            delay = sum(
+                random.gammavariate(burstiness, (1.0 / rate) / burstiness)
+                for _ in range(index)
+            )
+            time.sleep(delay)
+        return engine.stream_once(offered, prompt, max_tokens, timeout, nonce=nonce)
+
     runs: List[Dict[str, Any]] = []
     aggregate_samples: List[float] = []
+    burst_metrics: List[Dict[str, Any]] = []
     with sampler_factory() as sampler:
         for _ in range(args.runs):
             if concurrency == 1:
@@ -797,10 +903,13 @@ def run_cell(
             else:
                 started = time.perf_counter()
                 with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
-                    rows = list(pool.map(lambda _: engine.stream_once(offered, prompt, max_tokens, timeout, nonce=nonce), range(concurrency)))
+                    rows = list(pool.map(fire, range(concurrency)))
                 elapsed = time.perf_counter() - started
                 total = sum(int(r["completion_tokens"]) for r in rows)
                 aggregate_samples.append(total / max(elapsed, 1e-9))
+                burst_metrics.append(
+                    concurrency_metrics(rows, args.sla_ttft_ms, args.sla_tpot_ms)
+                )
                 runs.extend(rows)
         peak_sampled = sampler.peak
         lifetime_max = sampler.lifetime_max()
@@ -821,6 +930,11 @@ def run_cell(
     }
     if concurrency > 1:
         metrics["aggregate_tps"] = spread(aggregate_samples)
+        for key in (
+            "pp_tps", "decode_agg_tps", "prefill_wall_ms", "decode_wall_ms",
+            "ttft_mean_ms", "ttft_p95_ms", "tpot_mean_ms", "tpot_p95_ms", "goodput_frac",
+        ):
+            metrics[key] = spread([b.get(key) for b in burst_metrics])
     return metrics
 
 
@@ -1004,6 +1118,35 @@ def main(argv: Optional[List[str]] = None) -> int:
              "machine for twelve hours because the suite only synced at the end; an engine is the "
              "natural checkpoint. Failures are reported, never fatal — a sync problem must not cost "
              "the run.",
+    )
+    parser.add_argument(
+        "--request-rate",
+        type=float,
+        default=0.0,
+        help="open-loop arrivals for the concurrency leg, in requests/second. 0 (default) fires the "
+             "whole width at once — a closed-loop burst, which is the worst case for serial "
+             "admission and not how a server is used. vLLM's serving benchmark measures the open "
+             "loop; so should we, at least once, before concluding anything about batching.",
+    )
+    parser.add_argument(
+        "--burstiness",
+        type=float,
+        default=1.0,
+        help="shape of the gap distribution when --request-rate is set: 1.0 is Poisson, below 1 is "
+             "burstier, above 1 is smoother.",
+    )
+    parser.add_argument(
+        "--sla-ttft-ms",
+        type=float,
+        default=2000.0,
+        help="goodput SLA: a concurrent request counts only if its TTFT is under this.",
+    )
+    parser.add_argument(
+        "--sla-tpot-ms",
+        type=float,
+        default=100.0,
+        help="goodput SLA: ...and its mean time-per-output-token is under this. Throughput bought "
+             "by making some requests unusably slow is not throughput.",
     )
     parser.add_argument(
         "--resume",
@@ -1228,6 +1371,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                             "max_tokens": int(tier.get("max_tokens", args.max_tokens)),
                             "concurrency": width,
                             "cache_mode": cache_mode,
+                            "arrival": "burst" if not args.request_rate else f"poisson:{args.request_rate}/{args.burstiness}",
                             "temperature": 0,
                             "runs": args.runs,
                             "warmup": args.warmup,

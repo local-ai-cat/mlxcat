@@ -50,6 +50,13 @@ Read warm against cold **for the same engine** to value its cache; read engines 
 each other **within one cache mode**. `cache_mode` is part of the leaderboard key, so
 the two never collide.
 
+### Where the method came from
+
+`METHODOLOGY.md` records what this harness took from oMLX's admin benchmark,
+vLLM's serving benchmark and mlx-serve's release table — and, more usefully, what
+it still owes them: an accuracy axis, a time series instead of a snapshot, and
+realistic prompt distributions.
+
 ### The quiet-machine guard
 
 Throughput on an interactive Mac is load-sensitive — consecutive samples of one
@@ -109,6 +116,9 @@ of two probe requests so "16k" really is ~16k tokens on that tokenizer.
 | `decode_tps` | `(completion_tokens − 1) ÷ (end − first token)` |
 | `e2e_tps` | `completion_tokens ÷ wall` — **the cross-engine comparison metric.** Unlike `decode_tps` it needs no assumption about streaming granularity, so it is the only decode-ish figure that works for an engine which coalesces tokens into few SSE chunks. oMLX sends ~8 tokens per chunk (measured 2026-08-22: 128 completion tokens, 122 ms inter-chunk, 63 tok/s e2e ⇒ ~16 chunks), so its `decode_tps` is correctly reported as unmeasurable; `PARITY.md` hit the same behaviour in July and reached the same conclusion. |
 | `itl_p50_ms` / `itl_p95_ms` | inter-chunk gaps (chunks may carry >1 token — a jitter signal, not a token clock) |
+| `pp_tps` / `decode_agg_tps` | concurrency leg only: prompt tokens ÷ the wall until the **last** request's first token, and completion tokens ÷ the wall after it. Read these instead of `aggregate_tps` — see `METHODOLOGY.md`. |
+| `ttft_mean_ms` / `ttft_p95_ms` / `tpot_mean_ms` / `tpot_p95_ms` | concurrency leg only: the tail, which is where serial admission actually hurts |
+| `goodput_frac` | share of concurrent requests meeting `--sla-ttft-ms` and `--sla-tpot-ms`. Throughput bought by making some requests unusably slow is not throughput. |
 | `aggregate_tps` | Σ completion tokens ÷ wall for N simultaneous streams. **Read this with the tier in mind**: prefill is per-row serial in mlxcat by design, so at a short tier a ~700 ms prefill dominates the wall of a 128-token generation and the number mostly reports *admission latency*, not batched decode. Measured 2026-08-21 (gpt-oss-20b, M4 Pro): TTFT 727/1614/3122/5883 ms at c1/2/4/8 — linear in N — while per-request decode fell only 4.3× across an 8× concurrency rise. The `longgen` tier is where batching can show its worth. |
 | `peak_phys_footprint_bytes` | max `ri_phys_footprint` of the engine process sampled every 50 ms during the measured runs |
 | `lifetime_max_phys_footprint_bytes` | `ri_lifetime_max_phys_footprint` after the cell (includes load; monotonic per process) |

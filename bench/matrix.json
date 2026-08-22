@@ -1,5 +1,5 @@
 {
-  "_comment": "The benchmark matrix. Model floor per the 2026-08-19 ruling: Qwen3-0.6B is a wire-format smoke model only \u2014 never the basis of a perf or quality number. 'default' is what a weekly run covers; 'flagship' is the long one. Context tiers are prompt-token targets (the harness calibrates chars/token per model and records the actual prompt_tokens).",
+  "_comment": "The benchmark matrix. Model floor per the 2026-08-19 ruling: Qwen3-0.6B is a wire-format smoke model only — never the basis of a perf or quality number. 'default' is what a weekly run covers; 'flagship' is the long one. Context tiers are prompt-token targets (the harness calibrates chars/token per model and records the actual prompt_tokens).",
   "models": [
     {
       "id": "Qwen3-0.6B-4bit",
@@ -161,6 +161,16 @@
       "max_tokens": 64
     },
     {
+      "name": "64k",
+      "prompt_tokens": 65536,
+      "max_tokens": 64
+    },
+    {
+      "name": "128k",
+      "prompt_tokens": 131072,
+      "max_tokens": 64
+    },
+    {
       "name": "longgen",
       "prompt_tokens": 1024,
       "max_tokens": 1024
@@ -181,6 +191,7 @@
       4,
       8
     ],
-    "_comment": "Concurrency is measured at a generation-heavy tier as well as a short one. At 'short' (128 output tokens) a ~700 ms per-request prefill dominates wall time and prefill is per-row serial by design, so aggregate throughput mostly measures ADMISSION LATENCY, not batched decode. 'longgen' (1k output) is where continuous batching can actually show its value. Measured 2026-08-21: gpt-oss-20b TTFT went 727/1614/3122/5883 ms for c1/c2/c4/c8 \u2014 linear in N \u2014 while per-request decode fell only 4.3x over an 8x concurrency increase."
-  }
+    "_comment": "Concurrency is measured at a generation-heavy tier as well as a short one. At 'short' (128 output tokens) a ~700 ms per-request prefill dominates wall time and prefill is per-row serial by design, so aggregate throughput mostly measures ADMISSION LATENCY, not batched decode. 'longgen' (1k output) is where continuous batching can actually show its value. Measured 2026-08-21: gpt-oss-20b TTFT went 727/1614/3122/5883 ms for c1/c2/c4/c8 — linear in N — while per-request decode fell only 4.3x over an 8x concurrency increase."
+  },
+  "_context_ladder_comment": "The ladder goes to 128k because long context is where the memory strategy and the prefix cache actually differ between engines, and where a 48 GiB box decides whether an engine is usable at all. oMLX's own benchmark offers 1k/4k/8k/16k/32k/64k/128k/200k; stopping at 16k measured the easy half. 32k and above are OPT-IN via --contexts: they are slow, and on a smaller machine they are what the runaway guard exists for."
 }
