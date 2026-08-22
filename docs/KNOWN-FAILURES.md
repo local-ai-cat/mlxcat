@@ -170,6 +170,37 @@ worst-behaved model we have. It now has one, set at 32 GiB as a regression bar
 just above today's measurement — explicitly not a target. The target is at or
 under the configured ceiling.
 
+## 1d. Batched `qwen3_5` dies in the SERVER, not the engine — open, narrowed
+
+With the exclusion lifted, the benchmark's batched `qwen3_5` arm fails: width 4
+returns a completion carrying no `usage` frame, width 8 kills the server process
+silently — nothing in its log, and the runaway guard never fires, so it is a hard
+crash rather than a memory kill.
+
+`HybridBatchScaleTests` was written to reproduce that from a test. It does not,
+and the ruling-out is the result:
+
+| tried | outcome |
+|---|---|
+| 4 rows × 96 generated tokens | clean |
+| 8 rows × 512 generated tokens | clean |
+| + a `SessionPrefixKVStore`, which the server always has and the in-process engine does not | clean |
+| + a ~1300-token prompt, so chunked prefill engages and rows span many cache blocks | clean |
+
+So **batched decode over a hybrid cache is not the defect**. Everything the
+engine does — merge, extract, chunked prefill, prefix store, `.never` policy at
+width 8 — is exercised and correct. The failure lives above it, in what the
+server adds: the SSE streaming path, `NativeModelEngine`'s chat/tool/stop
+handling, `EnginePool`, or concurrent HTTP admission.
+
+That is where to look next, and it is a much smaller place than "hybrid batching
+is broken", which is what the bench failure looked like on its own. The gate is
+kept as a regression pin for the layer that has been cleared.
+
+`qwen3_5` covers Qwen3.5-4B **and** Qwen3.8-27B — two of the six benchmark
+models, both serialized today at 37 s TTFT under load on an M4 Pro. It is the
+largest single win left.
+
 ## 2. Hybrid caches cannot be combined mid-batch — FIXED
 
 `BatchLayerCache.extract` built a fresh `KVCacheSimple` and copied the row's
