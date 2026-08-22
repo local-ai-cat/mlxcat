@@ -116,7 +116,8 @@ The two exclusion lists are not the same kind of claim:
 | per-row RoPE offsets are scalar in a batch | **disproven** — resolves to `.batch` (`BatchRoPEOffsetTests`) |
 | ragged rows break batched decode | **disproven** — ragged rows match over 24 steps; identical rows diverge over 64 |
 | the serialization exclusions cost us concurrency | **confirmed for gemma4** — 50× TTFT, 2.17× aggregate at c4 |
-| ...for every excluded family | **no** — lifting it for `qwen3_5` returns zero tokens; that exclusion is load-bearing |
+| ...for every excluded family | **no** — `qwen3_5` returns zero tokens and `qwen3_moe` breaks the logit tolerance at width ≥4; both exclusions are load-bearing |
+| the exclusions' stated reasons are accurate | **no** — `qwen3_moe`'s says "lower throughput" and throughput is 82% higher; it is excluded for numerics instead |
 
 ## Measured: what lifting the exclusion buys
 
@@ -209,8 +210,17 @@ gate exists.
    would prove batched decode correct for gemma is **red** — 89/160 mismatched
    tokens with a sustained run of 87 past the sliding window, reproducible on two
    machines and at the pre-branch commit. The exclusion is not conservatism.
-2. **Re-measure the regression list at `longgen` c2/c4/c8** and delete the
-   entries that no longer earn their place.
+2. ~~**Re-measure the regression list at `longgen` c2/c4/c8**~~ **Done for
+   `qwen3_moe`, and the answer was double-edged.** Its stated reason — "lower
+   aggregate throughput under batched decode" — is refuted: Qwen3-Coder-30B at
+   longgen c4 goes 30.0 → **54.5 tok/s aggregate** batched (82% higher) and
+   44,760 → **4,089 ms** TTFT. The original claim came from two requests at a
+   short tier, i.e. it measured admission latency, which is the trap this file
+   keeps finding. But the exclusion **stays**, on a correctness ground nobody had
+   checked: `maxLogitError` is 2.69 at batch ≥4 against a 1.25 tolerance
+   (gpt-oss-20b, batching enabled, measures 1.7e-05 at the same widths). A 10.9×
+   TTFT and 1.82× throughput win is waiting behind the numerics. `qwen2` and
+   `qwen3` are still unmeasured on both axes.
 3. **Re-run mlxcat post-allocator-fix, with and without the ceiling** — pass 3
    was written for exactly this and died in the panic.
 4. **Run warm.** Nobody should treat this ranking as settled until the cache

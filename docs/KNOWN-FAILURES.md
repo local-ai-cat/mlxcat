@@ -1,5 +1,11 @@
 # Known failing gates
 
+**Status 2026-08-23.** Of the three suites that were red on 2026-08-22:
+`SlidingWindowBatchIntegrationTests` is **3/3 green** on gpt-oss-20b (the model
+the gate was written for), `HybridBatchIntegrationTests` is **2/2 green**, and
+`TrackAPrefixCacheTests` remains red — a fixture that cannot find wide-margin
+suffixes, not an engine defect. Details below; §1b is resolved, §2 is fixed.
+
 Measured 2026-08-22 on an M4 Pro (48 GiB) and an M5 Max, and again at `40b4cf5`
 — the commit before the `MLXServe` → `MLXCat` rename, which is the only commit on
 `feat/oss-hygiene-bench` that touches `TrackA`/`TrackB`/`Seam`.

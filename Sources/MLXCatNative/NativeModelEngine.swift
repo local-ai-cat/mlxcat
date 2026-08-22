@@ -1026,9 +1026,38 @@ public struct NativeModelLoader: EnginePoolModelLoader {
         "glm_ocr",
     ]
 
-    // Explicit-demand two-request benchmarks showed lower aggregate throughput
-    // for these model families under batched decode than under serialized decode.
-    // Keep batching enabled for model families where it measurably helps.
+    // The stated reason for this list is WRONG, and the list is still right.
+    //
+    // It said: "explicit-demand two-request benchmarks showed lower aggregate
+    // throughput for these model families under batched decode". Re-measured on
+    // 2026-08-23 at the longgen tier, Qwen3-Coder-30B (`qwen3_moe`) c4:
+    //
+    //     serialized  TTFT 44,760 ms · prefill 24 tok/s  · aggregate 30.0 tok/s
+    //     batched     TTFT  4,089 ms · prefill 254 tok/s · aggregate 54.5 tok/s
+    //
+    // Aggregate throughput is 82% HIGHER batched, not lower. The original claim
+    // came from two requests at a short tier, where a ~1 s serial prefill
+    // dominates the wall of a 128-token generation — so it measured admission
+    // latency and called it throughput. bench/README.md documents that trap now.
+    //
+    // Keep the list anyway, for a reason nobody had checked: batched decode for
+    // `qwen3_moe` breaks the LOGIT tolerance at width >= 4.
+    //
+    //     batch 2  maxLogitError 0.94   ok
+    //     batch 4  maxLogitError 2.69   over the 1.25 tolerance
+    //     batch 8  maxLogitError 2.69   over the 1.25 tolerance
+    //
+    // For scale, gpt-oss-20b — batching enabled, not on this list — measures
+    // 1.7e-05 at the same widths. Correct batched decode is essentially exact;
+    // this is five orders of magnitude away from it. No wide-margin token
+    // actually flipped, so the output may well be fine in practice, but that is
+    // not the standard the other families are held to.
+    //
+    // So the throughput justification is retired and a correctness one replaces
+    // it. Whoever fixes the numerics gets a 10.9x TTFT and 1.82x throughput win
+    // waiting for them. `qwen2` and `qwen3` have NOT been re-measured on either
+    // axis — they inherit the old, now-discredited reason and are due the same
+    // treatment.
     private static let batchDecodeRegressedModelTypes: Set<String> = [
         "qwen2",
         "qwen3",
