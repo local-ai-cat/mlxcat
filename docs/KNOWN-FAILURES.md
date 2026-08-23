@@ -244,8 +244,27 @@ Production routes `qwen3_5` through `VLMModelFactory`. A gate on a path
 production never selects is the same trap that put two wrong memory numbers in
 this file the day before.
 
+**Confirmed through the real server**, because the unit tests drive the
+in-process engine and the thing that died was a process. `mlxcat-http` at
+Qwen3.5-4B, 8 concurrent SSE streams of 96 tokens each, M5 Max:
+
+| | wall | aggregate |
+|---|---|---|
+| one stream alone | 2.55 s | 37.7 tok/s |
+| eight concurrent | **9.9 s** (all eight) | **77.6 tok/s** |
+| eight serialized (8 x 2.55) | 20.4 s | 37.7 tok/s |
+
+Every stream returned rc=0, 100 data frames and its `[DONE]`, and the server was
+still healthy afterwards — at the width that used to kill it. 2.06x aggregate
+throughput, and the last stream finishes in half the time.
+
+The other §1d symptom resolves with it: "width 4 returns a completion carrying no
+`usage` frame" was the stream being cut before the frame, not a separate defect.
+Asked for properly (`stream_options.include_usage`) the frame arrives.
+
 `qwen3_5` covers Qwen3.5-4B **and** Qwen3.8-27B — two of the six benchmark
-models, both previously serialized at ~37 s TTFT under load on an M4 Pro.
+models, both previously serialized at ~37 s TTFT under load on an M4 Pro. Bench
+pass 07 is the board version of the table above.
 
 ## 1e. `gemma4_unified` fails logit invariance at every batched width — capped at 4, still open
 
