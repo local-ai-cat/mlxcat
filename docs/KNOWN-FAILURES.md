@@ -469,20 +469,45 @@ not conservatism, and it costs exactly the headline it bought — gemma-4-E2B
 longgen c8 goes back to ~39 s at c8. `MLXCAT_UNSERIALIZE_MODEL_TYPES` still
 lifts it for measurement.
 
+### Upstream fixed this on 2026-05-11. We cannot reach the fix.
+
+Checked rather than assumed, and the answer changes the options:
+
+| | |
+|---|---|
+| upstream fix | `76a977ca` — **"Fix rope single token multiple sequences (#3498)"**, 2026-05-11 |
+| `ml-explore/mlx` main today | `dim1 = B * N` in the single branch — the batch axis is there |
+| what mlx-swift **0.31.6** vendors | mlx `ce45c525`, **2026-03-12** — two months before the fix |
+| what mlx-swift **main** vendors | `ce45c525`. The same commit. The submodule has not moved. |
+
+0.31.6 is the newest mlx-swift release (2026-07-02) and its `main` points at a
+March mlx. **So no pin bump reaches the fix** — not a release, not a branch
+revision. That was the cheap option and it is not available.
+
+It also means this is not our bug to report: it is filed, fixed, and merged
+upstream. What is stale is mlx-swift's submodule, which has not advanced in
+roughly five months.
+
 **How to get the win back**, in preference order:
-1. **Model-level.** Port `applyRotaryPosition(rope, to:, offset:
-   cache?.ropeOffset)` into `Gemma4TextAttention`, carrying `RoPEOffset` rather
-   than `Int` through the shared-KV `intermediates` (`Gemma4.swift:1292-1305`)
-   so E2B's 20-layer shared tail inherits per-row anchors. This dodges the
-   broken grid AND fixes the separate ragged-position defect that staggered
-   admission creates in production. Needs a fork of `mlx-swift-lm`, which we do
-   not currently carry — **Phil's call.**
-2. **Kernel-level.** Fold B into the single branch's grid
-   (`MTL::Size(dims_ / 2, B * N, 1)`; the rows are contiguous D-vectors sharing
-   one theta, so the existing indexing covers them). That is an upstream patch
-   to `mlx-swift`'s vendored MLX. **Check `ml-explore/mlx` HEAD first** — our
-   copy may simply lag a fix. Worth pursuing regardless of (1): any consumer of
-   this MLX doing scalar-offset batched decode silently corrupts rows >= 1.
+1. **Model-level, in a fork of `mlx-swift-lm`.** Port
+   `applyRotaryPosition(rope, to:, offset: cache?.ropeOffset)` into
+   `Gemma4TextAttention`, carrying `RoPEOffset` rather than `Int` through the
+   shared-KV `intermediates` (`Gemma4.swift:1292-1305`) so E2B's 20-layer shared
+   tail inherits per-row anchors. This routes gemma onto the array-offset kernel
+   path, dodging the broken grid entirely, AND fixes the separate
+   ragged-position defect that staggered admission creates in production — two
+   defects, one edit, and it needs nothing from mlx-swift. We do not currently
+   carry an `mlx-swift-lm` fork; standing one up is **Phil's call**.
+2. **Fork `mlx-swift`** to advance its submodule past `76a977ca`, or cherry-pick
+   that commit. Larger blast radius: `app/project.yml` pins mlx-swift,
+   mlx-swift-lm and mlxcat as a set that moves together, and 0.31.5+ already
+   carries a CI toolchain constraint (`swift-tools 6.3.0`).
+3. **Wait** for mlx-swift to advance its submodule. Zero work, no timeline, and
+   gemma stays serialized until then.
+
+Worth knowing regardless of which: **any consumer of this mlx-swift doing
+scalar-offset batched decode silently corrupts rows >= 1.** It is not specific
+to gemma or to us.
 
 The probe pins the BROKEN behaviour on purpose. A test asserting the correct
 behaviour would sit permanently red and be ignored; asserting the defect means
