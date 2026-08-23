@@ -317,6 +317,75 @@ close it, and which one is a product call:
    That is a change to the standard every family is judged by, so it needs to be
    argued once, in writing, not settled per-family.
 
+## 1f. Batched gemma is not token-exact on the factory production loads — OPEN, and it is today's grant
+
+`gemma4` and `gemma4_unified` were moved to `.multimodalOnly` earlier on
+2026-08-23, which is what produced the headline result on the board (gemma-4-E2B
+longgen c8 TTFT 39,346 -> 1,793 ms). The gate cited for that grant is
+`BatchInvarianceTests.testBatchInvarianceAcrossModelFamilies`.
+
+**That gate loads gemma through the wrong factory.** `LLMModelFactory` maps both
+`gemma4` and `gemma4_unified` to `Gemma4Model` (`LLMModelFactory.swift:38-39`);
+`VLMModelFactory` maps them to `Gemma4`/`Gemma4Unified`
+(`VLMModelFactory.swift:99-100`). `NativeModelLoader` routes both through the
+**VLM** factory in production (`vlmModelTypes` contains both), and they are
+different attention implementations — the MLXVLM one rotates queries and freshly
+cached keys at the scalar `cache?.offset ?? 0` (`Gemma4.swift:872,880,903`) where
+its MLXLLM twin uses the per-row-aware `applyRotaryPosition(rope, to:, offset:
+cache?.ropeOffset)` (`Gemma4Text.swift:313,331,362`).
+
+This is the **third** time in two days that a gate has been found measuring a
+path production never selects — the other two are §1d above and the two wrong
+memory numbers corrected the day before.
+
+**Measured on the production factory** (`GemmaRoPEOffsetProbeTests`, greedy,
+12 generated tokens, rows that diverge from a serial run of the same input):
+
+| model | width 1 (control) | width 2 | width 4 equal-length | width 4 ragged |
+|---|---|---|---|---|
+| gemma-4-12B (`gemma4_unified`) | **0/1** | 1/2 | 3/4 | 3/4 |
+| gemma-4-E2B (`gemma4`) | **0/1** | 1/2 | 2/4 | 2/4 |
+
+Read the two ends of that table together.
+
+**The width-1 control is clean for both**, so this is not the batched code path's
+own numerics and not a harness artifact — a single row through the batch
+generator reproduces serial exactly. Rows are contaminating each other.
+
+**Equal-length rows diverge as much as ragged ones**, which REFUTES left padding
+as the cause. That matters because the scalar-offset defect above is real and
+looks like the obvious culprit: with every row the same length there is no
+padding, the scalar offset is correct for every row, and the divergence is
+unchanged. So there is a second cause, still unlocated, and fixing the RoPE
+offset alone will not close this.
+
+Both hold on real chat-templated prompts, not only on synthetic token ids — the
+first version of this probe used synthetic ids, where greedy decoding sits near
+ties and a divergence can be a property of the input rather than the engine.
+
+**For scale, this is a gemma problem and not a batching problem.** On the same
+production-factory bar, `qwen3_5` is token-EXACT at 4 ragged rows and at width 8
+(`PositionalStateBatchIntegrationTests`), and gpt-oss measures logit errors of
+~2e-05. Batched decode is exact for our other families; gemma is the outlier.
+
+**What is NOT claimed here:** that batched gemma output is *wrong*. It is
+different from serial, which is a weaker statement — every serving engine on
+non-invariant kernels is batch-variant, and `mismatched` was 0 in the (LLM-path)
+logit sweep. What is claimed is that the evidence the grant rests on does not
+describe the shipping path, and that on the shipping path gemma fails the bar
+every other family here clears.
+
+**The decision is a product one and it is Phil's**, because the cost is the
+biggest concurrency win on the board:
+1. Drop both gemmas to `.always` — restores token-exactness, loses the 22x c8
+   TTFT improvement for the iOS flagship family.
+2. Keep the grant and change the standard for gemma to "token-equivalent, not
+   token-identical", recorded as such in the ledger.
+3. Find the second cause first, and decide with it in hand.
+
+Until then nothing has been reverted: this section and the nightly FAIL row are
+the record, in the same shape the repo already uses for §1e.
+
 ## 2. Hybrid caches cannot be combined mid-batch — FIXED
 
 `BatchLayerCache.extract` built a fresh `KVCacheSimple` and copied the row's

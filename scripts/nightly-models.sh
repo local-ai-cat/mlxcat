@@ -36,6 +36,12 @@ GATE_CANDIDATES=(
   # still shows it clearly. gpt-oss is deliberately absent — it is excluded from
   # quantization because its quantized attention route drops attention sinks.
   MLXCAT_KV_QUANT_TEST_MODEL   "Qwen3.5-4B-MLX-4bit Qwen3-Coder-30B-A3B-Instruct-4bit"
+  # Batched gemma against serial, on the factory PRODUCTION loads. Expected to
+  # FAIL today — see docs/KNOWN-FAILURES.md 1f. It is here rather than in the
+  # default suite because a standing red gate is how this repo already carries
+  # an open numerics defect (the batch-invariance FAIL rows below), and because
+  # the number needs to be in front of us every night until it is zero.
+  MLXCAT_GEMMA_PROBE_MODEL     "gemma-4-12B-it-qat-4bit gemma-4-E2B-it-qat-4bit"
   # gpt-oss-20b FIRST: its sliding_window is 128, so the gate's 160 decode steps
   # actually cross it. gemma-4's window is 512 and the gate never reached it —
   # for its whole life this was a batched-vs-serial test wearing a window test's
@@ -55,6 +61,7 @@ GATE_FILTERS=(
   MLXSERVE_HYBRID_TEST_MODEL   "HybridBatchIntegrationTests|ContextWindowParityTests"
   MLXCAT_POSITIONAL_TEST_MODEL "PositionalStateBatchIntegrationTests"
   MLXCAT_KV_QUANT_TEST_MODEL   "KVQuantizationMemoryTests"
+  MLXCAT_GEMMA_PROBE_MODEL     "GemmaRoPEOffsetProbeTests"
   MLXSERVE_SLIDING_TEST_MODEL  "SlidingWindowBatchIntegrationTests"
   MLXSERVE_MOE_TEST_MODEL      "MoEBatchIntegrationTests"
   MLXSERVE_VLM_TEST_MODEL      "ModelCacheCapabilitiesTests|ModelDiscoveryTests"
@@ -75,7 +82,7 @@ INVARIANCE_MODELS=(
   Qwen3-Coder-30B-A3B-Instruct-4bit
   gpt-oss-20b-MXFP4-Q8
 )
-GATE_ORDER=(MLXSERVE_TEST_MODEL MLXSERVE_HYBRID_TEST_MODEL MLXCAT_POSITIONAL_TEST_MODEL MLXCAT_KV_QUANT_TEST_MODEL MLXSERVE_SLIDING_TEST_MODEL MLXSERVE_VLM_TEST_MODEL MLXSERVE_RERANK_TEST_MODEL MLXCAT_MEMORY_BUDGET_MODEL MLXSERVE_MOE_TEST_MODEL)
+GATE_ORDER=(MLXSERVE_TEST_MODEL MLXSERVE_HYBRID_TEST_MODEL MLXCAT_POSITIONAL_TEST_MODEL MLXCAT_KV_QUANT_TEST_MODEL MLXCAT_GEMMA_PROBE_MODEL MLXSERVE_SLIDING_TEST_MODEL MLXSERVE_VLM_TEST_MODEL MLXSERVE_RERANK_TEST_MODEL MLXCAT_MEMORY_BUDGET_MODEL MLXSERVE_MOE_TEST_MODEL)
 
 pick_model() {
   local gate="$1" name
@@ -181,7 +188,7 @@ run_gate() {
   # Only the gate under test is set; others stay unset so their suites skip.
   env -u MLXSERVE_TEST_MODEL -u MLXSERVE_HYBRID_TEST_MODEL -u MLXSERVE_SLIDING_TEST_MODEL -u MLXSERVE_MOE_TEST_MODEL \
       -u MLXSERVE_VLM_TEST_MODEL -u MLXSERVE_RERANK_TEST_MODEL -u MLXCAT_MEMORY_BUDGET_MODEL \
-      -u MLXCAT_POSITIONAL_TEST_MODEL -u MLXCAT_KV_QUANT_TEST_MODEL \
+      -u MLXCAT_POSITIONAL_TEST_MODEL -u MLXCAT_KV_QUANT_TEST_MODEL -u MLXCAT_GEMMA_PROBE_MODEL \
       "${budget_env[@]}" "$gate=$model" swift test --skip-build --filter "$filter" > "$log" 2>&1
   rc=$?
   # This package runs BOTH test libraries, so `swift test` prints two summaries:
