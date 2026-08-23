@@ -254,9 +254,9 @@ footer { margin-top: 44px; padding-top: 18px; border-top: 1px solid var(--line);
 <section>
   <h2>Where we stand now</h2>
   <p class="section-note">
-    Cells where mlxcat's latest pass matches or beats the best competing engine on that exact cell.
-    A cell is one model at one context tier at one concurrency. The bar and the delta compare the
-    latest pass with the first.
+    Cells where mlxcat's latest pass matches or beats the best competing engine on that exact cell —
+    the same bar <code>bench/parity.py</code> gates on, with no tolerance band. A cell is one model
+    at one context tier at one concurrency; the delta compares the latest pass with the first.
   </p>
   <div class="cards" id="cards"></div>
 </section>
@@ -333,6 +333,12 @@ footer { margin-top: 44px; padding-top: 18px; border-top: 1px solid var(--line);
       <b>Competitor rows are older than ours.</b> They were measured 2026-08-21 to 08-22 and have
       not moved since. Every engine here improves over time; a competitor line going stale flatters
       us, and the honest fix is to re-measure them, not to widen the gap on paper.
+    </p>
+    <p>
+      <b>The machine drifts between passes.</b> In pass 5 an unchanged gpt-oss configuration
+      measured 9.8% slower than in pass 4 — same code, same flags, same host. Our line moves with
+      machine state; the frozen competitor lines do not. Treat a single-digit-percent move between
+      passes as weather, and read the direction of a series rather than the gap in any one cell.
     </p>
   </div>
 </section>
@@ -414,12 +420,16 @@ footer { margin-top: 44px; padding-top: 18px; border-top: 1px solid var(--line);
     return { value: null, pass: null };
   }
 
+  // The SAME bar bench/parity.py counts on: ratio >= 1.0, no tolerance band.
+  // An earlier version of this page allowed 10% and said it matched parity.py.
+  // It did not — parity.py's --tolerance governs regression against the stored
+  // baseline, not the parity count — and the page reported 45 of 57 cells at
+  // throughput parity where the gate said 14. A board that scores itself more
+  // generously than the gate is the exact failure this repo keeps catching.
   function atParity(c, m) {
     var ours = latestOurs(c, m).value, them = bestOther(c, m).value;
     if (ours === null || them === null) return null;
-    // 10% tolerance, matching bench/parity.py — a cell inside the noise band is
-    // not a loss, and calling it one would make the board unreadable.
-    return metricInfo(m).lowerIsBetter ? ours <= them * 1.1 : ours >= them * 0.9;
+    return metricInfo(m).lowerIsBetter ? ours <= them : ours >= them;
   }
 
   /* ---------- scorecard ---------- */
@@ -435,7 +445,7 @@ footer { margin-top: 44px; padding-top: 18px; border-top: 1px solid var(--line);
         total++;
         if (p) now++;
         var f = firstOurs(c, m).value, t = bestOther(c, m).value;
-        if (f !== null && t !== null && (metricInfo(m).lowerIsBetter ? f <= t * 1.1 : f >= t * 0.9)) then++;
+        if (f !== null && t !== null && (metricInfo(m).lowerIsBetter ? f <= t : f >= t)) then++;
       });
       var delta = now - then;
       var card = document.createElement("div");

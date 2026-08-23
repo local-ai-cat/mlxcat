@@ -41,7 +41,25 @@ OURS = "mlxcat"
 # Arms of our own binary that differ only by an env override. They are A/B arms,
 # never opponents — scoring against them would let us "reach parity" by making a
 # flag slower.
-OUR_ARMS = {"mlxcat", "mlxcat-defaults", "mlxcat-batched", "mlxcat-moe-uncapped"}
+#
+# The membership test is a PREFIX, not this set. The set was a hand-maintained
+# list and it went stale the day `mlxcat-cache-held` was added: for one board
+# our own control arm was scored as a rival engine, which quietly moved the
+# parity counts (throughput 23/57 -> 14/57). A list that has to be updated in
+# lockstep with a new arm will be forgotten again; a prefix cannot be.
+OUR_ARMS = {
+    "mlxcat",
+    "mlxcat-defaults",
+    "mlxcat-batched",
+    "mlxcat-moe-uncapped",
+    "mlxcat-cache-held",
+    "mlxcat-inprocess",
+}
+
+
+def is_ours(engine_name: str) -> bool:
+    """Every arm of our own binary, however it was named."""
+    return engine_name == OURS or engine_name.startswith("mlxcat-")
 
 
 def med(block: Optional[Dict[str, Any]]) -> Optional[float]:
@@ -94,7 +112,7 @@ def ratios(cells: Dict[Tuple, Dict[str, Dict[str, Any]]]) -> Dict[str, Dict[str,
     out: Dict[str, Dict[str, float]] = {}
     for key, by_engine in cells.items():
         ours = by_engine.get(OURS)
-        others = {name: rec for name, rec in by_engine.items() if name not in OUR_ARMS}
+        others = {name: rec for name, rec in by_engine.items() if not is_ours(name)}
         if ours is None or not others:
             continue
         our_metrics = ours["metrics"]

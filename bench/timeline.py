@@ -67,6 +67,13 @@ def load(path):
             continue
         if (row.get("device") or {}).get("model") != DEVICE:
             continue
+        # The same validity filter `bench/parity.py` applies. A row the harness
+        # marked unfit for the leaderboard — measured under load, runaway,
+        # whatever `invalid_reason` says — must not be counted here either.
+        # Skipping it inflated this board's parity counts above the gate's:
+        # 23 of 57 at throughput parity against the gate's 14.
+        if not row.get("valid_for_leaderboard"):
+            continue
         rows.append(row)
     return rows
 
