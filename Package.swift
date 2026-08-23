@@ -56,7 +56,23 @@ let package = Package(
             url: "https://github.com/ml-explore/mlx-swift-lm.git",
             revision: "01472a78fca830689ff78246a82c6d31ab111a78"
         ),
-        .package(url: "https://github.com/ml-explore/mlx-swift", .upToNextMinor(from: "0.31.4")),
+        // atlas-open-sources/mlx-swift = 0.31.6 with its vendored mlx submodule
+        // moved to our three-line backport of ml-explore/mlx 76a977ca (#3498).
+        //
+        // Upstream mlx fixed the RoPE single-token batch-grid bug on 2026-05-11:
+        // the fast path taken for batched decode with a scalar offset dispatched
+        // a grid with no batch axis, so it rotated row 0 and left rows 1..B-1
+        // UNROTATED. But mlx-swift 0.31.6 (its newest release) and mlx-swift
+        // `main` both vendor mlx at ce45c525 from 2026-03-12, two months before
+        // the fix — so no release or branch of mlx-swift reaches it.
+        //
+        // `RoPEBatchGridProbeTests` is the reproduction and the tripwire.
+        // Return this to `.upToNextMinor(from:)` on ml-explore/mlx-swift the
+        // moment a release vendors a post-76a977ca mlx.
+        .package(
+            url: "https://github.com/atlas-open-sources/mlx-swift",
+            revision: "934264e56a75799f5784f5900e7bf1c60a3635a9"
+        ),
         // Same URL+version as the Local AI Chat app pins — one URL per package
         // identity across the combined graph (SwiftPM escalates the mismatch to
         // an error in future versions). Moved off the atlas-open-sources fork to

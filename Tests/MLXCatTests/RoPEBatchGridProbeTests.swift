@@ -30,19 +30,19 @@ import XCTest
 /// No model, no weights — this runs anywhere Metal does.
 final class RoPEBatchGridProbeTests: XCTestCase {
 
-    /// Pinned to the BROKEN behaviour on purpose.
+    /// FIXED 2026-08-24, and this is now the regression guard.
     ///
-    /// Asserting the correct behaviour here would leave a permanently red test
-    /// in the default suite, which teaches everyone to ignore it. Asserting the
-    /// defect instead means this test goes red exactly once — the day the
-    /// vendored MLX gains the batch axis in that grid — and the failure message
-    /// says what to do about it.
+    /// It was briefly pinned to the BROKEN behaviour, because asserting
+    /// correctness while the bug was live would have left a permanently red test
+    /// that everyone learns to ignore. That inversion did its job: it went red
+    /// exactly once, the moment the vendored MLX gained the batch axis, and its
+    /// message said what to do next.
     ///
-    /// **When this fails: MLX fixed it.** Restore `gemma4`/`gemma4_unified` to
-    /// `multimodalOnlyModelTypes` in `NativeModelEngine`, re-run
-    /// `GemmaRoPEOffsetProbeTests` (both arms should go 0/4), and delete this
-    /// test.
-    func testScalarOffsetRoPEStillDropsEveryRowAboveTheFirst() throws {
+    /// The fix is three lines backported from ml-explore/mlx `76a977ca` (#3498)
+    /// onto `ce45c525`, carried on `atlas-open-sources/mlx` and pinned through
+    /// `atlas-open-sources/mlx-swift`. If this test fails again, the pin has
+    /// slipped back to a stock mlx-swift.
+    func testScalarOffsetRoPERotatesEveryRow() throws {
         try MLXMetalRuntime.requireAvailable()
 
         let batch = 4, heads = 8, dims = 256, offset = 96
@@ -75,13 +75,13 @@ final class RoPEBatchGridProbeTests: XCTestCase {
         print("ROPEGRID scalar-offset rows-unrotated=\(unrotated) "
             + "max|out-in| per row=\(maxRotation.map { String(format: "%.4f", $0) })")
 
-        XCTAssertEqual(
-            unrotated, Array(1 ..< batch),
+        XCTAssertTrue(
+            unrotated.isEmpty,
             """
-            MLX's scalar-offset RoPE now rotates rows above 0 — the batch axis is \
-            in the dispatch grid. Restore gemma4/gemma4_unified to \
-            multimodalOnlyModelTypes, re-run GemmaRoPEOffsetProbeTests (both arms \
-            should be 0/4), and delete this test.
+            rows \(unrotated) came out of RoPE identical to the input. The \
+            scalar-offset fast path is rotating row 0 and passing the rest \
+            through, which means the mlx-swift pin has slipped back to a build \
+            without the ml-explore/mlx 76a977ca backport.
             """)
     }
 
