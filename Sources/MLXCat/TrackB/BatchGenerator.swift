@@ -186,6 +186,12 @@ public final class ContinuousBatchGenerator {
     private var speculativeTokenHistory: [[Int]] = []
     private var maxGeneratedTokens: [Int?] = []
     private var state: LMOutput.State?
+    /// Set the first time a row's prefill hands back a recognized positional
+    /// anchor. While it is non-nil every decode step feeds a per-row vector
+    /// built from `rowPrefillDeltas`, and `state` is ignored — see
+    /// ``BatchPositionalState``.
+    private var positionalKey: LMOutput.Key<MLXArray>?
+    private var rowPrefillDeltas: [Int32] = []
     private var speculativeStats = SpeculativeDecodingStats()
 
     // Explicit-demand decode-phase timing (MLXSERVE_DECODE_PHASE_TIMING=1):
@@ -231,6 +237,33 @@ public final class ContinuousBatchGenerator {
 
     public var speculationStats: SpeculativeDecodingStats {
         speculativeStats
+    }
+
+    /// The state fed to every decode step. For families with no positional
+    /// anchor this is the state the model handed back last step, unchanged.
+    private var stepState: LMOutput.State? {
+        guard let positionalKey else { return state }
+        return BatchPositionalState.stepState(
+            key: positionalKey,
+            prefillDeltas: rowPrefillDeltas,
+            leftPadding: currentLeftPadding
+        )
+    }
+
+    /// Left padding of the batched full-attention layers, in row order. A
+    /// singleton (width 1) cache has none, and neither does a layer whose state
+    /// is not sequence-shaped — the Mamba half of a hybrid model — so the first
+    /// `BatchKVCache` in the stack is the one that answers.
+    private var currentLeftPadding: [Int32] {
+        guard let batched = cacheStorage.batchedCache else {
+            return Array(repeating: 0, count: rowUIDs.count)
+        }
+        for layer in batched {
+            if let batchCache = layer.kvCache as? BatchKVCache {
+                return batchCache.leftPadding.asType(.int32).asArray(Int32.self)
+            }
+        }
+        return Array(repeating: 0, count: rowUIDs.count)
     }
 
     @discardableResult
@@ -322,6 +355,15 @@ public final class ContinuousBatchGenerator {
         precondition(!rowUIDs.contains(uid), "duplicate batch uid '\(uid)'")
         precondition(!rowCache.isEmpty, "continuous batching requires a non-empty KV cache")
 
+        // Checked before anything is mutated: a family that anchors its RoPE in
+        // model state cannot decode a row whose anchor never arrived, and
+        // failing here beats the model's own precondition trapping the process
+        // mid-batch (`docs/KNOWN-FAILURES.md` §1d).
+        let incomingDelta = BatchPositionalState.delta(in: modelState)
+        if let positionalKey, incomingDelta == nil {
+            throw BatchGeneratorError.missingPositionalState(key: positionalKey.id, uid: uid)
+        }
+
         switch cacheStorage {
         case .empty:
             cacheStorage = .singleton(rowCache)
@@ -405,13 +447,17 @@ public final class ContinuousBatchGenerator {
                 : speculativeContextTokens
         )
         maxGeneratedTokens.append(maxGeneratedTokenCount)
-        // Models with per-call positional state (Qwen3.5/Qwen-VL M-RoPE
-        // ropeDeltas) refuse to continue a warm cache without it — the state
-        // captured during THIS row's prefill must survive into decode. A
-        // single state cannot represent two rows, so it only carries over
-        // while this insert leaves the generator at width 1; stateful models
-        // do not batch (they sit outside the batch-decode allowlist).
-        if rowUIDs.count == 1 {
+        // Models with per-call positional state (Qwen3.5 M-RoPE ropeDeltas)
+        // refuse to continue a warm cache without it — the anchor captured
+        // during THIS row's prefill must survive into decode. A single scalar
+        // cannot represent two rows, so it is kept per row and reassembled into
+        // a vector each step by ``BatchPositionalState``; `state` is then only
+        // the carrier for families that have no anchor of their own.
+        if let incomingDelta {
+            positionalKey = incomingDelta.key
+            rowPrefillDeltas.append(incomingDelta.delta)
+            state = nil
+        } else if rowUIDs.count == 1 {
             state = modelState
         } else {
             state = nil
@@ -467,6 +513,7 @@ public final class ContinuousBatchGenerator {
             generatedTokenHistory.removeAll()
             speculativeTokenHistory.removeAll()
             maxGeneratedTokens.removeAll()
+            rowPrefillDeltas.removeAll()
             currentTokens = MLXArray([Int32]())
             state = nil
             return
@@ -507,6 +554,9 @@ public final class ContinuousBatchGenerator {
         generatedTokenHistory = rows.map { generatedTokenHistory[$0] }
         speculativeTokenHistory = rows.map { speculativeTokenHistory[$0] }
         maxGeneratedTokens = rows.map { maxGeneratedTokens[$0] }
+        if !rowPrefillDeltas.isEmpty {
+            rowPrefillDeltas = rows.map { rowPrefillDeltas[$0] }
+        }
         state = nil
         eval(currentTokens, cacheStorage.cacheForModel)
     }
@@ -597,7 +647,7 @@ public final class ContinuousBatchGenerator {
         // forward pass produces hundreds of autoreleased MLX wrappers and this
         // loop never reaches a pool boundary on its own.
         let (nextTokens, logits, nextState) = autoreleasepool {
-            computeNextTokens(cacheForModel: cacheStorage.cacheForModel, state: state)
+            computeNextTokens(cacheForModel: cacheStorage.cacheForModel, state: stepState)
         }
         state = nextState
         asyncEval(nextTokens, logits)
@@ -716,7 +766,7 @@ public final class ContinuousBatchGenerator {
             }
         }
         let (tokens, logits, nextState) = autoreleasepool {
-            computeNextTokens(cacheForModel: cacheStorage.cacheForModel, state: state)
+            computeNextTokens(cacheForModel: cacheStorage.cacheForModel, state: stepState)
         }
         return PrebuiltStep(tokens: tokens, logits: logits, state: nextState)
     }
@@ -743,7 +793,7 @@ public final class ContinuousBatchGenerator {
         }
 
         let (nextTokens, logits, nextState) = autoreleasepool {
-            computeNextTokens(cacheForModel: cacheStorage.cacheForModel, state: state)
+            computeNextTokens(cacheForModel: cacheStorage.cacheForModel, state: stepState)
         }
         state = nextState
         asyncEval(nextTokens, logits)
@@ -819,7 +869,7 @@ public final class ContinuousBatchGenerator {
         let output = model(
             LMInput.Text(tokens: verificationInput),
             cache: workingCacheForModel,
-            state: state
+            state: stepState
         )
 
         var acceptedTokens: [Int] = []
@@ -1008,4 +1058,5 @@ public enum BatchGeneratorError: Error, Equatable {
     case unsupportedPreparedLogits
     case promptTooShortForExternalPrefill
     case insertedCacheLayerCountChanged(expected: Int, actual: Int)
+    case missingPositionalState(key: String, uid: String)
 }
