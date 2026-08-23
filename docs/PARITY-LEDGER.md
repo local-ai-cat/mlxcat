@@ -92,32 +92,53 @@ the capability rule itself without weights.
 
 ## Open — ranked
 
-### 1. One admission in flight, and prefill stretched across scheduler steps
-**They:** mlx-serve admits up to **16 slots per tick**
-(`guest/mlx-serve/src/scheduler.zig:3561`, `:1982`) and runs each prefill **to
-completion**, injecting a decode tick between admitted slots (`:3622`) and at each
-chunk boundary (`guest/mlx-serve/src/generate.zig:1937`). Its comment names our
-exact failure: *"without this every slot's first token waits for the LAST slot's
-prefill (the TTFT staircase collapse)"* (`scheduler.zig:3617`). omlx admits
-multiple per step (`guest/omlx/omlx/scheduler.py:7457`); vllm loops admitting
-while a token budget remains (`guest/vllm/vllm/v1/core/sched/scheduler.py:640`).
-**We:** exactly one `admissionInProgress` (`Sources/MLXCat/TrackB/Scheduler.swift:49`),
-FCFS `waiting.removeFirst()` (`:272`), and mid-prefill we return `nil` (`:486`) so
-the step falls through to one decode. Request #2 cannot begin prefill — not even
-its first chunk — until #1 finishes.
-**Measured cost:** TTFT 727 / 1614 / 3122 / 5883 ms at c1/c2/c4/c8 — linear in N,
-recorded in our own `bench/matrix.json:194`. Against mlx-serve at c8 we are 13×
-worse while per-stream decode is fine.
-**Note:** mlx-serve does **not** pack prefills — it is batch=1 per slot, like us.
-Packed prefill is not the prerequisite; multi-admission plus run-to-completion is.
-**Narrowed 2026-08-23:** `SchedulerAdmissionShapeTests.testIdleSchedulerAdmitsEveryWaitingRequestInOneStep`
-shows an idle scheduler DOES admit all 8 waiting requests in one step, so the
-staircase is not an admission-count problem on the cold path. What remains is
-that the eight prefills run serially within that step, so the last request's TTFT
-is the sum of all eight — which is exactly the linearity our bench recorded. The
-open question is therefore why mlx-serve's serial prefills are sublinear where
-ours are linear, and the first suspects are (2) chunk width and the blocking
-`eval(admission.cache)` per admission (`Scheduler.swift:491`).
+### 1. TTFT under concurrency — ROOT CAUSE FOUND, largely closed
+**The question was wrong.** "Why is mlx-serve's serial prefill sublinear where
+ours is linear" has no answer, because **mlx-serve is not sublinear**. The bench
+fires a burst and reports the MEAN, so for N served serially at per-unit cost U
+the mean is `((N-1)/2)·U + P` — for N=8 the ideal is 4.5×, and their measured
+c8/c1 of 5.5× is exactly that line.
+
+Both engines are serial. The difference is **what each queues behind**:
+
+- mlx-serve queues behind a **prefill** (`guest/mlx-serve/src/scheduler.zig:3616`,
+  `runPrefill :4628` — batch=1 per slot, like us).
+- mlxcat queued behind an entire **generation**, because the benched families ran
+  under `SerializationPolicy.always` and `refusesToJoin` refuses admission while
+  anything runs (`Sources/MLXCat/TrackB/Scheduler.swift:298`,
+  `Sources/MLXCat/TrackB/Request.swift:93`).
+
+So the per-unit cost was `prefill + tokens/decode-rate` instead of `prefill`. That
+ratio is the whole gap — no prefill-speed difference is involved. The fit, using
+G = prefill + 128/measured-solo-decode, is within **1.3 % at every width**:
+
+| model | c2 pred/meas | c4 pred/meas | c8 pred/meas |
+|---|---:|---:|---:|
+| gemma-4-E2B (G=1689 ms) | 913 / **891** | 2603 / **2605** | 5981 / **5929** |
+| Qwen3.8-27B (G=12316 ms) | 9199 / **9318** | 21515 / **21622** | 46147 / **46199** |
+
+The decode column corroborates it: our per-stream rate stayed flat ~76–79 tok/s at
+every width (each request ran ALONE at full speed) while mlx-serve's halved per
+doubling, because their streams actually share the machine.
+
+**Interventionally proven, and largely closed.** Lifting `.always` for gemma-4
+text rows (`multimodalOnly`) moved gemma-4-E2B longgen c8 TTFT **39,346 → 2,439 ms**
+and aggregate 70 → 123 tok/s — now ahead of mlx-serve's 85 — with c1→c8 scaling
+falling 195× → 11.2×. `docs/COMPETITIVE.md` § Status 2026-08-23 has the table.
+
+**What remains is the same lever on the families still serialized:**
+- `qwen3_5` (Qwen3.5-4B **and** Qwen3.8-27B — two of six benchmark models) is
+  `.always` pending the server-layer crash in §1d. The engine is already cleared;
+  `OpenAIServerConcurrentStreamingTests` is the tool to find it. Expected: 27B c8
+  mean 46.2 s → ~13–15 s.
+- `qwen3_moe` is capped at width 2, so requests 3+ still queue behind generations.
+  Raising it needs the width-4/8 numerics fixed (2.69 against a 1.25 tolerance).
+
+**Correction worth keeping.** `SchedulerAdmissionShapeTests.testIdleSchedulerAdmitsEveryWaitingRequestInOneStep`
+passing was read as "admission count is not the problem". It checked the right
+loop under the WRONG policy — it uses the default, so for a serializing family
+requests 2..N never reach the loop it asserts on.
+`testASerializingPolicyQueuesBehindWholeGenerations` now pins the real behaviour.
 
 ### 2. Busy-prefill chunk width — partly closed
 **They:** mlx-lm and omlx use **2048** (`guest/mlx-lm/mlx_lm/generate.py:1509`,
@@ -184,6 +205,42 @@ last-token-alone prefill. Of the budgeted models only those two are windowed
 **Still open:** the other suites have not been audited. Most are pointed at
 non-windowed models so the default is accidentally right, which is exactly why
 this survived — it is only wrong when it matters.
+
+### 6. Quantized KV cache — we have none, and the plumbing already exists
+**They:** mlx-lm converts any cache past `quantized_kv_start` via
+`to_quantized(group_size:bits:)` — `maybe_quantize_kv_cache`
+(`guest/mlx-lm/mlx_lm/generate.py:299-304`), called per prefill chunk (`:418`,
+`:441`) and per decode step (`:558`, `:583`).
+**We:** nothing. `grep -rn "toQuantized\|kv_bits" Sources/` is empty — zero call
+sites — even though our own dependency ships the receiving end:
+`QuantizedKVCache`, `KVCacheSimple.toQuantized(groupSize:bits:)` and
+`QuantizedKVCacheProtocol` at
+`guest/mlx-swift-lm/Libraries/MLXLMCommon/KVCache.swift:111`, `:424-440`.
+**Why it matters:** ~4× KV memory at 4-bit on top of the 1.22–1.32× peaks we now
+have. It is the lever that decides what fits at 32k–128k on 48 GiB, and on iOS.
+**Known integration cost, stated so it is not underestimated:**
+`BatchLayerCache` merge/extract/filter must learn the quantized state layout, the
+prefix store must round-trip it, and windowed caches are excluded upstream too.
+It also shifts logits, so `BatchInvarianceTests`' 1.25 tolerance needs an
+explicit decision rather than a silent pass.
+
+### 7. Per-admission batched-KV copy
+**They:** mlx-serve admission is a pointer append into `decoding`
+(`guest/mlx-serve/src/scheduler.zig:3650`) — slots own their caches, zero copy.
+**We:** `BatchGenerator.insert` does `currentLayer.copyLayer()` — a full
+`kvCache.copy()` of every already-resident row — plus `extend` per layer per
+insertion (`Sources/MLXCat/TrackB/BatchGenerator.swift:339`, `:353`), then a
+blocking `eval` (`:419`). Across an N-burst that is O(N²) KV traffic and N
+pipeline drains. Negligible at 230-token prompts, material at 4k/16k.
+**Harness gap:** no concurrency bench arm at 4k/16k — `bench/matrix.json`
+concurrency tiers are short/longgen only. Add one before claiming a win.
+
+### 8. Decode-loop cache clearing
+**They:** mlx-lm also clears every 256 DECODE tokens
+(`guest/mlx-lm/mlx_lm/generate.py:465`).
+**We:** clear only between prefill chunks. Cheap to copy; bounds buffer growth at
+longgen. `MemoryBudgetTests` would need a longer generation than its default 32
+tokens to see it.
 
 ## Deliberate differences — do not "fix" these
 

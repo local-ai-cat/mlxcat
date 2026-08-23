@@ -35,8 +35,16 @@ final class SchedulerAdmissionShapeTests: XCTestCase {
     }
 
     /// An idle scheduler handed N requests at once must admit them all before it
-    /// starts charging anyone's first token to the queue behind them. This pins
-    /// that admission is not one-per-step on the cold path.
+    /// starts charging anyone's first token to the queue behind them.
+    ///
+    /// This pins the admission LOOP. It is deliberately paired with
+    /// `testASerializingPolicyQueuesBehindWholeGenerations` below, because on its
+    /// own it gives false comfort: it runs under the default policy, and for a
+    /// serializing family the guard one line above the loop
+    /// (`refusesToJoin`) means requests 2..N never reach this mechanism at all.
+    /// I read a pass here as "admission count is not the problem" and it was not
+    /// entitled to answer that question — for the families on the leaderboard the
+    /// answer was the opposite.
     func testIdleSchedulerAdmitsEveryWaitingRequestInOneStep() async throws {
         let model = AdmissionRecordingModel(vocabularySize: 16)
         let scheduler = Scheduler(
@@ -59,6 +67,67 @@ final class SchedulerAdmissionShapeTests: XCTestCase {
             "one step admitted \(admitted) of 8; every request after the first is paying "
                 + "the whole queue's prefill before its own first token"
         )
+    }
+
+    /// The measured TTFT collapse, as a unit test.
+    ///
+    /// mlxcat's TTFT was linear in N — and the reason was not that N prefills run
+    /// serially. Under `.always` each waiting request queues behind the
+    /// predecessor's ENTIRE GENERATION, so the per-unit cost is prefill PLUS all
+    /// its decode steps. The bench fit is within 1.3% at every width on two
+    /// models using G = prefill + tokens/decode-rate, and mlx-serve queues behind
+    /// PREFILLS only — that ratio is the whole gap, not any prefill-speed
+    /// difference.
+    ///
+    /// So the property worth pinning is not "how many admissions per step" but
+    /// "does a second request get in while the first is still generating".
+    func testASerializingPolicyQueuesBehindWholeGenerations() async throws {
+        let model = AdmissionRecordingModel(vocabularySize: 16)
+        let scheduler = Scheduler(
+            modelBox: LanguageModelBox(model),
+            parameters: GenerateParameters(maxTokens: 8, temperature: 0),
+            maxConcurrentRequests: 8,
+            serializationPolicy: .always
+        )
+        for index in 0 ..< 4 {
+            try await scheduler.submit(request("s\(index)", promptTokens: 8, maxTokens: 8))
+        }
+
+        let first = try await scheduler.step()
+        let admittedFirst = Set(first.filter { $0.token >= 0 }.map(\.uid)).count
+        XCTAssertEqual(
+            admittedFirst, 1,
+            "`.always` must admit exactly one; admitting \(admittedFirst) would mean the "
+                + "solitude guard is not holding")
+
+        // While that one generates, nobody else may start. This is the drain
+        // that made TTFT linear in generations rather than in prefills.
+        var seen: Set<String> = Set(first.filter { $0.token >= 0 }.map(\.uid))
+        for _ in 0 ..< 4 {
+            let responses = try await scheduler.step()
+            seen.formUnion(responses.filter { $0.token >= 0 }.map(\.uid))
+        }
+        XCTAssertEqual(
+            seen.count, 1,
+            "a second request started while the first was still generating under `.always`; "
+                + "either the policy changed or this test no longer describes it — \(seen)")
+
+        // And a non-serializing policy must NOT behave that way, or the contrast
+        // this test exists to draw is vacuous.
+        let openModel = AdmissionRecordingModel(vocabularySize: 16)
+        let open = Scheduler(
+            modelBox: LanguageModelBox(openModel),
+            parameters: GenerateParameters(maxTokens: 8, temperature: 0),
+            maxConcurrentRequests: 8,
+            serializationPolicy: .never
+        )
+        for index in 0 ..< 4 {
+            try await open.submit(request("o\(index)", promptTokens: 8, maxTokens: 8))
+        }
+        let openFirst = try await open.step()
+        XCTAssertEqual(
+            Set(openFirst.filter { $0.token >= 0 }.map(\.uid)).count, 4,
+            "`.never` should admit the whole burst in one step")
     }
 
     /// The width the busy path prefills per chunk. 512 was out of line with every
