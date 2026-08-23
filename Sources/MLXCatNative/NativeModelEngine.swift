@@ -862,9 +862,35 @@ public struct NativeModelLoader: EnginePoolModelLoader {
     /// it token-EXACT against serial at 4 ragged rows and again at width 8, on
     /// the `VLMModelFactory` path production actually loads. Its scalar offset is
     /// corrected per row by ``BatchPositionalState`` rather than tolerated.
+    ///
+    /// **`gemma4` and `gemma4_unified` were REMOVED on 2026-08-24.** They were
+    /// granted entry on the morning of 2026-08-23 and it produced the biggest
+    /// result on the board — gemma-4-E2B longgen c8 TTFT 39,346 -> 1,793 ms.
+    /// The grant was wrong, and not by a tolerance: batched gemma decode
+    /// produces **unrotated** queries and keys for every row but the first.
+    ///
+    /// MLX's RoPE has a fast path taken when the input is row-contiguous, the
+    /// sequence length is 1, and the offset is a SCALAR
+    /// (`mlx/backend/metal/rope.cpp:96`). That branch dispatches
+    /// `MTL::Size(dims/2, N, 1)`, where `N` covers only the head axes — the
+    /// batch size is absent (`rope.cpp:134-139`), while the general branch has
+    /// it at `:149`. The kernel therefore rotates batch row 0 and, because the
+    /// input is donated, rows 1..B-1 pass through untouched.
+    ///
+    /// Gemma's VLM attention is the only code in our stack that reaches that
+    /// primitive with a scalar offset on a batched decode tensor
+    /// (`Gemma4.swift:872,880,903`); every other family rotates through
+    /// `applyRotaryPosition(..., offset: cache?.ropeOffset)`, and a per-row
+    /// array offset forces the correct branch. `RoPEBatchGridProbeTests`
+    /// reproduces it in under a second with no model:
+    /// `rows-unrotated=[1, 2, 3]`, output bit-identical to input.
+    ///
+    /// So this is not a latency-versus-exactness trade — width >= 2 gemma is
+    /// wrong. `.always` is a correctness floor, not conservatism, and it costs
+    /// exactly the win above until the RoPE call is fixed upstream or in a fork.
+    /// `MLXCAT_UNSERIALIZE_MODEL_TYPES=gemma4,gemma4_unified` still lifts it for
+    /// measurement.
     private static let multimodalOnlyModelTypes: Set<String> = [
-        "gemma4",
-        "gemma4_unified",
         "qwen3_5",
     ]
 

@@ -74,43 +74,34 @@ final class SerializationOverrideTests: XCTestCase {
         XCTAssertFalse(NativeModelLoader.usesSerializedDecode(modelType: "qwen3_moe", isVLM: false, overrides: overrides))
     }
 
-    func testGemmaUnifiedIsCappedAtTheWidthBelowAFlip() {
-        // gemma-4-12B (gemma4_unified) is over the 1.25 tolerance at every width
-        // >= 2 (1.656 / 1.656 / 1.740), but a token can only FLIP where the error
-        // exceeds the top-1/top-2 margin — margin 11.5 at widths 2 and 4, and
-        // 1.125 at width 8. The cap removes the width where a flip is possible
-        // and keeps the one the concurrency win was measured at. It composes with
-        // multimodal solitude rather than replacing it: image rows still run
-        // alone.
-        let policy = NativeModelLoader.serializationPolicy(
-            modelType: "gemma4_unified", isVLM: true, overrides: [])
-        XCTAssertEqual(policy, .batched(maxWidth: 4, multimodalSolitude: true))
-
-        let text = Request(
-            uid: "text", input: .init(text: .init(tokens: MLXArray([Int32(1)]))), maxTokens: 4)
-        XCTAssertFalse(policy.requiresSolitude(text), "text rows must still batch")
-        XCTAssertFalse(policy.refusesToJoin(running: Array(repeating: text, count: 3)))
-        XCTAssertTrue(
-            policy.refusesToJoin(running: Array(repeating: text, count: 4)),
-            "width 8 is where the logit error exceeds the margin; the cap must bite before it")
-
-        // gemma4 (E2B) passes the gate on its own evidence and stays uncapped.
-        XCTAssertEqual(
-            NativeModelLoader.serializationPolicy(modelType: "gemma4", isVLM: true, overrides: []),
-            .multimodalOnly)
-    }
-
-    func testGemmaBatchesTextAndSerializesImages() {
-        // The whole point of the narrower policy: gemma-4's text rows batch (50x
-        // TTFT at c4) while its ragged image rows keep the batch to themselves.
+    func testGemmaIsFullySerializedUntilTheRoPEGridBugIsFixed() {
+        // gemma was granted `.multimodalOnly` on 2026-08-23 and it produced the
+        // biggest result on the board. The grant was wrong, and not by a
+        // tolerance: MLX's RoPE fast path drops the batch axis from its dispatch
+        // grid (`mlx/backend/metal/rope.cpp:134-139` against `:149`), so batched
+        // gemma decode rotates row 0 and passes rows 1..B-1 through UNROTATED.
+        // `RoPEBatchGridProbeTests` reproduces that in under a second with no
+        // model. Gemma's VLM attention is the only code in our stack that
+        // reaches the primitive with a scalar offset on a batched decode tensor.
+        //
+        // So `.always` here is a correctness floor, not a cap chosen from a
+        // logit table, and it must not be relaxed until the RoPE call moves to
+        // the per-row array path.
         let none: Set<String> = []
+        for family in ["gemma4", "gemma4_unified"] {
+            XCTAssertEqual(
+                NativeModelLoader.serializationPolicy(
+                    modelType: family, isVLM: true, overrides: none),
+                .always,
+                "\(family) must not batch while its rows decode unrotated")
+        }
+
+        // The measurement override still works, because pricing the bug is how
+        // the fix gets justified.
         XCTAssertEqual(
-            NativeModelLoader.serializationPolicy(modelType: "gemma4", isVLM: true, overrides: none),
-            .multimodalOnly)
-        XCTAssertEqual(
-            NativeModelLoader.serializationPolicy(modelType: "gemma4_unified", isVLM: true, overrides: none),
-            .batched(maxWidth: 4, multimodalSolitude: true),
-            "gemma4_unified batches text like gemma4, but capped — see the width test above")
+            NativeModelLoader.serializationPolicy(
+                modelType: "gemma4", isVLM: true, overrides: ["gemma4"]),
+            .never)
     }
 
     func testQwen35BatchesTextOnceItsRopeAnchorIsCarriedPerRow() {
