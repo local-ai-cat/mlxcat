@@ -146,6 +146,35 @@ loop under the WRONG policy — it uses the default, so for a serializing family
 requests 2..N never reach the loop it asserts on.
 `testASerializingPolicyQueuesBehindWholeGenerations` now pins the real behaviour.
 
+### 1b. Quantized KV cache — stage 1 landed 2026-08-23
+**They:** mlx-lm ships `--kv-bits` (default None), `--kv-group-size 64`,
+`--quantized-kv-start 5000` (`guest/mlx-lm/mlx_lm/generate.py:56,192-209`) and
+quantizes inside its prefill chunk loop AND on each decode step (`:418,441`);
+its HTTP server does not expose the knobs. omlx has no affine KV quantization at
+all — TurboQuant only, off by default, and it excludes MLA and attention-sink
+models (`guest/omlx/omlx/scheduler.py:2725-2760`). mlx-serve has none.
+**We had:** zero call sites, despite `mlx-swift-lm` shipping `QuantizedKVCache`,
+`toQuantized`, and `GenerateParameters.kvBits`. Nothing quantized even if the
+parameter were set, because mlxcat never runs upstream's `TokenIterator`.
+**We did:** `KVQuantizationPolicy`, converted per prefill chunk as mlx-lm does.
+Measured on Qwen3.5-4B at a 16,384-token prompt: **561 → 193 MiB resident**, with
+only 8 of its 32 layers quantizable.
+
+**Still open — stage 2 is the server prize.** Stage 1 forces `.always`, so
+quantization and concurrency are mutually exclusive today. The enabling fact for
+stage 2 is that affine groups run along `head_dim` *per token*, so merge, extract
+and filter work on the quantized triples with no dequantization — a batched
+quantized cache keeps the token-exactness discipline. It needs a
+`BatchQuantizedKVCache` mirroring `BatchKVCache`, `BatchLayerCache` routing for
+4/6-array states, and `ModelKVCacheProfile.bytesPerToken` made bits-aware.
+
+**Deliberately not done:** quantizing `gpt_oss` (its quantized attention route
+drops attention sinks), quantizing rotating layers (upstream throws by design,
+and their size is bounded anyway), and turning any of it on by default before the
+bench has A/B rows — quantized attention is an unfused `quantizedMatmul` +
+softmax and `qwen3_5` loses its compiled decode path, so the throughput price is
+real and unmeasured.
+
 ### 2. Busy-prefill chunk width — partly closed
 **They:** mlx-lm and omlx use **2048** (`guest/mlx-lm/mlx_lm/generate.py:1509`,
 `guest/omlx/omlx/scheduler.py:1304`); mlx-serve uses **8192**
