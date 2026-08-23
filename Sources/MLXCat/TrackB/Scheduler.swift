@@ -51,6 +51,12 @@ public actor Scheduler {
     private var resumeGeneratedTokens: [String: [Int]] = [:]
     private var droppedStaleResponseCount = 0
     private var pendingCancellation: Set<String> = []
+    private let cacheReleasePolicy: CacheReleasePolicy
+    private var decodeStepsSinceCacheClear = 0
+    /// Set when the drain-to-idle clear has already fired for the current idle
+    /// stretch, so a scheduler polled while idle clears once rather than on
+    /// every call.
+    private var hasReleasedCacheForThisIdleStretch = true
     private let collector = OutputCollector()
 
     public init(
@@ -64,6 +70,7 @@ public actor Scheduler {
         schedulerManagedTextPrefill: Bool = true,
         chunkIdlePrefill: Bool = true,
         pressurePolicy: PressurePolicy = .disabled,
+        cacheReleasePolicy: CacheReleasePolicy? = nil,
         speculativeDecoding: SpeculativeDecodingConfiguration = SpeculativeDecodingConfiguration()
     ) {
         self.model = modelBox.model
@@ -84,6 +91,7 @@ public actor Scheduler {
             usesWindowedKVCache: cacheCapabilities.usesWindowedKVCache
         )
         self.pressurePolicy = pressurePolicy
+        self.cacheReleasePolicy = cacheReleasePolicy ?? .fromEnvironment()
     }
 
     /// Whether the last prompt token is prefilled alone so the one forward whose
@@ -117,6 +125,65 @@ public actor Scheduler {
         case "always", "1", "true": return true
         case "never", "0", "false": return false
         default: return !usesWindowedKVCache
+        }
+    }
+
+    /// When the MLX buffer cache is handed back to the OS.
+    ///
+    /// MLX keeps freed Metal buffers in a cache and does not return them on its
+    /// own, so a server that once served a 16k-token prompt keeps that footprint
+    /// resident forever. Measured on the 2026-08-23 board: gemma-4-E2B's 16k
+    /// tier peaked at 8.39 GiB, and every later cell in the same process
+    /// reported ~7.8 GiB no matter how little it actually needed — the same
+    /// process, hours later, still holding gigabytes for nobody. On a laptop
+    /// that is the whole complaint.
+    ///
+    /// The references both do more than we did, which was to clear between
+    /// prefill chunks and nowhere else:
+    ///
+    ///   * mlx-lm clears every 512 decode steps
+    ///     (`guest/mlx-lm/mlx_lm/generate.py:1779`), so a long generation does
+    ///     not accumulate.
+    ///   * omlx clears on engine transitions
+    ///     (`guest/omlx/omlx/engine_core.py:85`).
+    ///
+    /// Both knobs are on by default and both are switchable, because the cost is
+    /// real and worth measuring rather than asserting: a cleared cache means the
+    /// next allocation goes to the Metal allocator instead of a free list.
+    /// `MLXCAT_DECODE_CLEAR_CACHE_STEPS=0` disables the periodic clear (any other
+    /// non-negative integer sets the interval); `MLXCAT_IDLE_CLEAR_CACHE=0`
+    /// disables the drain-to-idle clear.
+    public struct CacheReleasePolicy: Sendable, Equatable {
+        /// Clear every N decode steps. Zero never clears.
+        public var decodeStepInterval: Int
+        /// Clear once each time the scheduler drains to fully idle.
+        public var releasesWhenIdle: Bool
+
+        public init(decodeStepInterval: Int = 512, releasesWhenIdle: Bool = true) {
+            self.decodeStepInterval = max(0, decodeStepInterval)
+            self.releasesWhenIdle = releasesWhenIdle
+        }
+
+        /// mlx-lm's interval, plus the idle release it has no need for (its
+        /// server does not hold one process across unrelated workloads).
+        public static let `default` = CacheReleasePolicy()
+        public static let never = CacheReleasePolicy(decodeStepInterval: 0, releasesWhenIdle: false)
+
+        public static func fromEnvironment(
+            _ environment: [String: String] = ProcessInfo.processInfo.environment
+        ) -> CacheReleasePolicy {
+            var policy = CacheReleasePolicy.default
+            if let raw = environment["MLXCAT_DECODE_CLEAR_CACHE_STEPS"],
+                let steps = Int(raw.trimmingCharacters(in: .whitespaces)), steps >= 0
+            {
+                policy.decodeStepInterval = steps
+            }
+            switch environment["MLXCAT_IDLE_CLEAR_CACHE"]?.lowercased() {
+            case "0", "false", "never": policy.releasesWhenIdle = false
+            case "1", "true", "always": policy.releasesWhenIdle = true
+            default: break
+            }
+            return policy
         }
     }
 
@@ -180,6 +247,13 @@ public actor Scheduler {
         }
 
         let rawResponses = generator.next()
+        decodeStepsSinceCacheClear += 1
+        if cacheReleasePolicy.decodeStepInterval > 0,
+            decodeStepsSinceCacheClear >= cacheReleasePolicy.decodeStepInterval
+        {
+            Memory.clearCache()
+            decodeStepsSinceCacheClear = 0
+        }
         var finishedUIDs: [String] = []
         var touchedUIDs: Set<String> = []
 
@@ -243,7 +317,22 @@ public actor Scheduler {
         if generator.isEmpty {
             processed.append(contentsOf: admitWaiting(allowPartialPrefill: false))
         }
+        releaseCacheIfDrained()
         return processed
+    }
+
+    /// Hand the buffer cache back once per idle stretch, not once per poll.
+    private func releaseCacheIfDrained() {
+        guard isIdle else {
+            hasReleasedCacheForThisIdleStretch = false
+            return
+        }
+        guard cacheReleasePolicy.releasesWhenIdle, !hasReleasedCacheForThisIdleStretch else {
+            return
+        }
+        hasReleasedCacheForThisIdleStretch = true
+        decodeStepsSinceCacheClear = 0
+        Memory.clearCache()
     }
 
     public func collectedTokens() -> [String: [Int]] {
