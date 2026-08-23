@@ -16,6 +16,7 @@ public final class MLXCatEngine: @unchecked Sendable {
         chunkIdlePrefill: Bool = true,
         pressurePolicy: Scheduler.PressurePolicy = .disabled,
         cacheReleasePolicy: Scheduler.CacheReleasePolicy? = nil,
+        kvQuantization: KVQuantizationPolicy = .off,
         speculativeDecoding: SpeculativeDecodingConfiguration = SpeculativeDecodingConfiguration()
     ) {
         let scheduler = Scheduler(
@@ -30,6 +31,7 @@ public final class MLXCatEngine: @unchecked Sendable {
             chunkIdlePrefill: chunkIdlePrefill,
             pressurePolicy: pressurePolicy,
             cacheReleasePolicy: cacheReleasePolicy,
+            kvQuantization: kvQuantization,
             speculativeDecoding: speculativeDecoding
         )
         self.scheduler = scheduler

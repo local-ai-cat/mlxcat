@@ -30,7 +30,8 @@ public final class NativeModelEngine: @unchecked Sendable {
         cacheCapabilities: ModelCacheCapabilities,
         serializationPolicy: SerializationPolicy,
         schedulerManagedTextPrefill: Bool,
-        chunkIdlePrefill: Bool
+        chunkIdlePrefill: Bool,
+        kvQuantization: KVQuantizationPolicy = .off
     ) {
         self.context = context
         self.modelID = modelID
@@ -46,7 +47,8 @@ public final class NativeModelEngine: @unchecked Sendable {
             cacheCapabilities: cacheCapabilities,
             serializationPolicy: serializationPolicy,
             schedulerManagedTextPrefill: schedulerManagedTextPrefill,
-            chunkIdlePrefill: chunkIdlePrefill
+            chunkIdlePrefill: chunkIdlePrefill,
+            kvQuantization: kvQuantization
         )
         var eosTokenIds = context.configuration.eosTokenIds
         if let tokenizerEosTokenId = context.tokenizer.eosTokenId {
@@ -715,7 +717,11 @@ public struct NativeModelLoader: EnginePoolModelLoader {
                 cacheCapabilities: Self.cacheCapabilities(for: modelConfiguration),
                 serializationPolicy: Self.serializationPolicy(modelType: modelType, isVLM: isVLM),
                 schedulerManagedTextPrefill: !isVLM,
-                chunkIdlePrefill: Self.chunksIdlePrefill(modelType: modelType)
+                chunkIdlePrefill: Self.chunksIdlePrefill(modelType: modelType),
+                // Resolved per model, not per process: `gpt_oss` is excluded
+                // because its quantized attention route drops attention sinks.
+                kvQuantization: KVQuantizationPolicy.resolved(
+                    .fromEnvironment(), modelType: modelType)
             )
         }
     }

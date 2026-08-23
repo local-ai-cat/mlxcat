@@ -52,6 +52,7 @@ public actor Scheduler {
     private var droppedStaleResponseCount = 0
     private var pendingCancellation: Set<String> = []
     private let cacheReleasePolicy: CacheReleasePolicy
+    private let kvQuantization: KVQuantizationPolicy
     private var decodeStepsSinceCacheClear = 0
     /// Set when the drain-to-idle clear has already fired for the current idle
     /// stretch, so a scheduler polled while idle clears once rather than on
@@ -71,6 +72,7 @@ public actor Scheduler {
         chunkIdlePrefill: Bool = true,
         pressurePolicy: PressurePolicy = .disabled,
         cacheReleasePolicy: CacheReleasePolicy? = nil,
+        kvQuantization: KVQuantizationPolicy = .off,
         speculativeDecoding: SpeculativeDecodingConfiguration = SpeculativeDecodingConfiguration()
     ) {
         self.model = modelBox.model
@@ -83,8 +85,28 @@ public actor Scheduler {
         self.maxConcurrentRequests = maxConcurrentRequests
         self.queueLimit = max(maxConcurrentRequests * 4, 32)
         self.prefixStore = prefixStore
-        self.prefixCacheEnabled = prefixStore != nil && !cacheCapabilities.usesWindowedKVCache
-        self.serializationPolicy = serializationPolicy ?? (serializedDecode ? .always : .never)
+        self.kvQuantization = kvQuantization
+        // Stage 1 of KV quantization is single-stream, and the gate is here
+        // rather than in a comment. A quantized row that reaches
+        // `BatchLayerCache` is misrouted by its state array count: rows of
+        // different lengths throw, and — worse — two rows of the SAME length
+        // pass shape validation and then have their `[step, offset, groupSize,
+        // bits]` metaState read as slot metadata, which is silent wrong output.
+        // `.always` keeps every row alone, so that path is unreachable rather
+        // than merely unlikely.
+        //
+        // The prefix stores are excluded for a milder reason: both require the
+        // 2-array keys/values schema and would throw on every publish, which the
+        // scheduler catches and logs. That is not a crash, it is a cache that
+        // has silently stopped working while filling the log — so it is turned
+        // off explicitly instead.
+        self.prefixCacheEnabled =
+            prefixStore != nil && !cacheCapabilities.usesWindowedKVCache && !kvQuantization.isEnabled
+        if kvQuantization.isEnabled {
+            self.serializationPolicy = .always
+        } else {
+            self.serializationPolicy = serializationPolicy ?? (serializedDecode ? .always : .never)
+        }
         self.schedulerManagedTextPrefill = schedulerManagedTextPrefill
         self.chunkIdlePrefill = chunkIdlePrefill
         self.prefillsLastTokenAlone = Self.prefillsLastTokenAlone(
@@ -634,6 +656,14 @@ public actor Scheduler {
                 )
             }
             asyncEval(admission.cache)
+            // Convert inside the chunk loop, as mlx-lm does
+            // (`guest/mlx-lm/mlx_lm/generate.py:418,441`), not once at the end:
+            // conversion allocates the quantized copy while the fp16 original is
+            // still live, so converting per chunk caps that doubling at one
+            // chunk's worth of KV instead of the whole prompt's. A no-op until
+            // the cache passes `startTokens`, and a no-op forever for rotating
+            // and recurrent layers, which upstream declines to quantize.
+            kvQuantization.apply(to: &admission.cache)
             remainingBudget -= end - admission.nextPrefillIndex
             admission.nextPrefillIndex = end
             // Copied from mlx-lm's `_prefill` (guest/mlx-lm/mlx_lm/generate.py:579),
@@ -1034,7 +1064,10 @@ private enum PreparedAdmission {
 private struct AdmissionInProgress {
     let request: Request
     let sampling: SamplingParameters
-    let cache: [any KVCache]
+    /// `var` because KV quantization REPLACES layers in place partway through
+    /// prefill: `KVCacheSimple` becomes `QuantizedKVCache` once the cache passes
+    /// the threshold, so the array cannot be a constant.
+    var cache: [any KVCache]
     let promptTokens: [Int]
     let promptTokensArray: MLXArray
     let storedPromptTokens: [Int]
