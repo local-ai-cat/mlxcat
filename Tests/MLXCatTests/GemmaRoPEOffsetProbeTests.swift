@@ -40,6 +40,20 @@ final class GemmaRoPEOffsetProbeTests: XCTestCase {
     private static let width = 4
     private static let generated = 12
 
+    /// The VLM factory where production uses it, the LLM factory where the model
+    /// is not a VLM at all. gpt-oss is the control that matters for the rotating-
+    /// cache question and it is text-only, so a probe hard-wired to one factory
+    /// cannot ask the question.
+    private static func loadContainer(_ url: URL) async throws -> ModelContainer {
+        do {
+            return try await VLMModelFactory.shared.loadContainer(
+                from: url, using: #huggingFaceTokenizerLoader())
+        } catch {
+            return try await LLMModelFactory.shared.loadContainer(
+                from: url, using: #huggingFaceTokenizerLoader())
+        }
+    }
+
     /// Raw token arrays rather than chat-templated prompts, so LENGTH is the
     /// only variable between the two arms. Distinct content, controlled counts.
     private static func tokens(lengths: [Int]) -> [MLXArray] {
@@ -54,6 +68,38 @@ final class GemmaRoPEOffsetProbeTests: XCTestCase {
         try await divergentRows(
             model: model,
             inputs: tokens(lengths: lengths).map { LMInput(text: LMInput.Text(tokens: $0)) })
+    }
+
+    /// Rows that are IDENTICAL in both length and content. Two readouts:
+    /// whether the rows agree with a serial run, and whether they agree with
+    /// EACH OTHER. Rows disagreeing with each other is a per-row indexing or
+    /// contamination bug and localises to a row and a step; rows agreeing with
+    /// each other while all differing from serial is width-level numerics.
+    private static func identicalRowSplit(
+        model: any LanguageModel, input: LMInput, width: Int
+    ) async throws -> (vsSerial: Int, vsEachOther: Int) {
+        let parameters = GenerateParameters(maxTokens: generated, temperature: 0)
+        let serial = try SerialGreedyTokenHelper.tokens(
+            model: model, input: input, parameters: parameters, steps: generated)
+        let engine = MLXCatEngine(
+            model: model, parameters: parameters,
+            maxConcurrentRequests: width, serializationPolicy: .never)
+        let batched = try await engine.generate(
+            (0 ..< width).map { index in
+                Request(
+                    uid: "same-\(index)", input: input, maxTokens: generated,
+                    sampling: SamplingParameters(temperature: 0))
+            }
+        )
+        var vsSerial = 0
+        var vsEachOther = 0
+        let first = batched["same-0"] ?? []
+        for index in 0 ..< width {
+            let got = batched["same-\(index)"] ?? []
+            if got != serial { vsSerial += 1 }
+            if got != first { vsEachOther += 1 }
+        }
+        return (vsSerial, vsEachOther)
     }
 
     private static func divergentRows(
@@ -102,8 +148,7 @@ final class GemmaRoPEOffsetProbeTests: XCTestCase {
 
         // The PRODUCTION factory. Loading through LLMModelFactory here would
         // reproduce the very mistake this probe exists to expose.
-        let container = try await VLMModelFactory.shared.loadContainer(
-            from: url, using: #huggingFaceTokenizerLoader())
+        let container = try await Self.loadContainer(url)
 
         let (control, equal, ragged) = try await container.perform { context in
             // WIDTH 1 IS THE CONTROL and it has to come first. A single row
@@ -144,6 +189,45 @@ final class GemmaRoPEOffsetProbeTests: XCTestCase {
             "equal-length rows diverged, so left padding is not the (only) cause")
     }
 
+    /// P2: rows that are identical in every respect. If four copies of the same
+    /// prompt, decoded together, disagree with EACH OTHER, then rows are
+    /// crossing and the bug is ours and locatable. If they agree with each other
+    /// but all differ from serial, the divergence is width-level numerics and no
+    /// per-row indexing fix will touch it.
+    ///
+    /// Also prints whether decode pipelining was actually on, because the arm
+    /// that turns it off is worthless if the switch never flipped.
+    func testIdenticalRowsAgreeWithEachOther() async throws {
+        try MLXMetalRuntime.requireAvailable()
+        guard let path = ProcessInfo.processInfo.environment["MLXCAT_GEMMA_PROBE_MODEL"] else {
+            throw XCTSkip("Set MLXCAT_GEMMA_PROBE_MODEL to a gemma-4 checkpoint to run this probe.")
+        }
+        let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+        let container = try await Self.loadContainer(url)
+
+        let (w2, w4) = try await container.perform { context in
+            let input = try await context.processor.prepare(
+                input: UserInput(prompt: "In two sentences, explain what a KV cache stores during autoregressive decoding."))
+            let w2 = try await Self.identicalRowSplit(model: context.model, input: input, width: 2)
+            let w4 = try await Self.identicalRowSplit(model: context.model, input: input, width: 4)
+            return (w2, w4)
+        }
+
+        print(
+            "GEMMASAME \(url.lastPathComponent) pipelining="
+                + (ContinuousBatchGenerator.pipeliningEnabled ? "on" : "OFF")
+                + " w2 vsSerial=\(w2.vsSerial)/2 vsEachOther=\(w2.vsEachOther)/2"
+                + " w4 vsSerial=\(w4.vsSerial)/4 vsEachOther=\(w4.vsEachOther)/4")
+
+        XCTAssertEqual(
+            w4.vsEachOther, 0,
+            """
+            four IDENTICAL prompts decoded together disagreed with each other — \
+            rows are crossing, and that is a per-row indexing bug in the width >= 2 \
+            path, not width-level numerics
+            """)
+    }
+
     /// The same question on REAL text, because the arms above feed synthetic
     /// token ids and greedy decoding over gibberish sits near ties constantly —
     /// a divergence there can be a property of the input rather than of the
@@ -157,8 +241,7 @@ final class GemmaRoPEOffsetProbeTests: XCTestCase {
             throw XCTSkip("Set MLXCAT_GEMMA_PROBE_MODEL to a gemma-4 checkpoint to run this probe.")
         }
         let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
-        let container = try await VLMModelFactory.shared.loadContainer(
-            from: url, using: #huggingFaceTokenizerLoader())
+        let container = try await Self.loadContainer(url)
 
         let prompts = [
             "Explain, in two sentences, what a KV cache stores during autoregressive decoding and why it makes generation cheaper than re-reading the prompt every step.",

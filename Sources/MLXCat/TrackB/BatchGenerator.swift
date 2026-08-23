@@ -600,8 +600,23 @@ public final class ContinuousBatchGenerator {
     /// could lag the launched step: grammar masks and thinking budgets prepare
     /// between steps, and speculation manages `currentTokens` itself. Token
     /// histories are safe — they are updated before the next step is sampled.
+    /// Kill switch for launch-ahead, so its effect can be MEASURED rather than
+    /// argued. `MLXCAT_DECODE_PIPELINING=0` runs decode fully synchronously.
+    ///
+    /// It exists because of a control-matrix hole: batched gemma at width >= 2
+    /// is the only configuration this repo has ever run that combines a
+    /// rotating-merged `BatchKVCache` with this path, and it is also the only
+    /// one that diverges from serial (`docs/KNOWN-FAILURES.md` §1f). Every clean
+    /// control misses one half of that pair — `qwen3_5` at width 8 is pipelined
+    /// but has no rotating layers, gpt-oss has rotating layers but runs through
+    /// the synchronous `StaticBatchGenerator`, and gemma at width 1 never builds
+    /// a `BatchKVCache` at all. Turning this off is how that pair gets split.
+    static let pipeliningEnabled =
+        ProcessInfo.processInfo.environment["MLXCAT_DECODE_PIPELINING"] != "0"
+
     private var canPipelineDecode: Bool {
-        !speculativeDecoding.enabled
+        Self.pipeliningEnabled
+            && !speculativeDecoding.enabled
             && jsonGrammarMatchers.allSatisfy { $0 == nil }
             && regexGrammarMatchers.allSatisfy { $0 == nil }
             && gbnfGrammarMatchers.allSatisfy { $0 == nil }
