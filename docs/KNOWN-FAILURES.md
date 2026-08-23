@@ -375,6 +375,46 @@ logit sweep. What is claimed is that the evidence the grant rests on does not
 describe the shipping path, and that on the shipping path gemma fails the bar
 every other family here clears.
 
+### Narrowed 2026-08-24: it is the gemma model, not our batching
+
+Three hypotheses died, each to a control rather than to an argument.
+
+**Left padding — no.** Equal-length rows diverge as much as ragged ones (table
+above).
+
+**Pipelined launch-ahead — no.** `MLXCAT_DECODE_PIPELINING=0` leaves the numbers
+bit-identical. The probe prints which state it ran in, because a toggle that
+silently did nothing looks exactly like a toggle that did.
+
+**The rotating-cache merge — no**, and this is the control that settles it.
+gemma at width >= 2 was the only configuration that had ever combined a
+rotating-merged `BatchKVCache` with pipelined decode, which made the merge the
+obvious suspect. Untested is not the same as guilty, so it was tested:
+
+| model, through the engine | rotating layers merged | vs serial | vs each other |
+|---|---|---|---|
+| gpt-oss-20b | 12 | 0/4 | **0/4** |
+| Qwen3.5-4B | 0 (hybrid) | 0/4 | **0/4** |
+| gemma-4-12B | 40 | 3/4 | **3/4** |
+
+gpt-oss merges rotating caches into a `BatchKVCache` and runs the same pipelined
+path, and it is exact.
+
+**And the sharpest measurement of all: four IDENTICAL rows disagree with each
+other.** Same prompt, same length, same tokens, decoded together — 3 of 4 differ
+from row 0 at width 4, 1 of 2 at width 2. Identical input must give identical
+output regardless of row position. This is per-row contamination, and
+`vsSerial == vsEachOther` in every cell, which reads as row 0 correct and rows
+>= 1 wrong.
+
+So the defect is in the gemma model implementation, and since BOTH gemmas fail
+it is in the shared `Gemma4TextAttention`/`Gemma4TextBackbone` rather than in
+anything specific to `Gemma4` or `Gemma4Unified`. The surfaces neither other
+family has are the KV-shared layer tail (`sharedKV` reusing an earlier layer's
+`kvState`, with `offset: Int` carried through `intermediates`,
+`Gemma4.swift:1292-1305`), the sliding/full interleave, and
+`gemma4AdjustAttentionMask`.
+
 **The decision is a product one and it is Phil's**, because the cost is the
 biggest concurrency win on the board:
 1. Drop both gemmas to `.always` — restores token-exactness, loses the 22x c8
