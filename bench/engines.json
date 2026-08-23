@@ -312,6 +312,34 @@
       "url": "http://127.0.0.1:11434",
       "token_env": "LOCALAI_API_TOKEN",
       "notes": "Attach to a running Local AI Cat with the engine setting forced to legacy. The alpha on :11434 must NOT be restarted by the harness."
+    },
+    "mlxcat-cache-held": {
+      "description": "mlxcat with the MLX buffer-cache releases turned OFF (MLXCAT_IDLE_CLEAR_CACHE=0, MLXCAT_DECODE_CLEAR_CACHE_STEPS=0) — the behaviour that shipped before 2026-08-23. MLX keeps freed Metal buffers on a free list and does not return them, so a process that once served a 16k prompt stayed at that footprint for every later cell; the default now clears on drain-to-idle and every 512 decode steps, which is mlx-lm's interval (guest/mlx-lm/mlx_lm/generate.py:1779). Measured in-process on Qwen3-0.6B with a 4096-token prompt, the difference was 1953 MiB held vs 0. Read the pair `mlxcat` vs `mlxcat-cache-held` as: what does handing the cache back cost in latency, against what it saves in footprint.",
+      "platforms": [
+        "macos",
+        "ios"
+      ],
+      "launch": {
+        "bin": "{repo}/.build/release/mlxcat-http",
+        "bin_env": "MLXCAT_HTTP_BIN",
+        "args": [
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "{port}",
+          "--model-dir",
+          "{model_root}",
+          "--memory-ceiling-bytes",
+          "{memory_ceiling_bytes}"
+        ],
+        "env": {
+          "MLXCAT_IDLE_CLEAR_CACHE": "0",
+          "MLXCAT_DECODE_CLEAR_CACHE_STEPS": "0"
+        },
+        "port_base": 11900,
+        "ready_timeout_s": 120
+      },
+      "notes": "Same binary and same ceiling as `mlxcat`; the only difference is the two env overrides. This arm is not a proposal — it is the control that makes the default's footprint claim a measurement. Note the peak column is per PROCESS and one process serves every tier of a model, so this arm's later cells inherit its 16k high-water mark; that inheritance IS the defect being priced."
     }
   }
 }
