@@ -230,6 +230,87 @@ final class KVQuantizationMemoryTests: XCTestCase {
         return resident
     }
 
+    /// What quantization COSTS. Stage 1 shipped with the price documented as
+    /// "real and unmeasured", which is a promissory note, not a number.
+    ///
+    /// Quantized attention is an unfused `quantizedMatmul` + softmax rather than
+    /// a fused SDPA kernel, and `qwen3_5` additionally loses its compiled decode
+    /// route (`Qwen35.swift:707-712` gates that on a plain attention path). So a
+    /// decode slowdown is expected; the question is how much, and the answer
+    /// belongs on the board rather than in a caveat.
+    ///
+    /// The assertion is a catastrophe guard, not a target — the printed ratio is
+    /// the result, and a bar tight enough to be a target would just encode
+    /// today's hardware.
+    private static func decodeRate(model: any LanguageModel, policy: KVQuantizationPolicy)
+        async throws -> Double
+    {
+        Memory.clearCache()
+        let generated = 64
+        let scheduler = Scheduler(
+            modelBox: LanguageModelBox(model),
+            parameters: GenerateParameters(maxTokens: generated, temperature: 0),
+            maxConcurrentRequests: 1,
+            kvQuantization: policy
+        )
+        try await scheduler.submit(
+            Request(
+                uid: "kvq-rate",
+                input: LMInput(
+                    text: .init(
+                        tokens: MLXArray((0 ..< promptTokens).map { Int32(1000 + ($0 % 2048)) }))),
+                maxTokens: generated,
+                sampling: SamplingParameters(temperature: 0)
+            )
+        )
+
+        // Prefill first, and do NOT time it — the prefill cost differs between
+        // the arms for its own reasons (conversion allocates), and mixing it in
+        // would report a blend of two different questions.
+        var emitted = false
+        for _ in 0 ..< 400 where !emitted {
+            emitted = try await scheduler.step().contains { $0.token >= 0 }
+        }
+        XCTAssertTrue(emitted, "prefill never completed")
+
+        let start = Date()
+        var decoded = 0
+        for _ in 0 ..< (generated * 4) where decoded < generated - 1 {
+            decoded += try await scheduler.step().filter { $0.token >= 0 }.count
+        }
+        let elapsed = Date().timeIntervalSince(start)
+        XCTAssertGreaterThan(decoded, 0, "no tokens were decoded, so nothing was timed")
+        return Double(decoded) / elapsed
+    }
+
+    func testTheThroughputPriceOfQuantizedAttentionIsMeasured() async throws {
+        try MLXMetalRuntime.requireAvailable()
+        guard let path = ProcessInfo.processInfo.environment["MLXCAT_KV_QUANT_TEST_MODEL"] else {
+            throw XCTSkip("Set MLXCAT_KV_QUANT_TEST_MODEL to run the KV-quantization A/B.")
+        }
+        let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+        let container = try await LLMModelFactory.shared.loadContainer(
+            from: url, using: #huggingFaceTokenizerLoader())
+
+        let (fp16, quantized) = try await container.perform { context in
+            let fp16 = try await Self.decodeRate(model: context.model, policy: .off)
+            let quantized = try await Self.decodeRate(
+                model: context.model,
+                policy: KVQuantizationPolicy(bits: 4, groupSize: 64, startTokens: 0))
+            return (fp16, quantized)
+        }
+
+        print(
+            String(
+                format: "KVQUANTRATE prompt=%d fp16=%.1f tok/s kv4=%.1f tok/s ratio=%.2fx",
+                Self.promptTokens, fp16, quantized, quantized / fp16))
+
+        XCTAssertGreaterThan(fp16, 0)
+        XCTAssertGreaterThan(
+            quantized, fp16 / 4,
+            "quantized decode is more than 4x slower than fp16 — that is a defect, not a price")
+    }
+
     func testFourBitKVIsMateriallySmallerThanFP16() async throws {
         try MLXMetalRuntime.requireAvailable()
         guard let path = ProcessInfo.processInfo.environment["MLXCAT_KV_QUANT_TEST_MODEL"] else {

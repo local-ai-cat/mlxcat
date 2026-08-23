@@ -38,9 +38,21 @@ import MLXLMCommon
 /// Off. mlx-lm ships `--kv-bits` defaulting to None with group size 64 and
 /// `--quantized-kv-start 5000` (`guest/mlx-lm/mlx_lm/generate.py:56,192-209`),
 /// and does not expose it from its server at all. omlx defaults its own scheme
-/// off; mlx-serve has no KV quantization. Nobody ships this on, and quantized
-/// attention is an unfused `quantizedMatmul` + softmax, so the throughput price
-/// is real and unmeasured here. It stays opt-in until the bench has A/B rows.
+/// off; mlx-serve has no KV quantization.
+///
+/// The price is a decode slowdown — quantized attention is an unfused
+/// `quantizedMatmul` + softmax rather than a fused SDPA kernel, and `qwen3_5`
+/// additionally loses its compiled decode route (`Qwen35.swift:707-712` gates
+/// that on a plain attention path). Measured rather than feared, Qwen3.5-4B at a
+/// 16,384-token prompt on an M5 Max:
+///
+///     fp16   31.5 tok/s     561 MiB resident
+///     kv4    27.6 tok/s     193 MiB resident
+///
+/// **12% of decode for 65% of the memory** — and on this model only 8 of 32
+/// layers are even quantizable. That is a good trade for anyone near a memory
+/// ceiling and a bad one for anyone not, which is exactly why it is a switch
+/// rather than a default.
 public struct KVQuantizationPolicy: Sendable, Equatable {
     /// Bits per KV element. `nil` — the default — leaves the cache in fp16.
     public var bits: Int?

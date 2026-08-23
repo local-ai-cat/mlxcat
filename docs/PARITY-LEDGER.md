@@ -157,8 +157,16 @@ models (`guest/omlx/omlx/scheduler.py:2725-2760`). mlx-serve has none.
 `toQuantized`, and `GenerateParameters.kvBits`. Nothing quantized even if the
 parameter were set, because mlxcat never runs upstream's `TokenIterator`.
 **We did:** `KVQuantizationPolicy`, converted per prefill chunk as mlx-lm does.
-Measured on Qwen3.5-4B at a 16,384-token prompt: **561 → 193 MiB resident**, with
-only 8 of its 32 layers quantizable.
+Measured on Qwen3.5-4B at a 16,384-token prompt (M5 Max), both arms same run:
+
+| | resident | decode |
+|---|---|---|
+| fp16 | 561 MiB | 31.5 tok/s |
+| kv4 | **193 MiB** | 27.6 tok/s |
+
+**12% of decode for 65% of the memory**, on a model where only 8 of 32 layers are
+quantizable. The price was written down as "real and unmeasured" when stage 1
+landed; it is now a number, and it is smaller than feared.
 
 **Still open — stage 2 is the server prize.** Stage 1 forces `.always`, so
 quantization and concurrency are mutually exclusive today. The enabling fact for
@@ -171,9 +179,9 @@ quantized cache keeps the token-exactness discipline. It needs a
 **Deliberately not done:** quantizing `gpt_oss` (its quantized attention route
 drops attention sinks), quantizing rotating layers (upstream throws by design,
 and their size is bounded anyway), and turning any of it on by default before the
-bench has A/B rows — quantized attention is an unfused `quantizedMatmul` +
-softmax and `qwen3_5` loses its compiled decode path, so the throughput price is
-real and unmeasured.
+bench has A/B rows. The in-process A/B above prices it at 12% of decode, but that
+is one model on one machine at one prompt length; the board is what generalises
+it.
 
 ### 2. Busy-prefill chunk width — partly closed
 **They:** mlx-lm and omlx use **2048** (`guest/mlx-lm/mlx_lm/generate.py:1509`,
