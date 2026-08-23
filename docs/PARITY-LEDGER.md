@@ -62,14 +62,31 @@ never computed at all; the tensor whose logits are read is always `[1, 1, vocab]
 `[1, chunk, vocab]` — ~268 MB of fp16 for a 512-token chunk at a 262k vocab, and
 gigabytes on the single-pass path, all discarded except one row.
 **Closed:** the last prompt token is now prefilled alone, so the sampled forward
-is `[1, 1, vocab]`. Measured at 16k on an M5 Max: gemma-4-12B 13.40 → **12.92**
-GiB, Qwen3.8-27B 19.13 → **18.83**. Small because chunking had already bounded
+is `[1, 1, vocab]`. Measured at 16k on an M5 Max, on non-windowed families (the windowed ones do
+not take this path): Qwen3.8-27B 19.13 → **18.83** GiB. Small because chunking had already bounded
 it; the ordering matches the mechanism (gemma's 262k vocab saves more than the
 27B's 248k).
-**Gate:** the model-backed correctness gates cover it, because this changes which
-forward produces the sampled token — 22 core tests on Qwen3-0.6B including
-`BatchInvarianceTests`, plus `MoEBatchIntegrationTests` token equality at widths
-2/4/8 against the real 30B. Both green.
+**Capability-gated, and this is the interesting part.** It is safe for mlx-lm
+because their remaining token goes through `_step()` — the SAME single-token
+decode path every later token uses. Ours goes through the PREFILL call site, and
+a rotating (sliding-window) KV cache has separate multi-token and single-token
+update paths, so the extra `S == 1` prefill update desynchronises the ring.
+`SlidingWindowBatchIntegrationTests` on gpt-oss-20b (window 128) went 3/3 green →
+60 of 160 tokens diverging from serial, sustained run of 37, from token 97. Every
+non-windowed gate stayed green, which is what localised it, and bisecting this
+change alone restored 3/3.
+
+So windowed caches keep the old path and everything else takes the smaller
+tensor. `MLXCAT_PREFILL_LAST_TOKEN_ALONE=always|never` forces it either way, so
+the trade-off stays measurable — `always` on a windowed model reproduces the
+divergence above.
+
+**Gate:** the model-backed gates, because this changes which forward produces the
+sampled token — 22 core tests on Qwen3-0.6B including `BatchInvarianceTests`,
+`MoEBatchIntegrationTests` token equality at widths 2/4/8 against the real 30B,
+and `SlidingWindowBatchIntegrationTests` on gpt-oss. The unit suite was green
+throughout and could not see any of it; `PrefillLastTokenAlonePolicyTests` pins
+the capability rule itself without weights.
 
 ---
 
@@ -141,6 +158,32 @@ rows (`Scheduler.swift:242`, measured 2026-08-23). And mlx-serve reaches its
 curve without it, so (1) and (2) likely capture most of the win.
 
 ---
+
+### 5. Model-gated suites take the CONSTRUCTOR DEFAULT for cache capabilities
+Not a competitor gap — a gap between our gates and our own product, found while
+closing item 3.
+
+`MLXCatEngine`'s default `cacheCapabilities` declares
+`usesWindowedKVCache: false`, and the scheduler makes real decisions from that
+flag (prefix-cache eligibility; whether the last prompt token may be prefilled
+alone). In production `NativeModelLoader.usesWindowedKVCache(configuration:)`
+derives it from the checkpoint. **12 of 14 suites that build an engine never
+declare it**, so any gate pointed at a windowed model measures a configuration
+that never ships.
+
+Caught the hard way: `SlidingWindowBatchIntegrationTests` — the gate whose entire
+subject is a rotating cache — was telling the engine it was not windowed, so a
+correct capability guard could not engage and the gate kept failing.
+
+Fixed in `SlidingWindowBatchIntegrationTests` and `MemoryBudgetTests`. The latter
+moved two published numbers: gemma-4-12B 12.92 → **13.45** GiB and gpt-oss-20b
+14.69 → **14.99**, because windowed families correctly decline the
+last-token-alone prefill. Of the budgeted models only those two are windowed
+(`sliding_window` 1024 and 128); the rest are unaffected.
+
+**Still open:** the other suites have not been audited. Most are pointed at
+non-windowed models so the default is accidentally right, which is exactly why
+this survived — it is only wrong when it matters.
 
 ## Deliberate differences — do not "fix" these
 

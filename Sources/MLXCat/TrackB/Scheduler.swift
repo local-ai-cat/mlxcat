@@ -43,6 +43,7 @@ public actor Scheduler {
     private let serializationPolicy: SerializationPolicy
     private let schedulerManagedTextPrefill: Bool
     private let chunkIdlePrefill: Bool
+    private let prefillsLastTokenAlone: Bool
     private let pressurePolicy: PressurePolicy
     private var waiting: [Request] = []
     private var running: [String: RunningRequest] = [:]
@@ -79,7 +80,44 @@ public actor Scheduler {
         self.serializationPolicy = serializationPolicy ?? (serializedDecode ? .always : .never)
         self.schedulerManagedTextPrefill = schedulerManagedTextPrefill
         self.chunkIdlePrefill = chunkIdlePrefill
+        self.prefillsLastTokenAlone = Self.prefillsLastTokenAlone(
+            usesWindowedKVCache: cacheCapabilities.usesWindowedKVCache
+        )
         self.pressurePolicy = pressurePolicy
+    }
+
+    /// Whether the last prompt token is prefilled alone so the one forward whose
+    /// logits we read is `[1, 1, vocab]` rather than `[1, chunk, vocab]`.
+    ///
+    /// mlx-lm always does this — it loops `while y.size > 1` and hands the single
+    /// remaining token to the step that samples
+    /// (`guest/mlx-lm/mlx_lm/generate.py:580-587`). It is safe for them because
+    /// that remaining token goes through `_step()`, the SAME single-token decode
+    /// path every later token uses.
+    ///
+    /// Ours does not: the extra one-token forward still goes through the PREFILL
+    /// call site. A rotating (sliding-window) KV cache has separate multi-token
+    /// and single-token update paths, so that extra prefill-path `S == 1` update
+    /// desynchronises the ring. Measured on gpt-oss-20b (window 128):
+    /// `SlidingWindowBatchIntegrationTests` went from 3/3 green to 60 of 160
+    /// tokens diverging from serial with a sustained run of 37, starting at
+    /// token 97 — and every non-windowed gate stayed green, which is what
+    /// localises it. Bisected: disabling this alone restores 3/3.
+    ///
+    /// So it is capability-gated rather than reverted: windowed caches keep the
+    /// old path, everything else takes the smaller tensor.
+    /// `MLXCAT_PREFILL_LAST_TOKEN_ALONE=always|never` forces it either way, so
+    /// the trade-off can be measured on a windowed model rather than argued —
+    /// `always` is how you reproduce the divergence above.
+    static func prefillsLastTokenAlone(
+        usesWindowedKVCache: Bool,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Bool {
+        switch environment["MLXCAT_PREFILL_LAST_TOKEN_ALONE"]?.lowercased() {
+        case "always", "1", "true": return true
+        case "never", "0", "false": return false
+        default: return !usesWindowedKVCache
+        }
     }
 
     public var isIdle: Bool {
@@ -478,7 +516,10 @@ public actor Scheduler {
         // We read `output.logits` on whichever chunk ends the range, which at a
         // 262k vocab is ~268 MB of fp16 for a 512-token chunk and gigabytes on
         // the single-pass path — all of it discarded except one row.
-        let logitsBoundary = admission.prefillRange.upperBound - 1
+        let logitsBoundary =
+            prefillsLastTokenAlone
+            ? admission.prefillRange.upperBound - 1
+            : admission.prefillRange.upperBound
         while admission.nextPrefillIndex < admission.prefillRange.upperBound, remainingBudget > 0 {
             let end: Int
             if admission.nextPrefillIndex == logitsBoundary {

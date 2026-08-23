@@ -51,6 +51,33 @@ final class MemoryBudgetTests: XCTestCase {
         return object?["model_type"] as? String ?? ""
     }
 
+    /// Whether this checkpoint uses a rotating KV cache.
+    ///
+    /// `MLXCatEngine`'s default `cacheCapabilities` says `usesWindowedKVCache:
+    /// false`, and the scheduler makes real decisions from that flag — prefix
+    /// cache eligibility, and whether the last prompt token may be prefilled
+    /// alone. Two of the budgeted models are windowed families (gemma-4 and
+    /// gpt-oss), so taking the default would measure a configuration that never
+    /// ships. Production derives this from the parsed model configuration in
+    /// `NativeModelLoader.usesWindowedKVCache(configuration:)`; that needs a
+    /// loaded `ModelKindConfiguration`, so here the checkpoint's own
+    /// `sliding_window` is read directly — the dominant term of the same rule,
+    /// and the one every model in MEMORY_BUDGETS is decided by.
+    private static func usesWindowedKVCache(at modelURL: URL) throws -> Bool {
+        let data = try Data(contentsOf: modelURL.appendingPathComponent("config.json"))
+        let root = (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+        let text = (root["text_config"] as? [String: Any]) ?? root
+        if let window = (text["sliding_window"] ?? root["sliding_window"]) as? Int, window > 0 {
+            return true
+        }
+        if let chunk = (text["attention_chunk_size"] ?? root["attention_chunk_size"]) as? Int,
+            chunk > 0
+        {
+            return true
+        }
+        return false
+    }
+
     func test_longContextPeakFootprintStaysWithinBudget() async throws {
         let environment = ProcessInfo.processInfo.environment
         guard let modelPath = environment["MLXCAT_MEMORY_BUDGET_MODEL"], !modelPath.isEmpty else {
@@ -63,6 +90,9 @@ final class MemoryBudgetTests: XCTestCase {
         // Read the family straight off the checkpoint, the same string
         // NativeModelLoader keys its per-family decisions on.
         let modelType = try Self.modelType(at: modelURL)
+        let capabilities = ModelCacheCapabilities(
+            usesWindowedKVCache: try Self.usesWindowedKVCache(at: modelURL)
+        )
 
         let container = try await LLMModelFactory.shared.loadContainer(
             from: modelURL,
@@ -86,6 +116,7 @@ final class MemoryBudgetTests: XCTestCase {
                 model: context.model,
                 parameters: GenerateParameters(maxTokens: generate, temperature: 0),
                 maxConcurrentRequests: 1,
+                cacheCapabilities: capabilities,
                 chunkIdlePrefill: NativeModelLoader.chunksIdlePrefill(modelType: modelType)
             )
             let request = Request(

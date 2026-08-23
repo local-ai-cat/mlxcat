@@ -2,7 +2,7 @@ import Foundation
 import MLX
 import MLXLMCommon
 import MLXNN
-import MLXCat
+@testable import MLXCat
 import XCTest
 
 /// What admission actually does with N waiting requests, made observable.
@@ -176,5 +176,46 @@ private final class AdmissionRecordingModel: Module, LanguageModel {
         let result = events
         events.removeAll()
         return result
+    }
+}
+
+/// The last-token-alone prefill optimisation and the one cache family it breaks.
+///
+/// It is safe for mlx-lm because its single remaining token goes through
+/// `_step()` — the same decode path every later token uses
+/// (`guest/mlx-lm/mlx_lm/generate.py:580-587`). Ours goes through the PREFILL
+/// call site, and a rotating (sliding-window) cache has separate multi-token and
+/// single-token update paths, so the extra `S == 1` prefill update desyncs the
+/// ring. Measured on gpt-oss-20b (window 128): 60 of 160 tokens diverged from
+/// serial with a sustained run of 37, and bisecting this change alone restored
+/// 3/3.
+final class PrefillLastTokenAlonePolicyTests: XCTestCase {
+    func testWindowedCachesKeepTheOldPathAndEverythingElseTakesIt() {
+        let none: [String: String] = [:]
+        XCTAssertTrue(
+            Scheduler.prefillsLastTokenAlone(usesWindowedKVCache: false, environment: none),
+            "a non-windowed cache should take the smaller logits tensor")
+        XCTAssertFalse(
+            Scheduler.prefillsLastTokenAlone(usesWindowedKVCache: true, environment: none),
+            "a rotating cache desyncs on the extra prefill-path single-token update")
+    }
+
+    func testTheOverrideForcesEitherWayForMeasurement() {
+        // `always` on a windowed model is how the divergence is reproduced —
+        // the toggle exists so the trade-off is measurable, not so it is hidden.
+        XCTAssertTrue(
+            Scheduler.prefillsLastTokenAlone(
+                usesWindowedKVCache: true,
+                environment: ["MLXCAT_PREFILL_LAST_TOKEN_ALONE": "always"]))
+        XCTAssertFalse(
+            Scheduler.prefillsLastTokenAlone(
+                usesWindowedKVCache: false,
+                environment: ["MLXCAT_PREFILL_LAST_TOKEN_ALONE": "never"]))
+        // An unrecognised value falls back to the capability rule rather than
+        // silently picking one.
+        XCTAssertTrue(
+            Scheduler.prefillsLastTokenAlone(
+                usesWindowedKVCache: false,
+                environment: ["MLXCAT_PREFILL_LAST_TOKEN_ALONE": "banana"]))
     }
 }

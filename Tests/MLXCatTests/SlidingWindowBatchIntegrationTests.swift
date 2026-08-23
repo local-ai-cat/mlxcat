@@ -7,6 +7,22 @@ import XCTest
 
 final class SlidingWindowBatchIntegrationTests: XCTestCase {
 
+    /// The whole point of this gate is a model with a rotating KV cache, so the
+    /// engine has to be TOLD that — and it was not.
+    ///
+    /// `MLXCatEngine`'s default `cacheCapabilities` declares
+    /// `usesWindowedKVCache: false`, so this gate was exercising a configuration
+    /// that never ships: in production `NativeModelLoader` derives the real
+    /// capability from the checkpoint and the scheduler makes cache-shape
+    /// decisions from it (prefix-cache eligibility, and whether the last prompt
+    /// token may be prefilled alone). A sliding-window gate that tells the engine
+    /// it is not a sliding-window model can only test the wrong thing.
+    ///
+    /// Found 2026-08-23 when the last-token-alone prefill optimisation was
+    /// correctly capability-gated OFF for windowed caches and this gate kept
+    /// failing anyway — because it never declared itself windowed.
+    static let windowedCapabilities = ModelCacheCapabilities(usesWindowedKVCache: true)
+
     /// Fails loudly when the configured model's sliding window is wider than the
     /// context this gate generates — the gate would otherwise pass or fail for
     /// reasons that have nothing to do with a sliding window.
@@ -65,7 +81,8 @@ final class SlidingWindowBatchIntegrationTests: XCTestCase {
             let engine = MLXCatEngine(
                 model: context.model,
                 parameters: parameters,
-                maxConcurrentRequests: 2
+                maxConcurrentRequests: 2,
+                cacheCapabilities: Self.windowedCapabilities
             )
             let batched = try await engine.generate(
                 inputs.enumerated().map { index, input in
@@ -186,7 +203,8 @@ final class SlidingWindowBatchIntegrationTests: XCTestCase {
             let engine = MLXCatEngine(
                 model: context.model,
                 parameters: parameters,
-                maxConcurrentRequests: 2
+                maxConcurrentRequests: 2,
+                cacheCapabilities: Self.windowedCapabilities
             )
             let batched = try await engine.generate(
                 inputs.enumerated().map { index, input in

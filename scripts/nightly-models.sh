@@ -120,10 +120,16 @@ MEMORY_BUDGETS=(
   # simply did not:
   #
   #     model                  before   after   peak / loaded weights
-  #     Qwen3.8-27B             53.02   18.90    3.7x -> 1.33x
-  #     gemma-4-12B             34.51   13.42    3.3x -> 1.30x
-  #     gpt-oss-20b             35.17   14.69    3.1x -> 1.28x
+  #     Qwen3.8-27B             53.02   18.83    3.7x -> 1.32x
+  #     gemma-4-12B             34.51   13.45    3.3x -> 1.30x
+  #     gpt-oss-20b             35.17   14.99    3.1x -> 1.31x
   #     Qwen3-Coder-30B-A3B     24.75   19.71    1.5x -> 1.22x
+  #
+  # The two windowed families (gemma-4, gpt-oss) are measured with
+  # `usesWindowedKVCache: true` declared, which is what production derives and
+  # what the constructor default got wrong. They read 12.92 and 14.69 before
+  # that was fixed — a path production never selects, because a rotating cache
+  # does not take the last-token-alone prefill.
   #
   # The consistency of the after column is the tell: 1.22-1.33x of loaded weights
   # across four unrelated architectures, where before it ranged 1.5-3.7x.
