@@ -157,16 +157,24 @@ models (`guest/omlx/omlx/scheduler.py:2725-2760`). mlx-serve has none.
 `toQuantized`, and `GenerateParameters.kvBits`. Nothing quantized even if the
 parameter were set, because mlxcat never runs upstream's `TokenIterator`.
 **We did:** `KVQuantizationPolicy`, converted per prefill chunk as mlx-lm does.
-Measured on Qwen3.5-4B at a 16,384-token prompt (M5 Max), both arms same run:
+Measured A/B/B/A at a 16,384-token prompt (M5 Max):
 
-| | resident | decode |
+| model | resident | decode |
 |---|---|---|
-| fp16 | 561 MiB | 31.5 tok/s |
-| kv4 | **193 MiB** | 27.6 tok/s |
+| Qwen3.5-4B (8 of 32 layers quantizable) | 561 -> **193 MiB** (-66%) | 27.0 -> 22.6 tok/s (0.84x) |
+| Qwen3-Coder-30B (48 of 48) | 1536 -> **432 MiB** (-72%) | 19.4 -> 15.5 tok/s (0.80x) |
 
-**12% of decode for 65% of the memory**, on a model where only 8 of 32 layers are
-quantizable. The price was written down as "real and unmeasured" when stage 1
-landed; it is now a number, and it is smaller than feared.
+**Roughly a fifth of decode for two thirds to three quarters of the KV.** The
+price was written down as "real and unmeasured" when stage 1 landed; it is now a
+number.
+
+**And the first version of that number was wrong**, which is why the harness is
+A/B/B/A. Running each arm once in a fixed order reported quantized decode as
+1.22x FASTER on the 30B — a result surprising enough to be worth disbelieving.
+It was: the fp16 arm ran first and cold at 12.7 tok/s against its true warm 19.4,
+and the whole effect was the allocator warming up. The test now fails if the two
+orders disagree on the sign of the effect, so an ordering artifact cannot be
+quoted as a result.
 
 **Still open — stage 2 is the server prize.** Stage 1 forces `.always`, so
 quantization and concurrency are mutually exclusive today. The enabling fact for

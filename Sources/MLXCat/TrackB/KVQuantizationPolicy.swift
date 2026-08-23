@@ -43,16 +43,21 @@ import MLXLMCommon
 /// The price is a decode slowdown — quantized attention is an unfused
 /// `quantizedMatmul` + softmax rather than a fused SDPA kernel, and `qwen3_5`
 /// additionally loses its compiled decode route (`Qwen35.swift:707-712` gates
-/// that on a plain attention path). Measured rather than feared, Qwen3.5-4B at a
-/// 16,384-token prompt on an M5 Max:
+/// that on a plain attention path). Measured A/B/B/A at a 16,384-token prompt on
+/// an M5 Max, resident bytes and decode rate:
 ///
-///     fp16   31.5 tok/s     561 MiB resident
-///     kv4    27.6 tok/s     193 MiB resident
+///     Qwen3.5-4B        561 -> 193 MiB (-66%)    27.0 -> 22.6 tok/s (0.84x)
+///     Qwen3-Coder-30B  1536 -> 432 MiB (-72%)    19.4 -> 15.5 tok/s (0.80x)
 ///
-/// **12% of decode for 65% of the memory** — and on this model only 8 of 32
-/// layers are even quantizable. That is a good trade for anyone near a memory
-/// ceiling and a bad one for anyone not, which is exactly why it is a switch
-/// rather than a default.
+/// **Roughly a fifth of decode for two thirds to three quarters of the KV.**
+/// Good for anyone near a memory ceiling, bad for anyone not — which is exactly
+/// why it is a switch rather than a default.
+///
+/// The order matters and the harness proves it. A first pass that ran fp16 then
+/// kv4 once each reported quantized decode as 1.22x FASTER on the 30B; running
+/// A/B/B/A showed the fp16 arm had simply been measured cold (12.7 tok/s against
+/// its true warm 19.4). The test now requires both orders to agree on the sign
+/// of the effect before the number may be quoted.
 public struct KVQuantizationPolicy: Sendable, Equatable {
     /// Bits per KV element. `nil` — the default — leaves the cache in fp16.
     public var bits: Int?

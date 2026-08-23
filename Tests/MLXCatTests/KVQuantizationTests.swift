@@ -292,20 +292,40 @@ final class KVQuantizationMemoryTests: XCTestCase {
         let container = try await LLMModelFactory.shared.loadContainer(
             from: url, using: #huggingFaceTokenizerLoader())
 
-        let (fp16, quantized) = try await container.perform { context in
-            let fp16 = try await Self.decodeRate(model: context.model, policy: .off)
-            let quantized = try await Self.decodeRate(
-                model: context.model,
-                policy: KVQuantizationPolicy(bits: 4, groupSize: 64, startTokens: 0))
-            return (fp16, quantized)
-        }
+        // A/B/B/A. Running each arm once in a fixed order cannot tell a real
+        // difference from an ordering artifact — the second arm inherits a warm
+        // allocator and warm kernels. On Qwen3-Coder-30B the fixed-order run
+        // reported quantized decode as FASTER, which is surprising enough to be
+        // worth disbelieving until the reversed order agrees.
+        let kv4 = KVQuantizationPolicy(bits: 4, groupSize: 64, startTokens: 0)
+        let (forwardFP16, forwardKV4, reverseKV4, reverseFP16) =
+            try await container.perform { context in
+                let a = try await Self.decodeRate(model: context.model, policy: .off)
+                let b = try await Self.decodeRate(model: context.model, policy: kv4)
+                let c = try await Self.decodeRate(model: context.model, policy: kv4)
+                let d = try await Self.decodeRate(model: context.model, policy: .off)
+                return (a, b, c, d)
+            }
+        let fp16 = (forwardFP16 + reverseFP16) / 2
+        let quantized = (forwardKV4 + reverseKV4) / 2
 
         print(
             String(
-                format: "KVQUANTRATE prompt=%d fp16=%.1f tok/s kv4=%.1f tok/s ratio=%.2fx",
-                Self.promptTokens, fp16, quantized, quantized / fp16))
+                format: "KVQUANTRATE prompt=%d fp16=%.1f tok/s kv4=%.1f tok/s ratio=%.2fx"
+                    + " (forward %.1f/%.1f = %.2fx, reverse %.1f/%.1f = %.2fx)",
+                Self.promptTokens, fp16, quantized, quantized / fp16,
+                forwardFP16, forwardKV4, forwardKV4 / forwardFP16,
+                reverseFP16, reverseKV4, reverseKV4 / reverseFP16))
 
         XCTAssertGreaterThan(fp16, 0)
+        // Both orders must agree on the SIGN of the effect, or the number is an
+        // ordering artifact and must not be quoted at all.
+        XCTAssertEqual(
+            forwardKV4 > forwardFP16, reverseKV4 > reverseFP16,
+            "the two orders disagree on whether quantized decode is faster"
+                + " (forward \(forwardFP16) -> \(forwardKV4),"
+                + " reverse \(reverseFP16) -> \(reverseKV4));"
+                + " this measurement is an ordering artifact, not a result")
         XCTAssertGreaterThan(
             quantized, fp16 / 4,
             "quantized decode is more than 4x slower than fp16 — that is a defect, not a price")
