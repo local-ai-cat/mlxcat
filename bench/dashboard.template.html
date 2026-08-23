@@ -1,814 +1,522 @@
-<title>mlxcat Trajectory Board</title>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mlxcat vs the field</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
-
 <style>
 :root {
-  --ground: #eef1f5;
-  --panel: #ffffff;
-  --panel-2: #f6f8fa;
-  --line: #d5dce5;
-  --line-soft: #e5eaf0;
-  --ink: #141a22;
-  --ink-2: #3f4c5a;
-  --muted: #6b7887;
+  --ground: #eef1f5; --panel: #fff; --panel-2: #f6f8fa;
+  --line: #d5dce5; --line-soft: #e5eaf0;
+  --ink: #141a22; --ink-2: #3f4c5a; --muted: #6b7887;
+  --win: #167a4e; --win-bg: #d8efe3; --win-line: #2a9d68;
+  --lose: #a8253a; --lose-bg: #f7dde1; --lose-line: #cf4257;
   --ours: #d6480a;
-  --ours-soft: rgba(214, 72, 10, 0.13);
-  --them: #7d8ea3;
-  --them-soft: #aab6c4;
-  --good: #1b7a4b;
-  --good-soft: rgba(27, 122, 75, 0.12);
-  --bad: #a82633;
-  --bad-soft: rgba(168, 38, 51, 0.11);
-  --shadow: 0 1px 2px rgba(20, 26, 34, .06), 0 8px 24px -16px rgba(20, 26, 34, .3);
-  --radius: 3px;
+  --shadow: 0 1px 2px rgba(20,26,34,.06), 0 8px 24px -16px rgba(20,26,34,.3);
 }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --ground: #0f1319;
-    --panel: #161c24;
-    --panel-2: #1b222c;
-    --line: #2b3542;
-    --line-soft: #222b36;
-    --ink: #e6ecf3;
-    --ink-2: #b3c0cf;
-    --muted: #8492a3;
-    --ours: #ff7a3c;
-    --ours-soft: rgba(255, 122, 60, 0.16);
-    --them: #7f8fa3;
-    --them-soft: #5d6b7c;
-    --good: #46bd82;
-    --good-soft: rgba(70, 189, 130, 0.15);
-    --bad: #f0707f;
-    --bad-soft: rgba(240, 112, 127, 0.14);
-    --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 10px 30px -18px rgba(0, 0, 0, .9);
-  }
-}
-:root[data-theme="dark"] {
-  --ground: #0f1319;
-  --panel: #161c24;
-  --panel-2: #1b222c;
-  --line: #2b3542;
-  --line-soft: #222b36;
-  --ink: #e6ecf3;
-  --ink-2: #b3c0cf;
-  --muted: #8492a3;
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --ground: #0f1319; --panel: #161c24; --panel-2: #1b222c;
+  --line: #2b3542; --line-soft: #222b36;
+  --ink: #e6ecf3; --ink-2: #b3c0cf; --muted: #8492a3;
+  --win: #4fc98d; --win-bg: #10352a; --win-line: #35b47a;
+  --lose: #f2717f; --lose-bg: #3a1a22; --lose-line: #d65165;
   --ours: #ff7a3c;
-  --ours-soft: rgba(255, 122, 60, 0.16);
-  --them: #7f8fa3;
-  --them-soft: #5d6b7c;
-  --good: #46bd82;
-  --good-soft: rgba(70, 189, 130, 0.15);
-  --bad: #f0707f;
-  --bad-soft: rgba(240, 112, 127, 0.14);
-  --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 10px 30px -18px rgba(0, 0, 0, .9);
+  --shadow: 0 1px 2px rgba(0,0,0,.5), 0 10px 30px -18px rgba(0,0,0,.9);
+} }
+:root[data-theme="dark"] {
+  --ground: #0f1319; --panel: #161c24; --panel-2: #1b222c;
+  --line: #2b3542; --line-soft: #222b36;
+  --ink: #e6ecf3; --ink-2: #b3c0cf; --muted: #8492a3;
+  --win: #4fc98d; --win-bg: #10352a; --win-line: #35b47a;
+  --lose: #f2717f; --lose-bg: #3a1a22; --lose-line: #d65165;
+  --ours: #ff7a3c;
+  --shadow: 0 1px 2px rgba(0,0,0,.5), 0 10px 30px -18px rgba(0,0,0,.9);
 }
-
 * { box-sizing: border-box; }
+body { margin:0; background:var(--ground); color:var(--ink);
+  font-family:"IBM Plex Sans",ui-sans-serif,system-ui,sans-serif; font-size:15px; line-height:1.55;
+  -webkit-font-smoothing:antialiased; }
+.wrap { max-width:1120px; margin:0 auto; padding:30px 22px 64px; }
+.eyebrow { font-family:Archivo,sans-serif; font-size:11px; font-weight:600; letter-spacing:.13em;
+  text-transform:uppercase; color:var(--muted); }
+h1 { font-family:Archivo,sans-serif; font-size:clamp(26px,3.6vw,34px); font-weight:700;
+  letter-spacing:-.02em; margin:6px 0 0; }
 
-body {
-  margin: 0;
-  background: var(--ground);
-  color: var(--ink);
-  font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
-  font-size: 15px;
-  line-height: 1.55;
-  -webkit-font-smoothing: antialiased;
-}
+/* ---- verdict ---- */
+.verdict { margin-top:22px; background:var(--panel); border:1px solid var(--line);
+  border-radius:4px; box-shadow:var(--shadow); overflow:hidden; }
+.verdict .headline { padding:22px 24px 18px; border-bottom:1px solid var(--line); }
+.verdict .headline strong { font-family:Archivo,sans-serif; font-size:clamp(19px,2.6vw,25px);
+  font-weight:700; letter-spacing:-.015em; display:block; margin-bottom:6px; text-wrap:balance; }
+.verdict .headline span { color:var(--ink-2); font-size:14.5px; }
+.scale { display:grid; grid-template-columns:repeat(4,1fr); }
+.scale div { padding:16px 18px; border-right:1px solid var(--line); }
+.scale div:last-child { border-right:0; }
+.scale .c { font-family:Archivo,sans-serif; font-size:11px; font-weight:600; letter-spacing:.1em;
+  text-transform:uppercase; color:var(--muted); }
+.scale .r { font-family:"IBM Plex Mono",monospace; font-variant-numeric:tabular-nums;
+  font-size:27px; font-weight:600; letter-spacing:-.02em; line-height:1.2; }
+.scale .n { font-family:"IBM Plex Mono",monospace; font-size:12px; color:var(--ink-2); }
+.scale .win .r { color:var(--win); }
+.scale .lose .r { color:var(--lose); }
 
-.wrap { max-width: 1180px; margin: 0 auto; padding: 32px 24px 72px; }
+section { margin-top:32px; }
+h2 { font-family:Archivo,sans-serif; font-size:12px; font-weight:600; letter-spacing:.13em;
+  text-transform:uppercase; color:var(--muted); margin:0 0 4px; }
+.note { color:var(--ink-2); font-size:13.5px; margin:0 0 14px; max-width:72ch; }
 
-.eyebrow {
-  font-family: Archivo, ui-sans-serif, system-ui, sans-serif;
-  font-size: 11px; font-weight: 600; letter-spacing: .13em; text-transform: uppercase;
-  color: var(--muted);
-}
+.seg { display:inline-flex; border:1px solid var(--line); border-radius:3px; overflow:hidden; }
+.seg button { font-family:Archivo,sans-serif; font-size:11px; font-weight:600; letter-spacing:.07em;
+  text-transform:uppercase; color:var(--ink-2); background:var(--panel-2); border:0;
+  border-right:1px solid var(--line); padding:8px 14px; cursor:pointer; }
+.seg button:last-child { border-right:0; }
+.seg button[aria-pressed="true"] { background:var(--ours); color:#fff; }
+.seg button:focus-visible { outline:2px solid var(--ours); outline-offset:2px; }
 
-h1 {
-  font-family: Archivo, ui-sans-serif, system-ui, sans-serif;
-  font-size: clamp(28px, 4.2vw, 40px); font-weight: 700; letter-spacing: -.02em;
-  margin: 6px 0 10px; text-wrap: balance;
-}
+.panel { background:var(--panel); border:1px solid var(--line); border-radius:4px;
+  box-shadow:var(--shadow); padding:18px; overflow-x:auto; margin-top:12px; }
+.panel svg { display:block; min-width:560px; width:100%; height:auto; }
 
-.lede { color: var(--ink-2); max-width: 66ch; margin: 0; }
+/* ---- heatmap ---- */
+table { border-collapse:separate; border-spacing:2px; font-size:12px; }
+th { font-family:Archivo,sans-serif; font-size:9.5px; font-weight:600; letter-spacing:.08em;
+  text-transform:uppercase; color:var(--muted); padding:3px 6px; text-align:center;
+  white-space:nowrap; font-variant-numeric:tabular-nums; }
+th.model { text-align:right; padding-right:10px; }
+td { font-family:"IBM Plex Mono",monospace; font-variant-numeric:tabular-nums; text-align:center;
+  padding:6px 8px; border-radius:2px; white-space:nowrap; min-width:52px; }
+td.model { font-family:"IBM Plex Sans",sans-serif; text-align:right; padding-right:10px;
+  color:var(--ink-2); font-size:12.5px; white-space:nowrap; }
+td.na { color:var(--muted); background:var(--panel-2); }
+.tierhead td { background:transparent; font-family:Archivo,sans-serif; font-size:9.5px;
+  font-weight:600; letter-spacing:.1em; text-transform:uppercase; color:var(--muted);
+  text-align:left; padding-top:12px; }
 
-.meta {
-  display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 16px;
-  font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px; color: var(--muted);
-}
-.meta b { color: var(--ink-2); font-weight: 500; }
+.legendbar { display:flex; align-items:center; gap:10px; margin-top:14px;
+  font-family:"IBM Plex Mono",monospace; font-size:11.5px; color:var(--muted); }
+.legendbar .ramp { display:flex; height:12px; border-radius:2px; overflow:hidden; flex:0 0 220px; }
+.legendbar .ramp i { flex:1; }
 
-header { border-bottom: 1px solid var(--line); padding-bottom: 26px; margin-bottom: 26px; }
-
-section { margin-top: 34px; }
-
-h2 {
-  font-family: Archivo, ui-sans-serif, system-ui, sans-serif;
-  font-size: 12px; font-weight: 600; letter-spacing: .13em; text-transform: uppercase;
-  color: var(--muted); margin: 0 0 4px;
-}
-.section-note { color: var(--ink-2); font-size: 13.5px; margin: 0 0 16px; max-width: 74ch; }
-
-/* ---- scorecard ---- */
-.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(232px, 1fr)); gap: 14px; }
-.card {
-  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
-  padding: 16px 18px 14px; box-shadow: var(--shadow);
-  display: flex; flex-direction: column; gap: 2px;
-}
-.card .k { font-family: Archivo, sans-serif; font-size: 11px; font-weight: 600;
-  letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
-.card .v {
-  font-family: "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums;
-  font-size: 30px; font-weight: 600; letter-spacing: -.02em; line-height: 1.15; color: var(--ink);
-}
-.card .v small { font-size: 15px; color: var(--muted); font-weight: 400; }
-.card .d { font-size: 12.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
-.card .track { height: 5px; background: var(--line-soft); border-radius: 99px; margin-top: 10px; overflow: hidden; }
-.card .track i { display: block; height: 100%; background: var(--ours); }
-
-/* ---- controls ---- */
-.controls {
-  display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: flex-end;
-  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
-  padding: 14px 16px; box-shadow: var(--shadow);
-}
-.field { display: flex; flex-direction: column; gap: 5px; }
-.field > span {
-  font-family: Archivo, sans-serif; font-size: 10px; font-weight: 600;
-  letter-spacing: .11em; text-transform: uppercase; color: var(--muted);
-}
-select {
-  font-family: "IBM Plex Mono", monospace; font-size: 12.5px; color: var(--ink);
-  background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius);
-  padding: 7px 9px; min-width: 150px; cursor: pointer;
-}
-select:focus-visible, .seg button:focus-visible, .cellcard:focus-visible {
-  outline: 2px solid var(--ours); outline-offset: 2px;
-}
-.seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
-.seg button {
-  font-family: Archivo, sans-serif; font-size: 11px; font-weight: 600; letter-spacing: .07em;
-  text-transform: uppercase; color: var(--ink-2); background: var(--panel-2);
-  border: 0; border-right: 1px solid var(--line); padding: 8px 13px; cursor: pointer;
-}
-.seg button:last-child { border-right: 0; }
-.seg button[aria-pressed="true"] { background: var(--ours); color: #fff; }
-
-/* ---- chart ---- */
-.chartwrap {
-  margin-top: 14px; background: var(--panel); border: 1px solid var(--line);
-  border-radius: var(--radius); padding: 18px 18px 12px; box-shadow: var(--shadow);
-  overflow-x: auto;
-}
-.chartwrap svg { display: block; min-width: 560px; width: 100%; height: auto; }
-.chart-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 20px; margin-bottom: 6px; }
-.chart-title { font-family: Archivo, sans-serif; font-size: 14px; font-weight: 600; letter-spacing: -.005em; }
-.chart-sub { font-family: "IBM Plex Mono", monospace; font-size: 11.5px; color: var(--muted); }
-
-.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 10px;
-  font-family: "IBM Plex Mono", monospace; font-size: 11.5px; color: var(--ink-2); }
-.legend i { display: inline-block; width: 16px; height: 0; border-top-width: 2px; border-top-style: solid;
-  vertical-align: middle; margin-right: 7px; }
-
-/* ---- small multiples ---- */
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(178px, 1fr)); gap: 10px; }
-.cellcard {
-  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
-  padding: 10px 11px 8px; cursor: pointer; text-align: left; font: inherit; color: inherit;
-  display: flex; flex-direction: column; gap: 3px;
-}
-.cellcard:hover { border-color: var(--ours); }
-.cellcard[aria-current="true"] { border-color: var(--ours); box-shadow: 0 0 0 1px var(--ours) inset; }
-.cellcard .m { font-family: "IBM Plex Mono", monospace; font-size: 10.5px; color: var(--muted);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.cellcard .t { font-family: Archivo, sans-serif; font-size: 12px; font-weight: 600; letter-spacing: .02em; }
-.cellcard svg { display: block; width: 100%; height: 34px; margin-top: 2px; }
-.cellcard .f { display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
-  font-family: "IBM Plex Mono", monospace; font-size: 11px; font-variant-numeric: tabular-nums; }
-
-.pill {
-  display: inline-block; font-family: Archivo, sans-serif; font-size: 9.5px; font-weight: 700;
-  letter-spacing: .08em; text-transform: uppercase; padding: 2px 6px; border-radius: 2px;
-}
-.pill.good { background: var(--good-soft); color: var(--good); }
-.pill.bad { background: var(--bad-soft); color: var(--bad); }
-.pill.flat { background: var(--line-soft); color: var(--muted); }
-
-/* ---- pass log ---- */
-.log { display: flex; flex-direction: column; gap: 0; border-left: 2px solid var(--line); }
-.log li { list-style: none; position: relative; padding: 0 0 20px 20px; }
-.log li::before {
-  content: ""; position: absolute; left: -6px; top: 6px; width: 9px; height: 9px;
-  border-radius: 99px; background: var(--them-soft); border: 2px solid var(--panel);
-}
-.log li:last-child::before { background: var(--ours); }
-.log .when { font-family: "IBM Plex Mono", monospace; font-size: 11.5px; color: var(--muted); }
-.log .what { font-size: 14px; color: var(--ink); }
-
-table { border-collapse: collapse; width: 100%; font-size: 13px; }
-th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line-soft); }
-th { font-family: Archivo, sans-serif; font-size: 10px; font-weight: 600; letter-spacing: .1em;
-  text-transform: uppercase; color: var(--muted); }
-td.num { font-family: "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums; text-align: right; }
-.tablewrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--line);
-  border-radius: var(--radius); box-shadow: var(--shadow); }
-
-.caveat {
-  background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--bad);
-  border-radius: var(--radius); padding: 14px 16px; box-shadow: var(--shadow);
-}
-.caveat h3 { font-family: Archivo, sans-serif; font-size: 13px; font-weight: 600; margin: 0 0 6px; }
-.caveat p { margin: 0 0 8px; font-size: 13.5px; color: var(--ink-2); }
-.caveat p:last-child { margin-bottom: 0; }
-code { font-family: "IBM Plex Mono", monospace; font-size: .92em;
-  background: var(--panel-2); padding: 1px 5px; border-radius: 2px; border: 1px solid var(--line-soft); }
-
-footer { margin-top: 44px; padding-top: 18px; border-top: 1px solid var(--line);
-  font-family: "IBM Plex Mono", monospace; font-size: 11.5px; color: var(--muted); }
-
-@media (prefers-reduced-motion: no-preference) {
-  .cellcard, select, .seg button { transition: border-color .12s ease, background .12s ease; }
-}
+.caveat { margin-top:12px; background:var(--panel); border:1px solid var(--line);
+  border-left:3px solid var(--lose-line); border-radius:4px; padding:14px 16px; box-shadow:var(--shadow); }
+.caveat p { margin:0 0 8px; font-size:13.5px; color:var(--ink-2); }
+.caveat p:last-child { margin-bottom:0; }
+.caveat b { color:var(--ink); }
+code { font-family:"IBM Plex Mono",monospace; font-size:.92em; background:var(--panel-2);
+  padding:1px 5px; border-radius:2px; border:1px solid var(--line-soft); }
+footer { margin-top:40px; padding-top:16px; border-top:1px solid var(--line);
+  font-family:"IBM Plex Mono",monospace; font-size:11.5px; color:var(--muted); }
 </style>
-
+</head>
+<body>
 <div class="wrap">
-<header>
-  <div class="eyebrow">Apple Silicon inference · M4 Pro board</div>
-  <h1>mlxcat Trajectory Board</h1>
-  <p class="lede">
-    Every benchmark claim in this repo has been argued from a single board. A snapshot can say
-    where we stand; it cannot say whether a change helped. This plots each measurement pass
-    against the competitor engines measured on the same machine, so a jump has a date and a cause
-    next to it.
-  </p>
-  <div class="meta">
-    <span>device <b id="meta-device">—</b></span>
-    <span>passes <b id="meta-passes">—</b></span>
-    <span>cells <b id="meta-cells">—</b></span>
-    <span>competitors <b id="meta-engines">—</b></span>
+
+<div class="eyebrow">M4 Pro · six models · four context tiers · four concurrencies</div>
+<h1>mlxcat vs the field</h1>
+
+<div class="verdict">
+  <div class="headline">
+    <strong id="verdict-line">—</strong>
+    <span id="verdict-sub">—</span>
   </div>
-</header>
+  <div class="scale" id="scale"></div>
+</div>
 
 <section>
-  <h2>Where we stand now</h2>
-  <p class="section-note">
-    Cells where mlxcat's latest pass matches or beats the best competing engine on that exact cell —
-    the same bar <code>bench/parity.py</code> gates on, with no tolerance band. A cell is one model
-    at one context tier at one concurrency; the delta compares the latest pass with the first.
+  <h2>Where the line crosses</h2>
+  <p class="note">
+    Each line is one model: how mlxcat compares with the best competing engine on the same cell,
+    as concurrency rises. Above the rule we are faster than anything else measured; below it we are
+    slower. This is the whole answer in one picture — the shape of these lines is the problem.
   </p>
-  <div class="cards" id="cards"></div>
-</section>
-
-<section>
-  <h2>One cell over time</h2>
-  <p class="section-note">
-    mlxcat is the solid trace; each competitor is a dashed reference line at its single measured
-    value. Competitors have one measurement each, not a trajectory — re-measuring them is a
-    separate exercise from tracking ourselves, and pretending otherwise would draw a line through
-    one point.
-  </p>
-  <div class="controls">
-    <label class="field"><span>Model</span><select id="sel-model"></select></label>
-    <label class="field"><span>Context tier</span><select id="sel-tier"></select></label>
-    <label class="field"><span>Concurrency</span><select id="sel-conc"></select></label>
-    <div class="field"><span>Metric</span>
-      <div class="seg" id="seg-metric" role="group" aria-label="Metric"></div>
-    </div>
-    <div class="field"><span>Scale</span>
-      <div class="seg" id="seg-scale" role="group" aria-label="Scale">
-        <button type="button" data-scale="log" aria-pressed="true">Log</button>
-        <button type="button" data-scale="linear" aria-pressed="false">Linear</button>
-      </div>
-    </div>
-  </div>
-  <div class="chartwrap">
-    <div class="chart-head">
-      <div class="chart-title" id="chart-title">—</div>
-      <div class="chart-sub" id="chart-sub">—</div>
-    </div>
-    <svg id="chart" viewBox="0 0 900 340" preserveAspectRatio="xMidYMid meet" role="img"
-         aria-labelledby="chart-title"></svg>
-    <div class="legend" id="legend"></div>
+  <div class="seg" id="seg-metric" role="group" aria-label="Metric"></div>
+  <div class="panel">
+    <svg id="chart" viewBox="0 0 960 400" preserveAspectRatio="xMidYMid meet" role="img"
+         aria-label="mlxcat versus the best competing engine, by concurrency"></svg>
   </div>
 </section>
 
 <section>
-  <h2>Every cell at once</h2>
-  <p class="section-note">
-    All <span id="grid-count">—</span> cells, one sparkline each, on the selected metric. The pill is
-    the latest pass against the best competitor on that cell. Pick one to load it above.
+  <h2>Every cell</h2>
+  <p class="note">
+    The same ratio for all 57 cells. Green means we beat every other engine measured on that cell;
+    red means at least one beats us. The number is how many times better or worse.
   </p>
-  <div class="grid" id="grid"></div>
+  <div class="panel"><div id="heat"></div>
+    <div class="legendbar">
+      <span>2× slower</span>
+      <span class="ramp" id="ramp"></span>
+      <span>2× faster</span>
+    </div>
+  </div>
 </section>
 
 <section>
-  <h2>What changed, pass by pass</h2>
-  <p class="section-note">
-    A jump with no entry here is unexplained and should be treated as noise until it has one.
+  <h2>Are we getting better</h2>
+  <p class="note">
+    The same ratio at the first measured pass and at the latest, so a change that helped is visible
+    as movement rather than asserted. Rows marked <b>withdrawn</b> were measured with a
+    configuration that has since been reverted — their gain is not something the engine currently
+    delivers.
   </p>
-  <ul class="log" id="log"></ul>
+  <div class="panel"><div id="trend"></div></div>
 </section>
 
 <section>
-  <h2>Read this before quoting a number</h2>
+  <h2>Before you quote any of this</h2>
   <div class="caveat">
-    <h3>Three things this board does not say</h3>
-    <p>
-      <b>Batched gemma is not token-exact.</b> The gemma concurrency win visible below rests on a
-      gate that loads gemma through <code>LLMModelFactory</code>, while production loads it through
-      <code>VLMModelFactory</code> — different attention implementations. On the production path,
-      gemma-4-12B diverges from a serial run in 3 of 4 rows at width 4, with a clean width-1
-      control. Tracked as <code>KNOWN-FAILURES</code> §1f; nothing has been reverted, and the
-      trade is an open decision.
-    </p>
-    <p>
-      <b>Peak is per process, not per cell.</b> One server process serves every tier of a model and
-      MLX does not return its buffer free list on its own, so a cell measured after a 16k tier
-      inherits that tier's high-water mark. This is why a new tier can look like a regression on
-      cells that did not regress.
-    </p>
-    <p>
-      <b>Competitor rows are older than ours.</b> They were measured 2026-08-21 to 08-22 and have
-      not moved since. Every engine here improves over time; a competitor line going stale flatters
-      us, and the honest fix is to re-measure them, not to widen the gap on paper.
-    </p>
-    <p>
-      <b>The machine drifts between passes.</b> In pass 5 an unchanged gpt-oss configuration
-      measured 9.8% slower than in pass 4 — same code, same flags, same host. Our line moves with
-      machine state; the frozen competitor lines do not. Treat a single-digit-percent move between
-      passes as weather, and read the direction of a series rather than the gap in any one cell.
-    </p>
+    <p><b>Competitors were measured once, on 2026-08-21 and 08-22, and have not moved since.</b>
+      Every engine here improves over time. A stale rival line flatters us, and the fix is to
+      re-measure them.</p>
+    <p><b>The machine drifts.</b> An unchanged gpt-oss configuration measured 9.8% slower in the
+      latest pass than the one before — same code, same host. Treat single-digit-percent moves as
+      weather.</p>
+    <p><b>Peak memory is per process, not per cell.</b> One server process serves every tier of a
+      model, so a cell measured after a 16k tier inherits that tier's high-water mark.</p>
+    <p><b>gemma is serialized on purpose.</b> Its batched decode left every row but the first
+      unrotated — an MLX RoPE bug (<code>KNOWN-FAILURES</code> §1f) — so its concurrency numbers
+      here are what correctness costs, not what the engine can do.</p>
   </div>
 </section>
 
 <footer>
-  Generated by <code>bench/timeline.py</code> from <code>bench/results/*.jsonl</code> ·
-  re-run it after a pass and republish · <span id="meta-generated">—</span>
+  Regenerate with <code>python3 bench/timeline.py</code> after a bench pass, then reopen this file ·
+  <span id="stamp"></span>
 </footer>
 </div>
 
-<script type="application/json" id="timeline-data">__TIMELINE_JSON__</script>
+<script type="application/json" id="data">__TIMELINE_JSON__</script>
 <script>
 (function () {
   "use strict";
-  var DATA = JSON.parse(document.getElementById("timeline-data").textContent);
-  var METRIC_ORDER = ["ttft", "e2e", "peak"];
-  var state = { metric: "ttft", scale: "log", cell: null };
+  var D = JSON.parse(document.getElementById("data").textContent);
+  var PASSES = D.passes.map(function (p) { return p.label; });
+  var METRICS = [
+    { key: "ttft", label: "Time to first token" },
+    { key: "e2e", label: "Throughput" },
+    { key: "peak", label: "Peak memory" }
+  ];
+  var metric = "ttft";
+  var CONC = [1, 2, 4, 8];
 
-  var passLabels = DATA.passes.map(function (p) { return p.label; });
-  var cellKeys = Object.keys(DATA.cells);
-
-  function cell(k) { return DATA.cells[k]; }
-  function metricInfo(m) { return DATA.metrics[m]; }
-
-  function fmt(v, m) {
-    if (v === null || v === undefined) return "—";
-    var unit = metricInfo(m).unit;
-    if (unit === "GiB") return v.toFixed(2) + " GiB";
-    if (unit === "tok/s") return v.toFixed(1);
-    if (v >= 10000) return (v / 1000).toFixed(1) + " s";
-    return Math.round(v).toLocaleString();
-  }
-
-  // Axis ticks pick ONE unit for the whole scale. Letting each tick choose for
-  // itself produced an axis reading 30.0 s above 3,000 — same quantity, two
-  // units, four rows apart.
-  function axisFmt(v, m, peak) {
-    var unit = metricInfo(m).unit;
-    // Decimals are chosen from the DISPLAYED magnitude, not the raw one. Keying
-    // them off the millisecond value rendered 1,796 ms as "2" seconds.
-    if (unit === "GiB") return v.toFixed(v < 10 ? 2 : 1);
-    if (unit === "tok/s") return v.toFixed(v < 10 ? 2 : 1);
-    if (peak >= 10000) {
-      var sec = v / 1000;
-      return sec.toFixed(sec < 10 ? 2 : sec < 100 ? 1 : 0);
+  function valueAt(cell, m, passIndex) {
+    for (var i = passIndex; i >= 0; i--) {
+      var row = cell.ours[PASSES[i]];
+      if (row && row[m] !== null && row[m] !== undefined) return row[m];
     }
-    return v < 10 ? v.toFixed(1) : Math.round(v).toLocaleString();
+    return null;
   }
-
-  function axisUnit(m, peak) {
-    var unit = metricInfo(m).unit;
-    if (unit === "ms") return peak >= 10000 ? "seconds" : "ms";
-    return unit;
+  function ours(cell, m) { return valueAt(cell, m, PASSES.length - 1); }
+  function firstOurs(cell, m) {
+    for (var i = 0; i < PASSES.length; i++) {
+      var row = cell.ours[PASSES[i]];
+      if (row && row[m] !== null && row[m] !== undefined) return row[m];
+    }
+    return null;
   }
-
-  function bestOther(c, m) {
-    var best = null, name = null;
-    Object.keys(c.them).forEach(function (n) {
-      var v = c.them[n][m];
+  function best(cell, m) {
+    var lower = D.metrics[m].lowerIsBetter, out = null, who = null;
+    Object.keys(cell.them).forEach(function (n) {
+      var v = cell.them[n][m];
       if (v === null || v === undefined) return;
-      if (best === null || (metricInfo(m).lowerIsBetter ? v < best : v > best)) { best = v; name = n; }
+      if (out === null || (lower ? v < out : v > out)) { out = v; who = n; }
     });
-    return { value: best, name: name };
+    return { value: out, name: who };
+  }
+  // > 1 means mlxcat is ahead, whichever direction the metric runs.
+  function ratio(cell, m, value) {
+    var b = best(cell, m).value;
+    if (value === null || b === null || !value || !b) return null;
+    return D.metrics[m].lowerIsBetter ? b / value : value / b;
   }
 
-  function latestOurs(c, m) {
-    for (var i = passLabels.length - 1; i >= 0; i--) {
-      var row = c.ours[passLabels[i]];
-      if (row && row[m] !== null && row[m] !== undefined) return { value: row[m], pass: passLabels[i] };
-    }
-    return { value: null, pass: null };
-  }
+  var cells = Object.keys(D.cells).map(function (k) { return D.cells[k]; });
+  var models = [];
+  cells.forEach(function (c) { if (models.indexOf(c.model) === -1) models.push(c.model); });
+  models.sort();
+  var tiers = [];
+  cells.forEach(function (c) { if (tiers.indexOf(c.tier) === -1) tiers.push(c.tier); });
 
-  function firstOurs(c, m) {
-    for (var i = 0; i < passLabels.length; i++) {
-      var row = c.ours[passLabels[i]];
-      if (row && row[m] !== null && row[m] !== undefined) return { value: row[m], pass: passLabels[i] };
-    }
-    return { value: null, pass: null };
+  function median(a) {
+    if (!a.length) return null;
+    var s = a.slice().sort(function (x, y) { return x - y; });
+    var h = Math.floor(s.length / 2);
+    return s.length % 2 ? s[h] : (s[h - 1] + s[h]) / 2;
   }
+  function short(name) { return name.replace(/-it-qat-4bit|-Instruct-4bit|-MLX-4bit|-MXFP4-Q8|-4bit/g, ""); }
 
-  // The SAME bar bench/parity.py counts on: ratio >= 1.0, no tolerance band.
-  // An earlier version of this page allowed 10% and said it matched parity.py.
-  // It did not — parity.py's --tolerance governs regression against the stored
-  // baseline, not the parity count — and the page reported 45 of 57 cells at
-  // throughput parity where the gate said 14. A board that scores itself more
-  // generously than the gate is the exact failure this repo keeps catching.
-  function atParity(c, m) {
-    var ours = latestOurs(c, m).value, them = bestOther(c, m).value;
-    if (ours === null || them === null) return null;
-    return metricInfo(m).lowerIsBetter ? ours <= them : ours >= them;
-  }
+  // Measured configurations that the code no longer ships. gemma's concurrency
+  // numbers were produced with batched decode, which was reverted the same
+  // evening because it left every row but the first unrotated. Leaving them
+  // unmarked would let this page advertise a win that was withdrawn — the exact
+  // thing it exists to prevent.
+  var WITHDRAWN = {
+    "gemma-4-E2B-it-qat-4bit": "batched decode reverted — see KNOWN-FAILURES 1f",
+    "gemma-4-12B-it-qat-4bit": "batched decode reverted — see KNOWN-FAILURES 1f"
+  };
+  function withdrawn(model) { return WITHDRAWN[model] || null; }
 
-  /* ---------- scorecard ---------- */
-  function renderCards() {
-    var host = document.getElementById("cards");
-    host.innerHTML = "";
-    METRIC_ORDER.forEach(function (m) {
-      var now = 0, then = 0, total = 0;
-      cellKeys.forEach(function (k) {
-        var c = cell(k);
-        var p = atParity(c, m);
-        if (p === null) return;
-        total++;
-        if (p) now++;
-        var f = firstOurs(c, m).value, t = bestOther(c, m).value;
-        if (f !== null && t !== null && (metricInfo(m).lowerIsBetter ? f <= t : f >= t)) then++;
-      });
-      var delta = now - then;
-      var card = document.createElement("div");
-      card.className = "card";
-      card.innerHTML =
-        '<div class="k">' + metricInfo(m).label + "</div>" +
-        '<div class="v">' + now + ' <small>/ ' + total + " cells</small></div>" +
-        '<div class="d">at parity or better · ' +
-        (delta === 0 ? "unchanged since first pass"
-          : (delta > 0 ? "+" : "") + delta + " since first pass") + "</div>" +
-        '<div class="track"><i style="width:' + (total ? (now / total) * 100 : 0) + '%"></i></div>';
-      host.appendChild(card);
+  /* ---------------- verdict ---------------- */
+  function renderVerdict() {
+    var byConc = CONC.map(function (n) {
+      var rs = cells.filter(function (c) { return c.concurrency === n; })
+        .map(function (c) { return ratio(c, metric, ours(c, metric)); })
+        .filter(function (r) { return r !== null; });
+      return { conc: n, median: median(rs), win: rs.filter(function (r) { return r >= 1; }).length,
+               total: rs.length };
     });
+
+    var host = document.getElementById("scale");
+    host.innerHTML = byConc.map(function (b) {
+      if (b.median === null) return "";
+      var ahead = b.median >= 1;
+      return '<div class="' + (ahead ? "win" : "lose") + '">' +
+        '<div class="c">' + (b.conc === 1 ? "one at a time" : b.conc + " at once") + "</div>" +
+        '<div class="r">' + b.median.toFixed(2) + "&times;</div>" +
+        '<div class="n">' + b.win + " of " + b.total + " cells ahead</div></div>";
+    }).join("");
+
+    var solo = byConc[0], loaded = byConc[byConc.length - 1];
+    var all = cells.map(function (c) { return ratio(c, metric, ours(c, metric)); })
+      .filter(function (r) { return r !== null; });
+    var name = METRICS.filter(function (m) { return m.key === metric; })[0].label.toLowerCase();
+
+    var line, sub;
+    if (solo && loaded && solo.median >= 1 && loaded.median < 1) {
+      line = "Level single-stream. Behind under load.";
+      sub = "On " + name + " we match or beat every engine measured when serving one request at a "
+        + "time (" + solo.median.toFixed(2) + "× median), and fall to " + loaded.median.toFixed(2)
+        + "× at eight concurrent. Concurrency is the gap, not raw speed.";
+    } else if (loaded && loaded.median >= 1) {
+      line = "Ahead of the field, including under load.";
+      sub = "On " + name + ", " + loaded.median.toFixed(2) + "× the best competitor at eight "
+        + "concurrent requests.";
+    } else {
+      line = "Behind the field on " + name + ".";
+      sub = "Median " + median(all).toFixed(2) + "× the best competing engine across all "
+        + all.length + " cells.";
+    }
+    document.getElementById("verdict-line").textContent = line;
+    document.getElementById("verdict-sub").textContent = sub;
   }
 
-  /* ---------- big chart ---------- */
-  var SVG_NS = "http://www.w3.org/2000/svg";
-  function el(name, attrs, text) {
-    var n = document.createElementNS(SVG_NS, name);
-    Object.keys(attrs || {}).forEach(function (k) { n.setAttribute(k, attrs[k]); });
-    if (text !== undefined) n.textContent = text;
-    return n;
+  /* ---------------- hero chart ---------------- */
+  var NS = "http://www.w3.org/2000/svg";
+  function el(n, a, t) {
+    var e = document.createElementNS(NS, n);
+    Object.keys(a || {}).forEach(function (k) { e.setAttribute(k, a[k]); });
+    if (t !== undefined) e.textContent = t;
+    return e;
   }
 
   function renderChart() {
     var svg = document.getElementById("chart");
     svg.innerHTML = "";
-    var c = cell(state.cell);
-    if (!c) return;
-    var m = state.metric, info = metricInfo(m);
-    var W = 900, H = 340, L = 68, R = 178, T = 22, B = 46;
-    var plotW = W - L - R, plotH = H - T - B;
+    var W = 960, H = 400, L = 58, R = 232, T = 26, B = 52;
+    var pw = W - L - R, ph = H - T - B;
 
-    var series = passLabels.map(function (p) {
-      var row = c.ours[p];
-      return { pass: p, value: row && row[m] !== undefined ? row[m] : null };
+    var series = models.map(function (m) {
+      return {
+        model: m,
+        points: CONC.map(function (n) {
+          var rs = cells.filter(function (c) { return c.model === m && c.concurrency === n; })
+            .map(function (c) { return ratio(c, metric, ours(c, metric)); })
+            .filter(function (r) { return r !== null; });
+          return { conc: n, value: median(rs) };
+        })
+      };
     });
-    var others = Object.keys(c.them).map(function (n) {
-      return { name: n, value: c.them[n][m] };
-    }).filter(function (o) { return o.value !== null && o.value !== undefined; })
-      .sort(function (a, b) { return b.value - a.value; });
 
-    var values = series.map(function (s) { return s.value; })
-      .concat(others.map(function (o) { return o.value; }))
-      .filter(function (v) { return v !== null && v !== undefined && v > 0; });
-    if (!values.length) return;
-
-    var lo = Math.min.apply(null, values), hi = Math.max.apply(null, values);
-    var useLog = state.scale === "log" && lo > 0 && hi / lo > 6;
-    if (!useLog) { lo = Math.min(lo, 0); }
-    var pad = (hi - lo) * 0.12 || hi * 0.12 || 1;
-    var min = useLog ? lo / 1.5 : lo;
-    var max = useLog ? hi * 1.5 : hi + pad;
+    var all = [];
+    series.forEach(function (s) {
+      s.points.forEach(function (p) { if (p.value) all.push(p.value); });
+    });
+    if (!all.length) return;
+    var lo = Math.min(0.5, Math.min.apply(null, all) * 0.92);
+    var hi = Math.max(1.6, Math.max.apply(null, all) * 1.08);
 
     function y(v) {
-      if (v === null || v === undefined) return null;
-      var t = useLog
-        ? (Math.log(Math.max(v, min)) - Math.log(min)) / (Math.log(max) - Math.log(min))
-        : (v - min) / (max - min);
-      return T + plotH - t * plotH;
+      var t = (Math.log(v) - Math.log(lo)) / (Math.log(hi) - Math.log(lo));
+      return T + ph - t * ph;
     }
-    function x(i) {
-      return series.length === 1 ? L + plotW / 2 : L + (i / (series.length - 1)) * plotW;
-    }
+    function x(i) { return L + (i / (CONC.length - 1)) * pw; }
 
-    // grid + y labels
-    var ticks = [];
-    if (useLog) {
-      var d = Math.floor(Math.log10(min));
-      for (; Math.pow(10, d) <= max * 1.001; d++) {
-        [1, 3].forEach(function (mul) {
-          var v = mul * Math.pow(10, d);
-          if (v >= min && v <= max) ticks.push(v);
-        });
-      }
-    } else {
-      for (var i = 0; i <= 4; i++) ticks.push(min + ((max - min) * i) / 4);
-    }
-    ticks.forEach(function (v) {
+    // parity bands: above the rule we win, below we lose
+    var yPar = y(1);
+    svg.appendChild(el("rect", { x: L, y: T, width: pw, height: Math.max(0, yPar - T),
+      fill: "var(--win-bg)", opacity: .55 }));
+    svg.appendChild(el("rect", { x: L, y: yPar, width: pw, height: Math.max(0, T + ph - yPar),
+      fill: "var(--lose-bg)", opacity: .55 }));
+
+    [0.5, 0.7, 1, 1.4, 2].forEach(function (v) {
+      if (v < lo || v > hi) return;
       var yy = y(v);
-      svg.appendChild(el("line", { x1: L, x2: L + plotW, y1: yy, y2: yy,
-        stroke: "var(--line-soft)", "stroke-width": 1 }));
-      svg.appendChild(el("text", { x: L - 10, y: yy + 4, "text-anchor": "end",
-        "font-family": "IBM Plex Mono, monospace", "font-size": 11, fill: "var(--muted)" },
-        axisFmt(v, m, hi)));
+      svg.appendChild(el("line", { x1: L, x2: L + pw, y1: yy, y2: yy,
+        stroke: v === 1 ? "var(--ink-2)" : "var(--line)", "stroke-width": v === 1 ? 1.75 : 1,
+        "stroke-dasharray": v === 1 ? "" : "3 4" }));
+      svg.appendChild(el("text", { x: L - 9, y: yy + 4, "text-anchor": "end",
+        "font-family": "IBM Plex Mono, monospace", "font-size": 11,
+        "font-weight": v === 1 ? 600 : 400,
+        fill: v === 1 ? "var(--ink-2)" : "var(--muted)" }, v.toFixed(v === 1 ? 0 : 1) + "×"));
     });
-    svg.appendChild(el("text", { x: L - 10, y: T - 6, "text-anchor": "end",
-      "font-family": "Archivo, sans-serif", "font-size": 9.5, "font-weight": 600,
-      "letter-spacing": ".1em", fill: "var(--muted)" }, axisUnit(m, hi).toUpperCase()));
+    // Captions hug the right edge of the plot: the traces all live in the left
+    // two thirds, and putting these on the left buried them under the lines.
+    svg.appendChild(el("text", { x: L + pw - 6, y: T + 14, "text-anchor": "end",
+      "font-family": "Archivo, sans-serif", "font-size": 10, "font-weight": 700,
+      "letter-spacing": ".1em", fill: "var(--win)" }, "AHEAD OF EVERY RIVAL"));
+    svg.appendChild(el("text", { x: L + pw - 6, y: T + ph - 8, "text-anchor": "end",
+      "font-family": "Archivo, sans-serif", "font-size": 10, "font-weight": 700,
+      "letter-spacing": ".1em", fill: "var(--lose)" }, "BEHIND"));
 
-    // Competitor reference lines. Two engines within a few percent of each other
-    // put their labels on the same pixel row, so labels are nudged apart and
-    // joined back to their line with a leader — the line stays where the data
-    // is, only the text moves.
+    CONC.forEach(function (n, i) {
+      svg.appendChild(el("text", { x: x(i), y: H - 20, "text-anchor": "middle",
+        "font-family": "Archivo, sans-serif", "font-size": 12, "font-weight": 600,
+        fill: "var(--ink-2)" }, n === 1 ? "1 request" : n + " at once"));
+    });
+
     var placed = [];
-    others.forEach(function (o) {
-      var yy = y(o.value);
-      svg.appendChild(el("line", { x1: L, x2: L + plotW, y1: yy, y2: yy,
-        stroke: "var(--them)", "stroke-width": 1.5, "stroke-dasharray": "5 4", opacity: .85 }));
-      var ty = yy;
-      placed.sort(function (a, b) { return a - b; });
-      for (var i = 0; i < placed.length; i++) {
-        if (Math.abs(ty - placed[i]) < 15) ty = placed[i] + 15;
-      }
-      ty = Math.max(T + 6, Math.min(T + plotH, ty));
-      placed.push(ty);
-      if (Math.abs(ty - yy) > 1.5) {
+    series.forEach(function (s) {
+      var pts = s.points.map(function (p, i) {
+        return p.value ? { x: x(i), y: y(p.value), v: p.value } : null;
+      }).filter(Boolean);
+      if (!pts.length) return;
+      var lastPoint = pts[pts.length - 1];
+      var colour = lastPoint.v >= 1 ? "var(--win-line)" : "var(--lose-line)";
+      if (pts.length > 1) {
         svg.appendChild(el("path", {
-          d: "M" + (L + plotW) + "," + yy + "L" + (L + plotW + 7) + "," + ty,
-          stroke: "var(--them)", "stroke-width": 1, fill: "none", opacity: .6
+          d: "M" + pts.map(function (p) { return p.x + "," + p.y; }).join("L"),
+          fill: "none", stroke: colour, "stroke-width": 2.25,
+          "stroke-linejoin": "round", "stroke-linecap": "round"
         }));
       }
-      svg.appendChild(el("text", { x: L + plotW + 11, y: ty + 4,
-        "font-family": "IBM Plex Mono, monospace", "font-size": 11.5, fill: "var(--them)" },
-        o.name + "  " + axisFmt(o.value, m, hi)));
+      pts.forEach(function (p) {
+        svg.appendChild(el("circle", { cx: p.x, cy: p.y, r: 3.4, fill: "var(--panel)",
+          stroke: colour, "stroke-width": 2 }));
+      });
+      var ly = lastPoint.y;
+      placed.sort(function (a, b) { return a - b; });
+      for (var i = 0; i < placed.length; i++) {
+        if (Math.abs(ly - placed[i]) < 14) ly = placed[i] + 14;
+      }
+      placed.push(ly);
+      svg.appendChild(el("text", { x: L + pw + 10, y: ly + 4,
+        "font-family": "IBM Plex Mono, monospace", "font-size": 11.5, fill: colour },
+        short(s.model) + "  " + lastPoint.v.toFixed(2) + "×"
+          + (withdrawn(s.model) ? "  (withdrawn)" : "")));
     });
+  }
 
-    // x labels
-    series.forEach(function (s, i) {
-      svg.appendChild(el("text", { x: x(i), y: H - 16, "text-anchor": "middle",
-        "font-family": "Archivo, sans-serif", "font-size": 11, "font-weight": 600,
-        "letter-spacing": ".06em", fill: "var(--muted)" }, s.pass));
+  /* ---------------- heatmap ---------------- */
+  function shade(r) {
+    if (r === null) return { bg: "", fg: "" };
+    // Symmetric in log space: 2x better and 2x worse sit at the same intensity.
+    var t = Math.max(-1, Math.min(1, Math.log(r) / Math.log(2)));
+    var a = Math.abs(t);
+    var alpha = (0.14 + 0.66 * a).toFixed(3);
+    return {
+      bg: t >= 0 ? "color-mix(in srgb, var(--win-line) " + (alpha * 100).toFixed(0) + "%, var(--panel))"
+                 : "color-mix(in srgb, var(--lose-line) " + (alpha * 100).toFixed(0) + "%, var(--panel))",
+      fg: a > 0.45 ? "#fff" : "var(--ink)"
+    };
+  }
+
+  function renderHeat() {
+    var host = document.getElementById("heat");
+    var html = "<table><thead><tr><th class='model'></th>";
+    CONC.forEach(function (n) { html += "<th>" + (n === 1 ? "1" : n) + "</th>"; });
+    html += "</tr></thead><tbody>";
+    tiers.forEach(function (tier) {
+      html += "<tr class='tierhead'><td colspan='" + (CONC.length + 1) + "'>" + tier + "</td></tr>";
+      models.forEach(function (m) {
+        var row = "<tr><td class='model'>" + short(m) + "</td>";
+        var any = false;
+        CONC.forEach(function (n) {
+          var cell = cells.filter(function (c) {
+            return c.model === m && c.tier === tier && c.concurrency === n;
+          })[0];
+          var r = cell ? ratio(cell, metric, ours(cell, metric)) : null;
+          if (r === null) { row += "<td class='na'>&middot;</td>"; return; }
+          any = true;
+          var s = shade(r);
+          row += "<td style='background:" + s.bg + ";color:" + s.fg + "' title='" +
+            short(m) + " " + tier + " c" + n + " — " + r.toFixed(2) + "x the best rival (" +
+            best(cell, metric).name + ")'>" + r.toFixed(2) + "</td>";
+        });
+        row += "</tr>";
+        if (any) html += row;
+      });
     });
+    html += "</tbody></table>";
+    host.innerHTML = html;
 
-    // our trace: area + line + points
-    var pts = series.map(function (s, i) { return s.value === null ? null : { x: x(i), y: y(s.value) }; })
-      .filter(function (p) { return p !== null; });
-    if (pts.length > 1) {
-      var area = "M" + pts[0].x + "," + (T + plotH) +
-        pts.map(function (p) { return "L" + p.x + "," + p.y; }).join("") +
-        "L" + pts[pts.length - 1].x + "," + (T + plotH) + "Z";
-      svg.appendChild(el("path", { d: area, fill: "var(--ours-soft)" }));
-      svg.appendChild(el("path", {
-        d: "M" + pts.map(function (p) { return p.x + "," + p.y; }).join("L"),
-        fill: "none", stroke: "var(--ours)", "stroke-width": 2.5,
-        "stroke-linejoin": "round", "stroke-linecap": "round"
-      }));
+    var ramp = document.getElementById("ramp");
+    ramp.innerHTML = "";
+    for (var i = 0; i <= 20; i++) {
+      var r = Math.pow(2, -1 + (2 * i) / 20);
+      var b = document.createElement("i");
+      b.style.background = shade(r).bg;
+      ramp.appendChild(b);
     }
-    series.forEach(function (s, i) {
-      if (s.value === null) return;
-      var last = i === series.length - 1 ||
-        series.slice(i + 1).every(function (n) { return n.value === null; });
-      svg.appendChild(el("circle", { cx: x(i), cy: y(s.value), r: last ? 5.5 : 3.5,
-        fill: last ? "var(--ours)" : "var(--panel)", stroke: "var(--ours)", "stroke-width": 2 }));
-      var labelY = y(s.value) - 13;
-      if (labelY < T + 10) labelY = y(s.value) + 20;
-      // The final point sits on the plot's right edge, where a centred label
-      // runs into the competitor labels. Anchor it inward instead.
-      var labelX = last ? x(i) - 10 : x(i);
-      // A halo in the panel colour, painted under the glyphs, so a value that
-      // lands on a grid line or a competitor's reference line stays readable
-      // without moving the label away from its point.
-      svg.appendChild(el("text", { x: labelX, y: labelY, "text-anchor": last ? "end" : "middle",
-        "font-family": "IBM Plex Mono, monospace", "font-size": 11.5,
-        "font-weight": last ? 600 : 400, fill: last ? "var(--ours)" : "var(--ink-2)",
-        stroke: "var(--panel)", "stroke-width": 4, "stroke-linejoin": "round",
-        "paint-order": "stroke fill" },
-        axisFmt(s.value, m, hi)));
-    });
-
-    svg.appendChild(el("line", { x1: L, x2: L + plotW, y1: T + plotH, y2: T + plotH,
-      stroke: "var(--line)", "stroke-width": 1 }));
-
-    var best = bestOther(c, m), now = latestOurs(c, m);
-    document.getElementById("chart-title").textContent =
-      c.model + " · " + c.tier + " · c" + c.concurrency;
-    var ratio = (now.value !== null && best.value)
-      ? (info.lowerIsBetter ? best.value / now.value : now.value / best.value) : null;
-    document.getElementById("chart-sub").textContent =
-      info.label + " · " + (ratio === null ? "no comparison"
-        : (ratio >= 1 ? ratio.toFixed(2) + "x better than " : (1 / ratio).toFixed(2) + "x behind ")
-          + best.name);
-
-    var legend = document.getElementById("legend");
-    legend.innerHTML =
-      '<span><i style="border-color:var(--ours)"></i>mlxcat, by pass</span>' +
-      others.map(function (o) {
-        return '<span><i style="border-color:var(--them);border-top-style:dashed"></i>' +
-          o.name + "</span>";
-      }).join("");
   }
 
-  /* ---------- small multiples ---------- */
-  function renderGrid() {
-    var host = document.getElementById("grid");
-    host.innerHTML = "";
-    var m = state.metric, info = metricInfo(m);
-    cellKeys.slice().sort(function (a, b) {
-      var A = cell(a), B = cell(b);
-      return A.model.localeCompare(B.model) || A.tier.localeCompare(B.tier) ||
-        A.concurrency - B.concurrency;
-    }).forEach(function (k) {
-      var c = cell(k);
-      var vals = passLabels.map(function (p) {
-        var r = c.ours[p]; return r && r[m] !== undefined ? r[m] : null;
-      });
-      var known = vals.filter(function (v) { return v !== null; });
-      if (!known.length) return;
-      var them = bestOther(c, m), parity = atParity(c, m);
+  /* ---------------- trend ---------------- */
+  function renderTrend() {
+    var host = document.getElementById("trend");
+    var rows = models.map(function (m) {
+      var mine = cells.filter(function (c) { return c.model === m; });
+      var f = median(mine.map(function (c) { return ratio(c, metric, firstOurs(c, metric)); })
+        .filter(function (r) { return r !== null; }));
+      var l = median(mine.map(function (c) { return ratio(c, metric, ours(c, metric)); })
+        .filter(function (r) { return r !== null; }));
+      return { model: m, first: f, last: l };
+    }).filter(function (r) { return r.first !== null && r.last !== null; });
 
-      var btn = document.createElement("button");
-      btn.className = "cellcard";
-      btn.type = "button";
-      btn.setAttribute("aria-current", k === state.cell ? "true" : "false");
-
-      var lo = Math.min.apply(null, known.concat(them.value ? [them.value] : []));
-      var hi = Math.max.apply(null, known.concat(them.value ? [them.value] : []));
-      var span = hi - lo || 1;
-      var W = 160, H = 34;
-      function py(v) { return H - 3 - ((v - lo) / span) * (H - 8); }
-      var pts = [];
-      vals.forEach(function (v, i) {
-        if (v === null) return;
-        pts.push({ x: 2 + (i / Math.max(1, vals.length - 1)) * (W - 4), y: py(v) });
-      });
-      var spark = '<svg viewBox="0 0 ' + W + " " + H + '" preserveAspectRatio="none" aria-hidden="true">';
-      if (them.value) {
-        spark += '<line x1="0" x2="' + W + '" y1="' + py(them.value) + '" y2="' + py(them.value) +
-          '" stroke="var(--them-soft)" stroke-width="1.5" stroke-dasharray="4 3"/>';
-      }
-      if (pts.length > 1) {
-        spark += '<polyline fill="none" stroke="var(--ours)" stroke-width="2" ' +
-          'stroke-linejoin="round" points="' +
-          pts.map(function (p) { return p.x + "," + p.y; }).join(" ") + '"/>';
-      }
-      if (pts.length) {
-        var last = pts[pts.length - 1];
-        spark += '<circle cx="' + last.x + '" cy="' + last.y + '" r="3" fill="var(--ours)"/>';
-      }
-      spark += "</svg>";
-
-      var pill = parity === null ? '<span class="pill flat">no rival</span>'
-        : parity ? '<span class="pill good">parity+</span>'
-          : '<span class="pill bad">behind</span>';
-
-      btn.innerHTML =
-        '<div class="m">' + c.model + "</div>" +
-        '<div class="t">' + c.tier + " · c" + c.concurrency + "</div>" +
-        spark +
-        '<div class="f"><span>' + fmt(latestOurs(c, m).value, m) + "</span>" + pill + "</div>";
-      btn.addEventListener("click", function () {
-        state.cell = k;
-        syncSelectors();
-        renderChart();
-        renderGrid();
-        document.getElementById("chart").scrollIntoView({ behavior: "smooth", block: "center" });
-      });
-      host.appendChild(btn);
+    var html = "<table><thead><tr><th class='model'>model</th><th>first pass</th>" +
+      "<th>now</th><th>change</th></tr></thead><tbody>";
+    rows.forEach(function (r) {
+      var delta = r.last / r.first - 1;
+      var colour = Math.abs(delta) < 0.02 ? "var(--muted)"
+        : delta > 0 ? "var(--win)" : "var(--lose)";
+      var flag = withdrawn(r.model)
+        ? " <span style='color:var(--lose);font-family:Archivo,sans-serif;font-size:9px;"
+          + "font-weight:700;letter-spacing:.08em'>WITHDRAWN</span>" : "";
+      html += "<tr><td class='model' title='" + (withdrawn(r.model) || "") + "'>" +
+        short(r.model) + flag + "</td>" +
+        "<td style='background:" + shade(r.first).bg + ";color:" + shade(r.first).fg + "'>" +
+        r.first.toFixed(2) + "</td>" +
+        "<td style='background:" + shade(r.last).bg + ";color:" + shade(r.last).fg + "'>" +
+        r.last.toFixed(2) + "</td>" +
+        "<td style='color:" + colour + "'>" + (delta >= 0 ? "+" : "") +
+        (delta * 100).toFixed(0) + "%</td></tr>";
     });
-    document.getElementById("grid-count").textContent = cellKeys.length;
+    html += "</tbody></table>";
+    host.innerHTML = html;
   }
 
-  /* ---------- selectors ---------- */
-  function uniq(fn) {
-    var seen = [];
-    cellKeys.forEach(function (k) {
-      var v = fn(cell(k));
-      if (seen.indexOf(v) === -1) seen.push(v);
-    });
-    return seen;
-  }
-
-  function fill(id, values, current, label) {
-    var sel = document.getElementById(id);
-    sel.innerHTML = "";
-    values.forEach(function (v) {
-      var o = document.createElement("option");
-      o.value = v;
-      o.textContent = label ? label(v) : v;
-      if (String(v) === String(current)) o.selected = true;
-      sel.appendChild(o);
-    });
-  }
-
-  function syncSelectors() {
-    var c = cell(state.cell);
-    fill("sel-model", uniq(function (x) { return x.model; }), c.model);
-    fill("sel-tier", uniq(function (x) { return x.tier; }), c.tier);
-    fill("sel-conc", uniq(function (x) { return x.concurrency; }).sort(function (a, b) { return a - b; }),
-      c.concurrency, function (v) { return "c" + v; });
-  }
-
-  function pickCell(model, tier, conc) {
-    var exact = cellKeys.filter(function (k) {
-      var c = cell(k);
-      return c.model === model && c.tier === tier && String(c.concurrency) === String(conc);
-    });
-    if (exact.length) return exact[0];
-    var byModelTier = cellKeys.filter(function (k) {
-      var c = cell(k); return c.model === model && c.tier === tier;
-    });
-    if (byModelTier.length) return byModelTier[0];
-    var byModel = cellKeys.filter(function (k) { return cell(k).model === model; });
-    return byModel.length ? byModel[0] : cellKeys[0];
-  }
-
-  ["sel-model", "sel-tier", "sel-conc"].forEach(function (id) {
-    document.getElementById(id).addEventListener("change", function () {
-      state.cell = pickCell(
-        document.getElementById("sel-model").value,
-        document.getElementById("sel-tier").value,
-        document.getElementById("sel-conc").value
-      );
-      syncSelectors();
-      renderChart();
-      renderGrid();
-    });
-  });
-
-  var segMetric = document.getElementById("seg-metric");
-  METRIC_ORDER.forEach(function (m) {
+  var seg = document.getElementById("seg-metric");
+  METRICS.forEach(function (m) {
     var b = document.createElement("button");
     b.type = "button";
-    b.textContent = m === "ttft" ? "TTFT" : m === "e2e" ? "Throughput" : "Peak memory";
-    b.setAttribute("aria-pressed", m === state.metric ? "true" : "false");
+    b.textContent = m.label;
+    b.setAttribute("aria-pressed", m.key === metric ? "true" : "false");
     b.addEventListener("click", function () {
-      state.metric = m;
-      Array.prototype.forEach.call(segMetric.children, function (child) {
-        child.setAttribute("aria-pressed", child === b ? "true" : "false");
+      metric = m.key;
+      Array.prototype.forEach.call(seg.children, function (c) {
+        c.setAttribute("aria-pressed", c === b ? "true" : "false");
       });
-      renderCards(); renderChart(); renderGrid();
+      draw();
     });
-    segMetric.appendChild(b);
+    seg.appendChild(b);
   });
 
-  Array.prototype.forEach.call(document.getElementById("seg-scale").children, function (b) {
-    b.addEventListener("click", function () {
-      state.scale = b.dataset.scale;
-      Array.prototype.forEach.call(b.parentNode.children, function (child) {
-        child.setAttribute("aria-pressed", child === b ? "true" : "false");
-      });
-      renderChart();
-    });
-  });
-
-  /* ---------- pass log ---------- */
-  function renderLog() {
-    var host = document.getElementById("log");
-    host.innerHTML = "";
-    DATA.passes.forEach(function (p) {
-      var li = document.createElement("li");
-      li.innerHTML = '<div class="when">' + p.label + "</div>" +
-        '<div class="what">' + p.note + "</div>";
-      host.appendChild(li);
-    });
-  }
-
-  /* ---------- boot ---------- */
-  var engines = {};
-  cellKeys.forEach(function (k) {
-    Object.keys(cell(k).them).forEach(function (n) { engines[n] = true; });
-  });
-  document.getElementById("meta-device").textContent = DATA.device;
-  document.getElementById("meta-passes").textContent = DATA.passes.length;
-  document.getElementById("meta-cells").textContent = cellKeys.length;
-  document.getElementById("meta-engines").textContent = Object.keys(engines).sort().join(", ");
-  document.getElementById("meta-generated").textContent = DATA.generated || "";
-
-  state.cell = pickCell("gemma-4-E2B-it-qat-4bit", "longgen", 8);
-  syncSelectors();
-  renderCards();
-  renderChart();
-  renderGrid();
-  renderLog();
+  function draw() { renderVerdict(); renderChart(); renderHeat(); renderTrend(); }
+  document.getElementById("stamp").textContent =
+    D.device + " · " + cells.length + " cells · " + (D.generated || "");
+  draw();
 })();
 </script>
+</body>
+</html>

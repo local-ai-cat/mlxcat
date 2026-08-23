@@ -2105,7 +2105,7 @@
   }
  },
  "device": "Mac16,7",
- "generated": "2026-08-23 19:19 UTC",
+ "generated": "2026-08-23 19:30 UTC",
  "metrics": {
   "e2e": {
    "label": "End-to-end throughput",
