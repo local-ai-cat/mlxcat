@@ -317,7 +317,7 @@ close it, and which one is a product call:
    That is a change to the standard every family is judged by, so it needs to be
    argued once, in writing, not settled per-family.
 
-## 1f. Batched gemma is not token-exact on the factory production loads — OPEN, and it is today's grant
+## 1f. Batched gemma decoded rows 1..N UNROTATED — an MLX RoPE grid bug — FIXED by reverting the grant 2026-08-24
 
 `gemma4` and `gemma4_unified` were moved to `.multimodalOnly` earlier on
 2026-08-23, which is what produced the headline result on the board (gemma-4-E2B
@@ -415,16 +415,79 @@ family has are the KV-shared layer tail (`sharedKV` reusing an earlier layer's
 `Gemma4.swift:1292-1305`), the sliding/full interleave, and
 `gemma4AdjustAttentionMask`.
 
-**The decision is a product one and it is Phil's**, because the cost is the
-biggest concurrency win on the board:
-1. Drop both gemmas to `.always` — restores token-exactness, loses the 22x c8
-   TTFT improvement for the iOS flagship family.
-2. Keep the grant and change the standard for gemma to "token-equivalent, not
-   token-identical", recorded as such in the ledger.
-3. Find the second cause first, and decide with it in hand.
+### Located 2026-08-24: MLX's RoPE fast path drops the batch axis
 
-Until then nothing has been reverted: this section and the nightly FAIL row are
-the record, in the same shape the repo already uses for §1e.
+It was never a tolerance question. **Batched gemma decode produces UNROTATED
+queries and keys for every row but the first.**
+
+`RoPE::eval_gpu` takes a fast path when the input is row-contiguous, the
+sequence length is 1, and the offset is a **scalar**
+(`mlx/backend/metal/rope.cpp:96`). That branch dispatches
+
+```cpp
+grid_dims = MTL::Size(dims_ / 2, N, 1);     // rope.cpp:134-139
+```
+
+where `N` covers only the head axes. The batch size is absent. The general
+branch has it — `dim2 = B * ((N + n_per_thread - 1) / n_per_thread)` at `:149` —
+which is why every other family is fine. The kernel therefore rotates batch row
+0, and because the row-contiguous input is donated, rows 1..B-1 come out of the
+shared buffer untouched.
+
+Reproduced with no model and no weights, in under a second
+(`RoPEBatchGridProbeTests`):
+
+```
+ROPEGRID scalar-offset rows-unrotated=[1, 2, 3] max|out-in| per row=[0.0000, 0.0000, 0.0000]
+ROPEGRID array-offset  rows-unrotated=[]
+```
+
+Bit-identical to the input. No positional information at all.
+
+Gemma's VLM attention is the only code in our stack that reaches that primitive
+with a scalar offset on a batched decode tensor
+(`Gemma4.swift:872,880,903`). Everything else rotates through
+`applyRotaryPosition(..., offset: cache?.ropeOffset)`, and a per-row array
+offset forces `single = false`.
+
+**One cause accounts for every observation**, which is what makes it the answer
+rather than another candidate:
+
+| observation | why |
+|---|---|
+| width 1 exact | B=1, the grid covers the whole tensor |
+| identical rows disagree with each other | row 0 rotated, rows >= 1 not |
+| `vsSerial == vsEachOther` everywhere | row 0 is also the one that matches serial |
+| equal-length == ragged | rows >= 1 never have an offset read at all |
+| pipelining toggle inert | the defect is inside one primitive |
+| prefill clean | T > 1 misses the fast path |
+| gpt-oss and qwen3_5 exact | both take the array-offset path |
+
+**What was done.** `gemma4` and `gemma4_unified` are out of
+`multimodalOnlyModelTypes` and back to `.always`. This is a correctness floor,
+not conservatism, and it costs exactly the headline it bought — gemma-4-E2B
+longgen c8 goes back to ~39 s at c8. `MLXCAT_UNSERIALIZE_MODEL_TYPES` still
+lifts it for measurement.
+
+**How to get the win back**, in preference order:
+1. **Model-level.** Port `applyRotaryPosition(rope, to:, offset:
+   cache?.ropeOffset)` into `Gemma4TextAttention`, carrying `RoPEOffset` rather
+   than `Int` through the shared-KV `intermediates` (`Gemma4.swift:1292-1305`)
+   so E2B's 20-layer shared tail inherits per-row anchors. This dodges the
+   broken grid AND fixes the separate ragged-position defect that staggered
+   admission creates in production. Needs a fork of `mlx-swift-lm`, which we do
+   not currently carry — **Phil's call.**
+2. **Kernel-level.** Fold B into the single branch's grid
+   (`MTL::Size(dims_ / 2, B * N, 1)`; the rows are contiguous D-vectors sharing
+   one theta, so the existing indexing covers them). That is an upstream patch
+   to `mlx-swift`'s vendored MLX. **Check `ml-explore/mlx` HEAD first** — our
+   copy may simply lag a fix. Worth pursuing regardless of (1): any consumer of
+   this MLX doing scalar-offset batched decode silently corrupts rows >= 1.
+
+The probe pins the BROKEN behaviour on purpose. A test asserting the correct
+behaviour would sit permanently red and be ignored; asserting the defect means
+it goes red exactly once — the day the grid is fixed — and its message says to
+restore gemma and delete it.
 
 ## 2. Hybrid caches cannot be combined mid-batch — FIXED
 

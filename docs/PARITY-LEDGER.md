@@ -121,8 +121,14 @@ The decode column corroborates it: our per-stream rate stayed flat ~76–79 tok/
 every width (each request ran ALONE at full speed) while mlx-serve's halved per
 doubling, because their streams actually share the machine.
 
-**Interventionally proven, and largely closed.** Lifting `.always` for gemma-4
-text rows (`multimodalOnly`) moved gemma-4-E2B longgen c8 TTFT **39,346 → 2,439 ms**
+**Interventionally proven — and then half of it withdrawn.** The gemma half of
+this was reverted on 2026-08-24: batched gemma decode rotates row 0 and leaves
+every other row UNROTATED, because MLX's scalar-offset RoPE fast path drops the
+batch axis from its dispatch grid (`docs/KNOWN-FAILURES.md` §1f). The numbers
+below are real and were measured; they were also wrong output. The qwen3_5 half
+stands — it takes the array-offset path and is token-exact at width 8.
+
+Lifting `.always` for gemma-4 text rows (`multimodalOnly`) moved gemma-4-E2B longgen c8 TTFT **39,346 → 2,439 ms**
 and aggregate 70 → 123 tok/s — now ahead of mlx-serve's 85 — with c1→c8 scaling
 falling 195× → 11.2×. `docs/COMPETITIVE.md` § Status 2026-08-23 has the table.
 
