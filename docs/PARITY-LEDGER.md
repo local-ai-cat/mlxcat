@@ -127,10 +127,16 @@ and aggregate 70 → 123 tok/s — now ahead of mlx-serve's 85 — with c1→c8 
 falling 195× → 11.2×. `docs/COMPETITIVE.md` § Status 2026-08-23 has the table.
 
 **What remains is the same lever on the families still serialized:**
-- `qwen3_5` (Qwen3.5-4B **and** Qwen3.8-27B — two of six benchmark models) is
-  `.always` pending the server-layer crash in §1d. The engine is already cleared;
-  `OpenAIServerConcurrentStreamingTests` is the tool to find it. Expected: 27B c8
-  mean 46.2 s → ~13–15 s.
+- ~~`qwen3_5` (Qwen3.5-4B **and** Qwen3.8-27B — two of six benchmark models) is
+  `.always` pending the server-layer crash in §1d.~~ **Closed 2026-08-23.** It
+  was not a server-layer crash: Qwen3.5 anchors its M-RoPE position in
+  `LMOutput.State`, the batch generator dropped it at width ≥2, and the model's
+  own precondition trapped the process. The crash report named the frame; the
+  black-box narrowing that produced "it must be the server" had ruled out the
+  cache, which was never the suspect. Fixed by carrying the anchor per row
+  (`BatchPositionalState`), token-exact against serial at 4 ragged rows and at
+  width 8. Expected: 27B c8 mean 46.2 s → ~13–15 s — to be confirmed by the next
+  bench pass.
 - `qwen3_moe` is capped at width 2, so requests 3+ still queue behind generations.
   Raising it needs the width-4/8 numerics fixed (2.69 against a 1.25 tolerance).
 

@@ -170,36 +170,82 @@ worst-behaved model we have. It now has one, set at 32 GiB as a regression bar
 just above today's measurement — explicitly not a target. The target is at or
 under the configured ceiling.
 
-## 1d. Batched `qwen3_5` dies in the SERVER, not the engine — open, narrowed
+## 1d. Batched `qwen3_5` died in the MODEL, not the server — FIXED 2026-08-23
 
-With the exclusion lifted, the benchmark's batched `qwen3_5` arm fails: width 4
-returns a completion carrying no `usage` frame, width 8 kills the server process
-silently — nothing in its log, and the runaway guard never fires, so it is a hard
-crash rather than a memory kill.
+With the exclusion lifted, the benchmark's batched `qwen3_5` arm failed: width 4
+returned a completion carrying no `usage` frame, width 8 killed the server
+process — nothing in its log and the runaway guard never fired.
 
-`HybridBatchScaleTests` was written to reproduce that from a test. It does not,
-and the ruling-out is the result:
+`HybridBatchScaleTests` was written to reproduce that from a test and could not:
+8 rows x 512 tokens, a `SessionPrefixKVStore`, a ~1300-token prompt spanning many
+cache blocks — all clean. **That ruling-out was sound and the conclusion drawn
+from it was wrong.** It cleared the batched CACHE, and this defect was in the
+MODEL's positional contract, which no hybrid-cache test touches. The section
+then said "the failure lives above the engine, in the SSE streaming path,
+`NativeModelEngine`'s chat/tool/stop handling, `EnginePool`, or concurrent HTTP
+admission", and it lived in none of them.
 
-| tried | outcome |
-|---|---|
-| 4 rows × 96 generated tokens | clean |
-| 8 rows × 512 generated tokens | clean |
-| + a `SessionPrefixKVStore`, which the server always has and the in-process engine does not | clean |
-| + a ~1300-token prompt, so chunked prefill engages and rows span many cache blocks | clean |
+**What actually happened**, from the crash report the run left behind
+(`mlxcat-http-2026-08-23-022441.ips`, `EXC_BREAKPOINT` / SIGTRAP):
 
-So **batched decode over a hybrid cache is not the defect**. Everything the
-engine does — merge, extract, chunked prefill, prefix store, `.never` policy at
-width 8 — is exercised and correct. The failure lives above it, in what the
-server adds: the SSE streaming path, `NativeModelEngine`'s chat/tool/stop
-handling, `EnginePool`, or concurrent HTTP admission.
+```
+Swift runtime failure: precondition failure
+specialized Qwen35.callAsFunction(_:cache:state:)      Qwen35.swift:1298
+ContinuousBatchGenerator.computeNextTokens(...)        BatchGenerator.swift:567
+ContinuousBatchGenerator.advanceStepSynchronously()
+Scheduler.step()  →  EngineStreamDemux.pump()
+```
 
-That is where to look next, and it is a much smaller place than "hybrid batching
-is broken", which is what the bench failure looked like on its own. The gate is
-kept as a regression pin for the layer that has been cleared.
+Qwen3.5 does not read its decode position off the cache the way every batching
+family does. It computes `cache.offset + ropeDeltas[row] + j` from a **scalar**
+offset plus an M-RoPE anchor it hands back in `LMOutput.State`, and refuses a
+warm cache without it:
+
+```swift
+precondition(faCacheOffset(cache ?? []) == 0 || state?[ropeDeltasKey] != nil,
+             "Qwen35 cannot continue a warm prompt cache without qwen35.ropeDeltas")
+```
+
+`BatchGenerator` dropped that state the moment a second row joined. The comment
+there said stateful models were kept out by the allowlist — true, right up until
+the benchmark arm lifts the allowlist, which is the arm's entire purpose. Width
+4 and width 8 were one trap at two timings, not two symptoms.
+
+Two process notes worth keeping. **A silent death is a crash report, not an
+absence of evidence** — `~/Library/Logs/DiagnosticReports` had the answer the
+whole time, and reading it took less time than the black-box narrowing did.
+And a SIGTRAP is a Swift precondition: the message goes to stderr, which a
+server whose stderr nobody captured turns into "nothing in its log".
+
+**The fix** (`Sources/MLXCat/TrackB/BatchPositionalState.swift`) is not to
+restore the scalar — a scalar cannot describe two rows. The decode branch
+already accepts a per-row vector (`Qwen35.swift:897-918` broadcasts a 0-d delta,
+truncates a long one, and indexes `delta[row]` otherwise), so the anchor is kept
+per row and reassembled each step with `-leftPadding[row]` folded in: the offset
+the model adds is the PADDED batch length, so a short row has to be pulled back
+to its own position — the same correction `BatchKVCache.ropeOffset` makes for
+every other family. At width 1 with no padding it is exactly the scalar that
+shipped before. A row that arrives without an anchor now throws instead of
+trapping the process.
+
+**Evidence.** `PositionalStateBatchIntegrationTests`, on the `VLMModelFactory`
+path production loads: 4 rows of deliberately different prompt lengths are
+token-EXACT against serial, and so are 8 rows at 24 tokens each. Disable the
+per-row state and the same test dies on signal 5 with the identical message the
+benchmark's crash report carried. That is a stronger result than the 1.25 logit
+tolerance every other family is admitted on, so `qwen3_5` moved to
+`multimodalOnlyModelTypes` uncapped: text rows batch, image rows keep the batch
+to themselves.
+
+Note the near-miss in the earlier evidence: `BatchInvarianceTests` swept
+Qwen3.5-4B at widths 1/2/4/8 and reported it clean, because it loads through
+`LLMModelFactory` — a **different** `Qwen35Model` with no such precondition.
+Production routes `qwen3_5` through `VLMModelFactory`. A gate on a path
+production never selects is the same trap that put two wrong memory numbers in
+this file the day before.
 
 `qwen3_5` covers Qwen3.5-4B **and** Qwen3.8-27B — two of the six benchmark
-models, both serialized today at 37 s TTFT under load on an M4 Pro. It is the
-largest single win left.
+models, both previously serialized at ~37 s TTFT under load on an M4 Pro.
 
 ## 1e. `gemma4_unified` fails logit invariance at every batched width — capped at 4, still open
 
@@ -276,8 +322,14 @@ testHybridBatchMatchesSerialGreedyTokens: Optional([]) != Optional([760, 1156])
 ```
 
 The first is a thrown layout error (XCTest counts it "1 unexpected"); the second
-means the batched path returned **no tokens at all**. `qwen3_5` is also on the
-scalar-offset serialization list, so the same relationship holds as above.
+means the batched path returned **no tokens at all**. `qwen3_5` was also on the
+scalar-offset serialization list at the time, so the same relationship held.
+
+Read this alongside §1d: "returns no tokens at all" was a **second** symptom of
+`qwen3_5` batching, and it had a **different** cause from the crash — this one
+was the cache layout, that one the dropped RoPE anchor. Both are fixed, and both
+had to be, which is why fixing this one did not make the benchmark arm work and
+the section above spent a day looking in the server.
 
 ## 3. The prefix-cache gate cannot run its own check
 

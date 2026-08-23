@@ -72,8 +72,8 @@ is already running. Mapping the benchmark models to their `config.json`
 
 | model | model_type | VLM | batched? |
 |---|---|---|---|
-| Qwen3.5-4B | `qwen3_5` | yes | **no** — scalar-offset list |
-| Qwen3.8-27B | `qwen3_5` | yes | **no** — scalar-offset list |
+| Qwen3.5-4B | `qwen3_5` | yes | **yes** (2026-08-23) — text rows batch, image rows solo |
+| Qwen3.8-27B | `qwen3_5` | yes | **yes** (2026-08-23) — text rows batch, image rows solo |
 | gemma-4-E2B | `gemma4` | yes | **no** — scalar-offset list |
 | gemma-4-12B | `gemma4_unified` | yes | **no** — scalar-offset list |
 | Qwen3-Coder-30B | `qwen3_moe` | no | **no** — regression list |
@@ -168,7 +168,7 @@ The two exclusion lists are not the same kind of claim:
 | per-row RoPE offsets are scalar in a batch | **disproven** — resolves to `.batch` (`BatchRoPEOffsetTests`) |
 | ragged rows break batched decode | **disproven** — ragged rows match over 24 steps; identical rows diverge over 64 |
 | the serialization exclusions cost us concurrency | **confirmed for gemma4** — 50× TTFT, 2.17× aggregate at c4 |
-| ...for every excluded family | **no** — `qwen3_5` returns zero tokens and `qwen3_moe` breaks the logit tolerance at width ≥4; both exclusions are load-bearing |
+| ...for every excluded family | **partly** — `qwen3_moe` really does break the logit tolerance at width ≥4, so its cap is load-bearing. `qwen3_5` was NOT: "returns zero tokens" was a symptom of a dropped RoPE anchor that trapped inside the model, fixed 2026-08-23 (`KNOWN-FAILURES` §1d) |
 | the exclusions' stated reasons are accurate | **no** — `qwen3_moe`'s says "lower throughput" and throughput is 82% higher; it is excluded for numerics instead |
 
 ## Measured: what lifting the exclusion buys
@@ -249,14 +249,23 @@ inference. Flipping the default on text evidence alone would be exactly the move
 this file keeps criticising. The unlock is a one-line change once a VLM batch
 gate exists.
 
-`qwen3_5` stays excluded, and now has a reason on file rather than an assumption.
+`qwen3_5` no longer stays excluded. Its exclusion had a reason on file — "batched
+decode over its hybrid cache returns no tokens at all" — and the reason was a
+symptom. Qwen3.5 anchors its M-RoPE position in `LMOutput.State` instead of
+reading it off the cache, the batch generator dropped that anchor when a second
+row joined, and the model's own precondition then trapped the server process.
+With the anchor carried per row it is token-exact against serial at 4 ragged rows
+and at width 8, so it moved to `.multimodalOnly` on 2026-08-23. Two of the six
+benchmark models leave the serial lane with it.
 
 ## What would move the number, in order
 
 1. ~~**Per-row offsets for the scalar-offset families**, starting with `gemma4`.~~
-   **Done for gemma4** — see `.multimodalOnly` above; text rows batch, image rows
-   do not, and both are gated. Still open for `qwen3_5`, where the blocker is the
-   hybrid cache returning no tokens rather than the offsets.
+   **Done for gemma4 and, on 2026-08-23, for `qwen3_5`** — see `.multimodalOnly`
+   above; text rows batch, image rows do not. `qwen3_5`'s blocker was never the
+   offsets themselves: it was that its offset arrives as model STATE, which the
+   batch generator dropped at width ≥2. `BatchPositionalState` carries it per row
+   and folds the left-padding correction into the same vector.
    Unlocks batching for four of six benchmark models and for the iOS flagship.
    Start at `docs/KNOWN-FAILURES.md` §1, not at the exclusion list: the gate that
    would prove batched decode correct for gemma is **red** — 89/160 mismatched
