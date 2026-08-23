@@ -113,13 +113,30 @@ final class SerializationOverrideTests: XCTestCase {
             "gemma4_unified batches text like gemma4, but capped — see the width test above")
     }
 
+    func testQwen35BatchesTextOnceItsRopeAnchorIsCarriedPerRow() {
+        // "lifting qwen3_5 returns no tokens at all over a hybrid cache" was a
+        // symptom. The cause was Qwen3.5's M-RoPE anchor being dropped when a
+        // second row joined, which trapped the process inside the model itself
+        // (`docs/KNOWN-FAILURES.md` §1d). With the anchor carried per row and
+        // corrected for left padding, the family is token-EXACT against serial
+        // at 4 ragged rows and at width 8 —
+        // `PositionalStateBatchIntegrationTests`, on the VLMModelFactory path
+        // production loads. That is a stronger result than the 1.25 logit
+        // tolerance every other family is admitted on.
+        XCTAssertEqual(
+            NativeModelLoader.serializationPolicy(modelType: "qwen3_5", isVLM: true, overrides: []),
+            .multimodalOnly,
+            "qwen3_5 text rows batch; its image rows keep the batch to themselves")
+
+        // Its sibling has no such evidence and must not ride along.
+        XCTAssertEqual(
+            NativeModelLoader.serializationPolicy(
+                modelType: "qwen3_5_moe", isVLM: true, overrides: []),
+            .always)
+    }
+
     func testFamiliesWithoutBothGatesStayFullySerialized() {
         let none: Set<String> = []
-        // qwen3_5: lifting it was MEASURED and returns no tokens at all over a
-        // hybrid cache, so it is not a candidate for the narrower policy.
-        XCTAssertEqual(
-            NativeModelLoader.serializationPolicy(modelType: "qwen3_5", isVLM: true, overrides: none),
-            .always)
         // what is LEFT on the regression list is a throughput claim, not a
         // correctness one, and has not been re-measured — it stays blunt until
         // it is. qwen3_moe is no longer on it; see the width-ceiling tests below.

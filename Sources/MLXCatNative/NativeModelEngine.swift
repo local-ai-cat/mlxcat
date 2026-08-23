@@ -814,8 +814,11 @@ public struct NativeModelLoader: EnginePoolModelLoader {
     /// list (`qwen2`, `qwen3`) is a throughput claim, not a correctness one, and
     /// it has not been re-measured. `qwen3_moe` moved off it to
     /// `batchDecodeWidthCeilings` — its re-measurement produced a width, not a
-    /// verdict. Lifting `qwen3_5` was measured and is wrong — batched decode over
-    /// its hybrid cache returns no tokens at all.
+    /// verdict. `qwen3_5` moved off too: "batched decode over its hybrid cache
+    /// returns no tokens at all" was a symptom, not a cause. The cause was
+    /// Qwen3.5's RoPE anchor being dropped when a second row joined, which
+    /// trapped the process inside the model; with the anchor carried per row
+    /// (``BatchPositionalState``) it is token-exact against serial at width 8.
     public static func serializationPolicy(
         modelType: String,
         isVLM: Bool,
@@ -842,10 +845,21 @@ public struct NativeModelLoader: EnginePoolModelLoader {
     /// Scalar-offset families whose TEXT rows are proven safe to batch, so only
     /// their multimodal rows are serialized. Entry here requires both gates:
     /// `BatchInvarianceTests.testBatchInvarianceAcrossModelFamilies` (logits) and
-    /// `SchedulerEngineTests.testVLMBatchEqualityAcrossModels` (images).
+    /// `SchedulerEngineTests.testVLMBatchEqualityAcrossModels` (images). With
+    /// `multimodalSolitude` the image gate is about a path that no longer
+    /// batches, so what actually earns entry is the numeric one — stated here
+    /// because the sentence above predates solitude and reads stricter than the
+    /// policy it describes.
+    ///
+    /// `qwen3_5` (Qwen3.5-4B and Qwen3.8-27B) joined on 2026-08-23 with evidence
+    /// stronger than the tolerance: `PositionalStateBatchIntegrationTests` holds
+    /// it token-EXACT against serial at 4 ragged rows and again at width 8, on
+    /// the `VLMModelFactory` path production actually loads. Its scalar offset is
+    /// corrected per row by ``BatchPositionalState`` rather than tolerated.
     private static let multimodalOnlyModelTypes: Set<String> = [
         "gemma4",
         "gemma4_unified",
+        "qwen3_5",
     ]
 
     private static func cacheCapabilities(for configuration: ModelKindConfiguration) -> ModelCacheCapabilities {
@@ -1024,6 +1038,10 @@ public struct NativeModelLoader: EnginePoolModelLoader {
     private static let scalarOffsetVLMModelTypes: Set<String> = [
         // These VLMs still derive MRoPE position ids, mask lengths, attention
         // scaling, or shared-KV RoPE offsets from scalar cache.offset values.
+        // Membership means "needs a policy", not "must serialize": `qwen3_5` is
+        // still listed and still scalar-offset, but the batch generator now
+        // corrects that scalar per row, so its policy is multimodal solitude
+        // rather than `.always`.
         "qwen2_5_vl",
         "qwen3_vl",
         "qwen3_5",

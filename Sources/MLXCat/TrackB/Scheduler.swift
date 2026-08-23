@@ -704,7 +704,10 @@ public actor Scheduler {
             prefixHit: hit,
             prefillRange: matched ..< promptTokens.count,
             nextPrefillIndex: matched,
-            state: nil,
+            // A hit resumes on a WARM cache, which is the shape that trapped
+            // batched qwen3_5 inside the model. Seeded rather than left nil —
+            // see ``BatchPositionalState/textOnlyResumeState()``.
+            state: BatchPositionalState.textOnlyResumeState(),
             initialGeneratedToken: nil
         ))
     }

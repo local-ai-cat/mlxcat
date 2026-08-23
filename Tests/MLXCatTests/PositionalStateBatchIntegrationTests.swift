@@ -111,8 +111,11 @@ final class PositionalStateBatchIntegrationTests: XCTestCase {
         }
     }
 
-    /// The width the benchmark died at, driven straight through the engine.
-    func testEightRowsDecodeWithoutTrapping() async throws {
+    /// The width the benchmark died at, driven straight through the engine —
+    /// and held to token equality, not merely to surviving. Eight rows is where
+    /// the server process died, and it is the width the concurrency claim rests
+    /// on, so "it generated something" is not the bar.
+    func testEightRowsAreTokenExactAgainstSerial() async throws {
         try MLXMetalRuntime.requireAvailable()
         let url = try Self.modelURL()
 
@@ -134,6 +137,10 @@ final class PositionalStateBatchIntegrationTests: XCTestCase {
                 maxConcurrentRequests: 8,
                 serializationPolicy: .never
             )
+            let serial = try inputs.map {
+                try SerialGreedyTokenHelper.tokens(
+                    model: context.model, input: $0, parameters: parameters, steps: tokenCount)
+            }
             let batched = try await engine.generate(
                 inputs.enumerated().map { index, input in
                     Request(
@@ -149,7 +156,79 @@ final class PositionalStateBatchIntegrationTests: XCTestCase {
                 XCTAssertGreaterThan(
                     batched["wide-\(index)"]?.count ?? 0, 1,
                     "row \(index) produced no tokens at width 8")
+                XCTAssertEqual(
+                    batched["wide-\(index)"], serial[index],
+                    "row \(index) diverged from serial at width 8")
             }
+        }
+    }
+
+    /// The second place the same trap could fire: a prefix-cache HIT resumes on
+    /// a WARM cache, and the scheduler used to prefill the remainder with
+    /// `state: nil`. `prefixCacheEnabled` is
+    /// `prefixStore != nil && !usesWindowedKVCache` and Qwen3.5 declares no
+    /// sliding window, so it reads as live — but it is not, and the reason is
+    /// worth pinning: Qwen3.5's `prepare` runs the whole prompt inside the model
+    /// and returns `.logits`, so the scheduler never sees prompt tokens for it,
+    /// never stores a prefix, and never resumes one. Chunked prefill and the
+    /// prefix cache do not apply to this family at all.
+    ///
+    /// So this test asserts two things: that a repeated-prefix pair generates,
+    /// and that the store stayed empty. The second is the tripwire — the day
+    /// `prepare` stops swallowing the prefill, hits become possible and the warm
+    /// resume has to already be seeded (it is: `prepareHitRow`).
+    func testPrefixCacheStaysOutOfTheWayForAModelThatPrefillsItself() async throws {
+        try MLXMetalRuntime.requireAvailable()
+        let url = try Self.modelURL()
+
+        let container = try await VLMModelFactory.shared.loadContainer(
+            from: url, using: #huggingFaceTokenizerLoader())
+
+        try await container.perform { context in
+            let parameters = GenerateParameters(maxTokens: 4, temperature: 0)
+            let blockSize = 16
+            let manager = PagedCacheManager(blockSize: blockSize)
+            let prefixStore = BlockAwarePrefixKVStore(
+                prefixCache: BlockAwarePrefixCache(
+                    modelName: url.lastPathComponent, blockSize: blockSize, manager: manager))
+
+            let shared = String(
+                repeating: "Background: the KV cache stores per-layer keys and values. ", count: 8)
+            let first = try await context.processor.prepare(
+                input: UserInput(prompt: shared + "Question one: what is stored?"))
+            let second = try await context.processor.prepare(
+                input: UserInput(prompt: shared + "Question two: what is reused?"))
+
+            let engine = MLXCatEngine(
+                model: context.model,
+                parameters: parameters,
+                maxConcurrentRequests: 1,
+                prefixStore: prefixStore,
+                serializationPolicy: .never
+            )
+
+            _ = try await engine.generate([
+                Request(
+                    uid: "warm", input: first, maxTokens: 4,
+                    sampling: SamplingParameters(temperature: 0))
+            ])
+            let secondOutput = try await engine.generate([
+                Request(
+                    uid: "hit", input: second, maxTokens: 4,
+                    sampling: SamplingParameters(temperature: 0))
+            ])
+
+            XCTAssertGreaterThan(
+                secondOutput["hit"]?.count ?? 0, 0,
+                "the second request produced nothing")
+            XCTAssertEqual(
+                prefixStore.storeCount, 0,
+                """
+                a prefix was stored for a model whose `prepare` returns `.logits`. \
+                That means the scheduler now owns this family's prefill, prefix \
+                hits are reachable, and the warm-resume anchor in `prepareHitRow` \
+                needs a real test rather than this tripwire.
+                """)
         }
     }
 }

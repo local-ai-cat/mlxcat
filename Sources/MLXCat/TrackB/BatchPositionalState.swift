@@ -69,6 +69,26 @@ struct BatchPositionalState {
         return flattened[0].item(Int32.self)
     }
 
+    /// The anchor a prefix-cache resume needs.
+    ///
+    /// A prefix hit hands the scheduler a WARM cache and no state, which is the
+    /// same shape that trapped the batch path — `Qwen35.callAsFunction` refuses
+    /// it. Zero is not a placeholder: `isPrefixCacheEligible` admits text-only
+    /// inputs only, and `getRopeIndex`'s text-only branch returns exactly the
+    /// position offset as its delta (Qwen3VL.swift:1467-1470), which is zero for
+    /// a prefix that starts at position zero.
+    ///
+    /// Unrecognized keys are inert — a model reads the ones it defined and
+    /// ignores the rest — so this is seeded unconditionally rather than behind a
+    /// model-type test the scheduler would have to learn.
+    static func textOnlyResumeState() -> LMOutput.State {
+        var state = LMOutput.State()
+        for key in recognizedKeys {
+            state[key] = MLXArray([Int32(0)])
+        }
+        return state
+    }
+
     /// The state one decode step feeds the model: one delta per live row, in
     /// row order, already corrected for left padding.
     static func stepState(
