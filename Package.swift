@@ -72,7 +72,7 @@ let package = Package(
             // dispatch grid, carried in atlas-open-sources/mlx. `GemmaRoPEOffsetProbeTests`
             // gates both. Return to upstream if it takes the change.
             url: "https://github.com/atlas-open-sources/mlx-swift-lm.git",
-            revision: "b2dfb1665b25f334e82b9c63aba6970ec756c2fc"
+            revision: "2a1bbbb911833f1a60f3ea71cffbd7087364bd2f"  // fusion-exp: b2dfb166 + fused silu MLPs
         ),
         // atlas-open-sources/mlx-swift = 0.31.6 with its vendored mlx submodule
         // moved to our three-line backport of ml-explore/mlx 76a977ca (#3498).
