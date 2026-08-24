@@ -61,6 +61,11 @@ if resolved.exists():
 WATCH = [
     # repo, why
     ("ml-explore/mlx", "core kernels"),
+    # The next two are pinned via atlas-open-sources forks, so the pins section
+    # above watches OUR fork — these rows keep upstream in view. Each fork
+    # carries one fix and dies the release upstream absorbs it:
+    ("ml-explore/mlx-swift", "UN-FORK when a release vendors mlx >= 76a977ca (RoPE batch-grid fix, 2026-05-11)"),
+    ("ml-explore/mlx-swift-lm", "UN-FORK when upstream rotates gemma with per-row ropeOffset (our 7b93094e)"),
     ("ml-explore/mlx-lm", "batched-decode mechanism reference"),
     ("jundot/omlx", "serving-architecture reference (ported from)"),
     ("ddalcu/mlx-serve", "gotchas mining"),
