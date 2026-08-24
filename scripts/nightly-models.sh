@@ -42,6 +42,7 @@ GATE_CANDIDATES=(
   # an open numerics defect (the batch-invariance FAIL rows below), and because
   # the number needs to be in front of us every night until it is zero.
   MLXCAT_GEMMA_PROBE_MODEL     "gemma-4-12B-it-qat-4bit gemma-4-E2B-it-qat-4bit"
+  MLXCAT_MOE_PROBE_MODEL       "Qwen3-Coder-30B-A3B-Instruct-4bit"
   # gpt-oss-20b FIRST: its sliding_window is 128, so the gate's 160 decode steps
   # actually cross it. gemma-4's window is 512 and the gate never reached it —
   # for its whole life this was a batched-vs-serial test wearing a window test's
@@ -62,6 +63,7 @@ GATE_FILTERS=(
   MLXCAT_POSITIONAL_TEST_MODEL "PositionalStateBatchIntegrationTests"
   MLXCAT_KV_QUANT_TEST_MODEL   "KVQuantizationMemoryTests"
   MLXCAT_GEMMA_PROBE_MODEL     "GemmaRoPEOffsetProbeTests"
+  MLXCAT_MOE_PROBE_MODEL       "MoEWidthNumericsProbeTests"
   MLXSERVE_SLIDING_TEST_MODEL  "SlidingWindowBatchIntegrationTests"
   MLXSERVE_MOE_TEST_MODEL      "MoEBatchIntegrationTests"
   MLXSERVE_VLM_TEST_MODEL      "ModelCacheCapabilitiesTests|ModelDiscoveryTests"
@@ -82,7 +84,7 @@ INVARIANCE_MODELS=(
   Qwen3-Coder-30B-A3B-Instruct-4bit
   gpt-oss-20b-MXFP4-Q8
 )
-GATE_ORDER=(MLXSERVE_TEST_MODEL MLXSERVE_HYBRID_TEST_MODEL MLXCAT_POSITIONAL_TEST_MODEL MLXCAT_KV_QUANT_TEST_MODEL MLXCAT_GEMMA_PROBE_MODEL MLXSERVE_SLIDING_TEST_MODEL MLXSERVE_VLM_TEST_MODEL MLXSERVE_RERANK_TEST_MODEL MLXCAT_MEMORY_BUDGET_MODEL MLXSERVE_MOE_TEST_MODEL)
+GATE_ORDER=(MLXSERVE_TEST_MODEL MLXSERVE_HYBRID_TEST_MODEL MLXCAT_POSITIONAL_TEST_MODEL MLXCAT_KV_QUANT_TEST_MODEL MLXCAT_GEMMA_PROBE_MODEL MLXCAT_MOE_PROBE_MODEL MLXSERVE_SLIDING_TEST_MODEL MLXSERVE_VLM_TEST_MODEL MLXSERVE_RERANK_TEST_MODEL MLXCAT_MEMORY_BUDGET_MODEL MLXSERVE_MOE_TEST_MODEL)
 
 pick_model() {
   local gate="$1" name

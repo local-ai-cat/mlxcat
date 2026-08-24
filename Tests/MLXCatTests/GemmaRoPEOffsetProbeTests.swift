@@ -40,103 +40,31 @@ final class GemmaRoPEOffsetProbeTests: XCTestCase {
     private static let width = 4
     private static let generated = 12
 
-    /// The VLM factory where production uses it, the LLM factory where the model
-    /// is not a VLM at all. gpt-oss is the control that matters for the rotating-
-    /// cache question and it is text-only, so a probe hard-wired to one factory
-    /// cannot ask the question.
+    /// Shared machinery: `BatchRowDivergenceProbe` (extracted from this file
+    /// once `MoEWidthNumericsProbeTests` needed the same three arm shapes).
     private static func loadContainer(_ url: URL) async throws -> ModelContainer {
-        do {
-            return try await VLMModelFactory.shared.loadContainer(
-                from: url, using: #huggingFaceTokenizerLoader())
-        } catch {
-            return try await LLMModelFactory.shared.loadContainer(
-                from: url, using: #huggingFaceTokenizerLoader())
-        }
-    }
-
-    /// Raw token arrays rather than chat-templated prompts, so LENGTH is the
-    /// only variable between the two arms. Distinct content, controlled counts.
-    private static func tokens(lengths: [Int]) -> [MLXArray] {
-        lengths.enumerated().map { row, length in
-            MLXArray((0 ..< length).map { Int32(1000 + row * 97 + ($0 % 512)) })
-        }
+        try await BatchRowDivergenceProbe.loadContainer(url)
     }
 
     private static func divergentRows(
         model: any LanguageModel, lengths: [Int]
     ) async throws -> (diverged: Int, firstStep: Int) {
-        try await divergentRows(
-            model: model,
-            inputs: tokens(lengths: lengths).map { LMInput(text: LMInput.Text(tokens: $0)) })
-    }
-
-    /// Rows that are IDENTICAL in both length and content. Two readouts:
-    /// whether the rows agree with a serial run, and whether they agree with
-    /// EACH OTHER. Rows disagreeing with each other is a per-row indexing or
-    /// contamination bug and localises to a row and a step; rows agreeing with
-    /// each other while all differing from serial is width-level numerics.
-    private static func identicalRowSplit(
-        model: any LanguageModel, input: LMInput, width: Int
-    ) async throws -> (vsSerial: Int, vsEachOther: Int) {
-        let parameters = GenerateParameters(maxTokens: generated, temperature: 0)
-        let serial = try SerialGreedyTokenHelper.tokens(
-            model: model, input: input, parameters: parameters, steps: generated)
-        let engine = MLXCatEngine(
-            model: model, parameters: parameters,
-            maxConcurrentRequests: width, serializationPolicy: .never)
-        let batched = try await engine.generate(
-            (0 ..< width).map { index in
-                Request(
-                    uid: "same-\(index)", input: input, maxTokens: generated,
-                    sampling: SamplingParameters(temperature: 0))
-            }
-        )
-        var vsSerial = 0
-        var vsEachOther = 0
-        let first = batched["same-0"] ?? []
-        for index in 0 ..< width {
-            let got = batched["same-\(index)"] ?? []
-            if got != serial { vsSerial += 1 }
-            if got != first { vsEachOther += 1 }
-        }
-        return (vsSerial, vsEachOther)
+        try await BatchRowDivergenceProbe.divergentRows(
+            model: model, lengths: lengths, generated: generated)
     }
 
     private static func divergentRows(
         model: any LanguageModel, inputs: [LMInput]
     ) async throws -> (diverged: Int, firstStep: Int) {
-        let parameters = GenerateParameters(maxTokens: generated, temperature: 0)
-        let serial = try inputs.map {
-            try SerialGreedyTokenHelper.tokens(
-                model: model, input: $0, parameters: parameters, steps: generated)
-        }
-        let engine = MLXCatEngine(
-            model: model,
-            parameters: parameters,
-            maxConcurrentRequests: inputs.count,
-            serializationPolicy: .never
-        )
-        let batched = try await engine.generate(
-            inputs.enumerated().map { index, input in
-                Request(
-                    uid: "row-\(index)", input: input, maxTokens: generated,
-                    sampling: SamplingParameters(temperature: 0))
-            }
-        )
+        try await BatchRowDivergenceProbe.divergentRows(
+            model: model, inputs: inputs, generated: generated)
+    }
 
-        var diverged = 0
-        var firstStep = Int.max
-        for index in inputs.indices {
-            let got = batched["row-\(index)"] ?? []
-            guard got != serial[index] else { continue }
-            diverged += 1
-            for step in 0 ..< min(got.count, serial[index].count)
-            where got[step] != serial[index][step] {
-                firstStep = min(firstStep, step)
-                break
-            }
-        }
-        return (diverged, firstStep == Int.max ? -1 : firstStep)
+    private static func identicalRowSplit(
+        model: any LanguageModel, input: LMInput, width: Int
+    ) async throws -> (vsSerial: Int, vsEachOther: Int) {
+        try await BatchRowDivergenceProbe.identicalRowSplit(
+            model: model, input: input, width: width, generated: generated)
     }
 
     func testRaggedRowsDivergeAndEqualLengthRowsDoNot() async throws {
