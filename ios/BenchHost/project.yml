@@ -1,0 +1,65 @@
+# BenchHost — the iOS leaderboard row producer (pkg 113 ios-row-producer).
+#
+# A UI-less host app whose only job is to host `BenchHostTests` on a real
+# iPhone: the test downloads the model into the app container, drives
+# MLXCatBaselineKit's BaselineProducer (the same two arms, corpus, and
+# footprint metric as the Mac `mlxcat-baseline` CLI), and attaches the
+# mlxcat-bench/1 JSONL rows to the xcresult.
+#
+#   xcodegen generate --spec ios/BenchHost/project.yml
+#   xcodebuild test -project ios/BenchHost/BenchHost.xcodeproj -scheme BenchHost \
+#     -destination 'platform=iOS,name=<device>' \
+#     -skipMacroValidation -skipPackagePluginValidation
+#
+# MLX needs a real Apple Silicon iPhone — the simulator crashes on init.
+name: BenchHost
+options:
+  bundleIdPrefix: pldev.mlxcat
+  deploymentTarget:
+    iOS: "17.0"
+packages:
+  mlxcat:
+    path: ../..
+  # Same URL + revision as mlxcat's Package.swift pin — one URL per package
+  # identity across the graph. Hub does the one-time model snapshot into the
+  # host container.
+  swift-transformers:
+    url: https://github.com/atlas-open-sources/swift-transformers
+    revision: 089cb3f02a1718b2943c7e7c4553876cd51a75d1
+targets:
+  BenchHost:
+    type: application
+    platform: iOS
+    sources: [BenchHost]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: pldev.mlxcat.benchhost
+        DEVELOPMENT_TEAM: 599WAZ6282
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+  BenchHostTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [BenchHostTests]
+    dependencies:
+      - target: BenchHost
+      - package: mlxcat
+        product: MLXCatBaselineKit
+      - package: swift-transformers
+        product: Hub
+    settings:
+      base:
+        DEVELOPMENT_TEAM: 599WAZ6282
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/BenchHost.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/BenchHost"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+schemes:
+  BenchHost:
+    build:
+      targets:
+        BenchHost: all
+        BenchHostTests: [test]
+    test:
+      targets: [BenchHostTests]
