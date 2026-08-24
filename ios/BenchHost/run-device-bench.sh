@@ -59,7 +59,7 @@ for model in "${MODELS[@]}"; do
     -destination "platform=iOS,id=$DEVICE" \
     -resultBundlePath "$result" \
     -skipMacroValidation -skipPackagePluginValidation \
-    2>&1 | grep -E "Test Case|Test Suite|error:|BENCHHOST |failed" | tail -20 || true
+    2>&1 | tee "$OUT/${model:t}-$stamp.console.log" | grep -E "Test Case|Test Suite|error:|BENCHHOST |failed" | tail -20 || true
   # Pull every attachment; ours is named mlxcat-bench-ios.jsonl.
   exportdir="$OUT/${model:t}-$stamp-attachments"
   xcrun xcresulttool export attachments --path "$result" --output-path "$exportdir" >/dev/null 2>&1 || true
@@ -68,7 +68,16 @@ for model in "${MODELS[@]}"; do
     cat "$found" >> "$OUT/ios-rows.jsonl"
     echo "rows appended -> $OUT/ios-rows.jsonl"
   else
-    echo "⚠️  no attachment found in $result — read the xcresult in Xcode"
+    # A crashed test leaves no attachment, but every completed cell printed a
+    # BENCHROW line to the console first — recover those instead of losing
+    # the whole run (the jetsam night lost 40 minutes of rows this way).
+    rows=$(sed -nE 's/.*BENCHROW (\{.*)/\1/p' "$OUT/${model:t}-$stamp.console.log" | sort -u)
+    if [[ -n "$rows" ]]; then
+      print -r -- "$rows" >> "$OUT/ios-rows.jsonl"
+      echo "no attachment, but $(echo "$rows" | grep -c .) BENCHROW line(s) recovered -> $OUT/ios-rows.jsonl"
+    else
+      echo "⚠️  no attachment and no BENCHROW lines for $result"
+    fi
   fi
 done
 echo "DONE. Review $OUT/ios-rows.jsonl, flip valid_for_leaderboard on rows whose run conditions held, then append into bench/results/ and re-render."

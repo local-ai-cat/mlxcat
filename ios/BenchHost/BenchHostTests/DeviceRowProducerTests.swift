@@ -1,5 +1,6 @@
 import Hub
 import MLXCatBaselineKit
+import os
 import XCTest
 
 /// Produces iOS leaderboard rows on a REAL iPhone — mlxcat-bench/1 JSONL via
@@ -38,6 +39,17 @@ final class DeviceRowProducerTests: XCTestCase {
             matching: ["*.safetensors", "*.json", "*.txt", "*.model", "*.tiktoken"]
         )
 
+        // Jetsam guard: without an allocator ceiling MLX defaults to a cache
+        // limit of 1.5x the working set, and the first iPhone night ended at
+        // 41 minutes with "Test crashed with signal kill" — the OS memory
+        // kill — during gemma-E2B's 4k cell. os_proc_available_memory is the
+        // kernel's own statement of this process's remaining budget; 80% of
+        // it leaves headroom for the transient peak the sampler can't cap.
+        let availableBytes = Int64(os_proc_available_memory())
+        let defaultCeiling = availableBytes > 0 ? Int64(Double(availableBytes) * 0.8) : 4 << 30
+        let ceiling = Int64(environment["BENCHHOST_MEMORY_CEILING_BYTES"] ?? "") ?? defaultCeiling
+        print("BENCHHOST memory ceiling \(ceiling) bytes (available \(availableBytes))")
+
         let configuration = BaselineConfiguration(
             modelDirectory: modelDirectory,
             modelID: URL(fileURLWithPath: modelID).lastPathComponent,
@@ -48,7 +60,8 @@ final class DeviceRowProducerTests: XCTestCase {
                 BaselineCell(promptTokens: 4096, maxTokens: maxTokens),
             ],
             runs: runs,
-            warmup: 1
+            warmup: 1,
+            memoryCeilingBytes: ceiling
         )
 
         var lines: [String] = []
