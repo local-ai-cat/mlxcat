@@ -8,36 +8,51 @@ import XCTest
 /// in-process vs the raw-TokenIterator legacy-LLMEvaluator mechanism), the
 /// prompt corpus, and the footprint metric are identical across platforms.
 ///
-/// The model downloads once into the host app's container (HubApi snapshot)
-/// and is reused on later runs. Rows land as an XCTAttachment named
-/// `mlxcat-bench-ios.jsonl` — pull them from the xcresult and append to
-/// `bench/results/` after stamping validity (a phone has no loadavg; the
-/// stamp is "screen locked, on power" by the operator).
+/// Models download once into the host app's container (HubApi snapshot) and
+/// are reused on later runs. Rows land as an XCTAttachment named
+/// `mlxcat-bench-ios.jsonl` AND as `BENCHROW` console lines — the console copy
+/// is what survives a crash (the driver recovers it), the attachment is the
+/// tidy path when the whole session completes.
 ///
-/// Config via the test plan / xcodebuild environment:
-///   BENCHHOST_MODEL_ID    HF repo id (default mlx-community/gemma-4-E2B-it-qat-4bit,
-///                         the matrix's device-floor model)
+/// Config via the xcodebuild ENVIRONMENT (TEST_RUNNER_ prefix):
+///   BENCHHOST_MODEL_ID    HF repo id, or a COMMA-SEPARATED list (default
+///                         mlx-community/gemma-4-E2B-it-qat-4bit). The whole
+///                         list runs inside ONE app session on purpose: a
+///                         passcode phone can auto-lock in the gap between
+///                         separate xcodebuild launches, and a locked device
+///                         fails the next install — one launch, one night.
 ///   BENCHHOST_MAX_TOKENS  generation budget per cell (default 128)
 ///   BENCHHOST_RUNS        measured runs per cell (default 3)
+///   BENCHHOST_MEMORY_CEILING_BYTES  allocator ceiling override
 final class DeviceRowProducerTests: XCTestCase {
 
     private static let defaultModelID = "mlx-community/gemma-4-E2B-it-qat-4bit"
+
+    /// Rows collected across the @Sendable emit callback.
+    private final class RowBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var rows: [String] = []
+        func append(_ line: String) {
+            lock.lock()
+            rows.append(line)
+            lock.unlock()
+        }
+        var all: [String] {
+            lock.lock()
+            defer { lock.unlock() }
+            return rows
+        }
+    }
 
     func testProduceLeaderboardRows() async throws {
         #if targetEnvironment(simulator)
         throw XCTSkip("MLX needs a real Apple Silicon iPhone; the simulator cannot run this.")
         #else
         let environment = ProcessInfo.processInfo.environment
-        let modelID = environment["BENCHHOST_MODEL_ID"] ?? Self.defaultModelID
+        let modelIDs = (environment["BENCHHOST_MODEL_ID"] ?? Self.defaultModelID)
+            .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
         let maxTokens = Int(environment["BENCHHOST_MAX_TOKENS"] ?? "") ?? 128
         let runs = Int(environment["BENCHHOST_RUNS"] ?? "") ?? 3
-
-        // Snapshot into the app container; a second run reuses the files.
-        let hub = HubApi()
-        let modelDirectory = try await hub.snapshot(
-            from: modelID,
-            matching: ["*.safetensors", "*.json", "*.txt", "*.model", "*.tiktoken"]
-        )
 
         // Jetsam guard: without an allocator ceiling MLX defaults to a cache
         // limit of 1.5x the working set, and the first iPhone night ended at
@@ -50,44 +65,62 @@ final class DeviceRowProducerTests: XCTestCase {
         let ceiling = Int64(environment["BENCHHOST_MEMORY_CEILING_BYTES"] ?? "") ?? defaultCeiling
         print("BENCHHOST memory ceiling \(ceiling) bytes (available \(availableBytes))")
 
-        let configuration = BaselineConfiguration(
-            modelDirectory: modelDirectory,
-            modelID: URL(fileURLWithPath: modelID).lastPathComponent,
-            // The device tiers: short and 4k. 16k on a phone is a memory
-            // campaign of its own — add it deliberately, not by default.
-            cells: [
-                BaselineCell(promptTokens: 256, maxTokens: maxTokens),
-                BaselineCell(promptTokens: 4096, maxTokens: maxTokens),
-            ],
-            runs: runs,
-            warmup: 1,
-            memoryCeilingBytes: ceiling
-        )
+        let box = RowBox()
+        let deviceModel = Self.hardwareModel()
+        let osVersion = await MainActor.run { "iOS " + UIDevice.current.systemVersion }
 
-        var lines: [String] = []
-        try await BaselineProducer.run(
-            configuration,
-            emit: { record in
-                var stamped = record
-                stamped["platform"] = "ios"
-                stamped["device"] = [
-                    "model": Self.hardwareModel(),
-                    "os": "iOS " + UIDevice.current.systemVersion,
-                ]
-                // Validity is stamped false here on purpose: the harness's
-                // quiet-machine guard has no equivalent on the phone, so the
-                // operator promotes rows to valid when the run conditions
-                // (locked screen, on power, cool device) actually held.
-                stamped["valid_for_leaderboard"] = false
-                stamped["invalid_reason"] = "ios producer: operator must confirm run conditions"
-                guard let data = try? JSONSerialization.data(withJSONObject: stamped, options: [.sortedKeys]),
-                      let line = String(data: data, encoding: .utf8) else { return }
-                lines.append(line)
-                print("BENCHROW \(line)")
-            },
-            log: { line in print("BENCHHOST \(line)") }
-        )
+        for modelID in modelIDs {
+            print("BENCHHOST model \(modelID) starting")
+            // Snapshot into the app container; a second run reuses the files.
+            let hub = HubApi()
+            let modelDirectory = try await hub.snapshot(
+                from: modelID,
+                matching: ["*.safetensors", "*.json", "*.txt", "*.model", "*.tiktoken"]
+            )
 
+            let configuration = BaselineConfiguration(
+                modelDirectory: modelDirectory,
+                modelID: URL(fileURLWithPath: modelID).lastPathComponent,
+                // The device tiers: short and 4k. 16k on a phone is a memory
+                // campaign of its own — add it deliberately, not by default.
+                cells: [
+                    BaselineCell(promptTokens: 256, maxTokens: maxTokens),
+                    BaselineCell(promptTokens: 4096, maxTokens: maxTokens),
+                ],
+                runs: runs,
+                warmup: 1,
+                memoryCeilingBytes: ceiling
+            )
+
+            try await BaselineProducer.run(
+                configuration,
+                emit: { record in
+                    var stamped = record
+                    stamped["platform"] = "ios"
+                    stamped["device"] = [
+                        "model": deviceModel,
+                        "os": osVersion,
+                    ]
+                    // Validity is stamped false on purpose: the harness's
+                    // quiet-machine guard has no equivalent on the phone, so
+                    // the operator promotes rows to valid when the run
+                    // conditions (untouched screen, on power, cool device)
+                    // actually held.
+                    stamped["valid_for_leaderboard"] = false
+                    stamped["invalid_reason"] = "ios producer: operator must confirm run conditions"
+                    guard
+                        let data = try? JSONSerialization.data(
+                            withJSONObject: stamped, options: [.sortedKeys]),
+                        let line = String(data: data, encoding: .utf8)
+                    else { return }
+                    box.append(line)
+                    print("BENCHROW \(line)")
+                },
+                log: { line in print("BENCHHOST \(line)") }
+            )
+        }
+
+        let lines = box.all
         XCTAssertFalse(lines.isEmpty, "the producer emitted no rows")
 
         let attachment = XCTAttachment(

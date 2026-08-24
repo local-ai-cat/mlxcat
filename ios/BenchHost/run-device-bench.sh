@@ -43,41 +43,41 @@ mkdir -p "$OUT"
 
 xcodegen generate --spec project.yml >/dev/null
 
-for model in "${MODELS[@]}"; do
-  stamp=$(date +%Y%m%d-%H%M%S)
-  result="$OUT/${model:t}-$stamp.xcresult"
-  echo "== $model on $DEVICE =="
-  # TEST_RUNNER_ vars work only as ENVIRONMENT of the xcodebuild process —
-  # as a trailing KEY=VALUE arg they become a build setting the test never
-  # sees, and every model silently ran the default (the first iPhone night
-  # benched gemma three times under three different names).
-  # Per-device DerivedData: two phones benching concurrently must not race
-  # one build directory.
-  TEST_RUNNER_BENCHHOST_MODEL_ID="$model" xcodebuild test \
-    -project BenchHost.xcodeproj -scheme BenchHost \
-    -derivedDataPath ".build/dd-$DEVICE" \
-    -destination "platform=iOS,id=$DEVICE" \
-    -resultBundlePath "$result" \
-    -skipMacroValidation -skipPackagePluginValidation \
-    2>&1 | tee "$OUT/${model:t}-$stamp.console.log" | grep -E "Test Case|Test Suite|error:|BENCHHOST |failed" | tail -20 || true
-  # Pull every attachment; ours is named mlxcat-bench-ios.jsonl.
-  exportdir="$OUT/${model:t}-$stamp-attachments"
-  xcrun xcresulttool export attachments --path "$result" --output-path "$exportdir" >/dev/null 2>&1 || true
-  found=$(find "$exportdir" -name "*.txt" -o -name "*jsonl*" 2>/dev/null | head -1)
-  if [[ -n "${found:-}" ]]; then
-    cat "$found" >> "$OUT/ios-rows.jsonl"
-    echo "rows appended -> $OUT/ios-rows.jsonl"
+# ONE xcodebuild invocation for the whole roster: a passcode phone can
+# auto-lock in the minutes between per-model launches, and iOS SIGKILLs
+# Metal work behind a locked screen — the first device night died to
+# exactly that. The test loops the comma-separated list inside a single
+# app session with the idle timer held.
+model_list="${(j:,:)MODELS}"
+stamp=$(date +%Y%m%d-%H%M%S)
+result="$OUT/night-$stamp.xcresult"
+console="$OUT/night-$stamp.console.log"
+echo "== roster: $model_list on $DEVICE =="
+TEST_RUNNER_BENCHHOST_MODEL_ID="$model_list" xcodebuild test \
+  -project BenchHost.xcodeproj -scheme BenchHost \
+  -derivedDataPath ".build/dd-$DEVICE" \
+  -destination "platform=iOS,id=$DEVICE" \
+  -resultBundlePath "$result" \
+  -test-timeouts-enabled NO \
+  -skipMacroValidation -skipPackagePluginValidation \
+  2>&1 | tee "$console" | grep -E "Test Case|Test Suite|error:|BENCHHOST |failed" | tail -30 || true
+
+exportdir="$OUT/night-$stamp-attachments"
+mkdir -p "$exportdir"
+xcrun xcresulttool export attachments --path "$result" --output-path "$exportdir" >/dev/null 2>&1 || true
+found=$(find "$exportdir" -type f ! -name manifest.json 2>/dev/null | head -1)
+if [[ -n "${found:-}" ]]; then
+  cat "$found" >> "$OUT/ios-rows.jsonl"
+  echo "attachment rows appended -> $OUT/ios-rows.jsonl"
+else
+  # A crashed session leaves no attachment, but every completed cell printed
+  # a BENCHROW line first — recover those instead of losing the night.
+  rows=$(sed -nE 's/.*BENCHROW (\{.*)/\1/p' "$console" | sort -u)
+  if [[ -n "$rows" ]]; then
+    print -r -- "$rows" >> "$OUT/ios-rows.jsonl"
+    echo "no attachment; $(echo "$rows" | grep -c .) BENCHROW line(s) recovered -> $OUT/ios-rows.jsonl"
   else
-    # A crashed test leaves no attachment, but every completed cell printed a
-    # BENCHROW line to the console first — recover those instead of losing
-    # the whole run (the jetsam night lost 40 minutes of rows this way).
-    rows=$(sed -nE 's/.*BENCHROW (\{.*)/\1/p' "$OUT/${model:t}-$stamp.console.log" | sort -u)
-    if [[ -n "$rows" ]]; then
-      print -r -- "$rows" >> "$OUT/ios-rows.jsonl"
-      echo "no attachment, but $(echo "$rows" | grep -c .) BENCHROW line(s) recovered -> $OUT/ios-rows.jsonl"
-    else
-      echo "⚠️  no attachment and no BENCHROW lines for $result"
-    fi
+    echo "⚠️  no attachment and no BENCHROW lines — read $result in Xcode"
   fi
-done
+fi
 echo "DONE. Review $OUT/ios-rows.jsonl, flip valid_for_leaderboard on rows whose run conditions held, then append into bench/results/ and re-render."
