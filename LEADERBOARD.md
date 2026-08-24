@@ -15,28 +15,28 @@ Metrics: **TTFT** time to first visible token (ms, median) · **prefill** prompt
 | context | gen tok | cache | engine | transport | version | prompt tok | TTFT ms | prefill tok/s | decode tok/s | e2e tok/s | peak GiB | measured |
 |---|---:|---|---|---|---|---:|---:|---:|---:|---:|---:|---|
 | short | 128 | cold | mlx-serve | http | 26.8.9 | 228 | 361 | 633 | **87.3** | 70.6 | 16.91 | 2026-08-22 |
-| short | 128 | cold | mlxcat-moe-uncapped | http | — | 226 | **325** | 696 | 86.4 | **71.3** | 17.32 | 2026-08-23 |
-| short | 128 | cold | mlxcat-cache-held | http | — | 227 | 328 | **698** | 86.3 | 71.1 | 17.35 | 2026-08-23 |
-| short | 128 | cold | mlxcat | http | — | 227 | 335 | 681 | 85.2 | 70.1 | 17.16 | 2026-08-23 |
+| short | 128 | cold | mlxcat-cache-held | http | — | 227 | 326 | 697 | 86.5 | **71.4** | 17.17 | 2026-08-24 |
+| short | 128 | cold | mlxcat-moe-uncapped | http | — | 226 | 325 | 696 | 86.4 | 71.3 | 17.32 | 2026-08-23 |
+| short | 128 | cold | mlxcat | http | — | 227 | **324** | **697** | 86.4 | 71.3 | 17.16 | 2026-08-24 |
 | short | 128 | cold | mlx-lm | http | — | 227 | 434 | 528 | 69.6 | 56.8 | 17.12 | 2026-08-21 |
 | short | 128 | cold | omlx | http | — | 226 | 604 | 376 | — | 61.5 | 16.85 | 2026-08-21 |
 | short | 128 | cold | mlx-swift-lm-tokeniterator | in-process | — | 213 | 393 | 542 | 81.8 | 65.8 | 16.61 | 2026-08-21 |
-| 4k | 128 | cold | mlxcat-cache-held | http | — | 4113 | 6,076 | 677 | **66.7** | 16.0 | 20.26 | 2026-08-23 |
-| 4k | 128 | cold | mlxcat-moe-uncapped | http | — | 4114 | **5,482** | **750** | 66.7 | **17.3** | 20.24 | 2026-08-23 |
-| 4k | 128 | cold | mlxcat | http | — | 4057 | 5,931 | 684 | 66.6 | 16.3 | 20.57 | 2026-08-23 |
+| 4k | 128 | cold | mlxcat-cache-held | http | — | 4054 | **5,356** | **757** | **67.5** | **17.7** | 20.51 | 2026-08-24 |
+| 4k | 128 | cold | mlxcat | http | — | 4113 | 5,478 | 751 | 66.7 | 17.3 | 20.23 | 2026-08-24 |
+| 4k | 128 | cold | mlxcat-moe-uncapped | http | — | 4114 | 5,482 | 750 | 66.7 | 17.3 | 20.24 | 2026-08-23 |
 | 4k | 128 | cold | mlx-serve | http | 26.8.9 | 4114 | 5,865 | 701 | 64.2 | 16.3 | 19.85 | 2026-08-22 |
 | 4k | 128 | cold | mlx-lm | http | — | 4114 | 6,179 | 666 | 55.0 | 15.1 | 19.70 | 2026-08-21 |
 | 4k | 128 | cold | omlx | http | — | 4113 | 7,313 | 562 | — | 14.0 | 18.36 | 2026-08-21 |
 | 4k | 128 | cold | mlx-swift-lm-tokeniterator | in-process | — | 3983 | 6,577 | 606 | 67.0 | 15.1 | 19.53 | 2026-08-21 |
-| 16k | 64 | cold | mlxcat-cache-held | http | — | 16408 | 36,762 | 446 | **43.8** | 1.7 | 22.64 | 2026-08-23 |
-| 16k | 64 | cold | mlxcat-moe-uncapped | http | — | 16410 | **33,823** | **485** | 43.8 | **1.8** | 23.02 | 2026-08-23 |
-| 16k | 64 | cold | mlxcat | http | — | 16353 | 36,817 | 444 | 43.2 | 1.7 | 23.26 | 2026-08-23 |
+| 16k | 64 | cold | mlxcat | http | — | 16409 | **33,557** | **489** | **43.8** | **1.8** | 22.65 | 2026-08-24 |
+| 16k | 64 | cold | mlxcat-moe-uncapped | http | — | 16410 | 33,823 | 485 | 43.8 | 1.8 | 23.02 | 2026-08-23 |
+| 16k | 64 | cold | mlxcat-cache-held | http | — | 16351 | 33,684 | 485 | 43.7 | 1.8 | 22.89 | 2026-08-24 |
 | 16k | 64 | cold | mlx-serve | http | 26.8.9 | 16408 | 39,133 | 419 | 35.3 | 1.6 | 21.55 | 2026-08-22 |
 | 16k | 64 | cold | mlx-lm | http | — | 16351 | 45,988 | 356 | 33.7 | 1.3 | 29.09 | 2026-08-21 |
 | 16k | 64 | cold | omlx | http | — | 16410 | 42,219 | 389 | — | 1.5 | 22.36 | 2026-08-21 |
-| longgen | 1024 | cold | mlxcat-moe-uncapped | http | — | 1039 | **1,268** | **819** | **76.2** | **69.2** | 19.39 | 2026-08-23 |
-| longgen | 1024 | cold | mlxcat | http | — | 1041 | 1,576 | 661 | 75.6 | 66.8 | 19.53 | 2026-08-23 |
-| longgen | 1024 | cold | mlxcat-cache-held | http | — | 1040 | 1,530 | 680 | 75.4 | 67.0 | 19.04 | 2026-08-23 |
+| longgen | 1024 | cold | mlxcat | http | — | 1039 | 1,270 | 817 | **76.7** | 63.9 | 18.02 | 2026-08-24 |
+| longgen | 1024 | cold | mlxcat-moe-uncapped | http | — | 1039 | 1,268 | 819 | 76.2 | 69.2 | 19.39 | 2026-08-23 |
+| longgen | 1024 | cold | mlxcat-cache-held | http | — | 1039 | **1,268** | **820** | 76.1 | **69.3** | 19.84 | 2026-08-24 |
 | longgen | 1024 | cold | mlx-serve | http | 26.8.9 | 1039 | 1,588 | 656 | 74.9 | 66.9 | 18.92 | 2026-08-22 |
 | longgen | 1024 | cold | omlx | http | — | 1040 | 1,953 | 532 | — | 63.4 | 18.21 | 2026-08-21 |
 | longgen | 1024 | cold | mlx-swift-lm-tokeniterator | in-process | — | 967 | 1,740 | 556 | 72.8 | 64.8 | 17.10 | 2026-08-21 |
@@ -47,8 +47,8 @@ Concurrency (`longgen` prompt, aggregate tok/s across N streams, median of runs)
 |---|---:|---:|---:|---:|
 | mlx-lm | 70.7 | 87.1 | 103.2 | 26.90 |
 | mlx-serve | 67.2 | 67.7 | 67.9 | 20.93 |
-| mlxcat | 78.8 | 75.7 | 78.3 | 21.76 |
-| mlxcat-cache-held | 77.2 | 79.9 | 80.1 | 21.15 |
+| mlxcat | 85.2 | 98.4 | 118.2 | 24.20 |
+| mlxcat-cache-held | 79.8 | 101.1 | 115.9 | 23.01 |
 | mlxcat-moe-uncapped | 85.4 | 96.8 | 115.5 | 23.38 |
 | omlx | 76.4 | 85.1 | 96.3 | 20.86 |
 
@@ -58,8 +58,8 @@ Concurrency (`short` prompt, aggregate tok/s across N streams, median of runs):
 |---|---:|---:|---:|---:|
 | mlx-lm | — | 93.1 | 116.5 | 18.76 |
 | mlx-serve | 64.7 | 65.7 | 64.8 | 19.30 |
-| mlxcat | 83.3 | 83.8 | 84.6 | 17.30 |
-| mlxcat-cache-held | 84.4 | 84.6 | 85.5 | 17.31 |
+| mlxcat | 87.7 | 102.0 | 122.9 | 18.87 |
+| mlxcat-cache-held | 87.4 | 103.0 | 123.1 | 19.17 |
 | mlxcat-moe-uncapped | 87.7 | 102.2 | 123.2 | 19.05 |
 | omlx | 75.7 | 87.3 | 100.1 | 19.32 |
 
