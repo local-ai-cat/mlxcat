@@ -673,7 +673,15 @@ class Engine:
             "stream": True,
             "stream_options": {"include_usage": True},
         }
-        extra = self.spec["extra_request_fields"] if "extra_request_fields" in self.spec else {"enable_thinking": False}
+        # No hidden per-engine defaults: engines without extra_request_fields
+        # get NOTHING extra, same as the four rivals whose specs already said
+        # {}. The old default ({"enable_thinking": false}) reached only mlxcat,
+        # so on hybrid-thinking models (qwen3.5/3.8) our longgen rows answered
+        # and EOS'd near 520 tokens while every rival thought its way to the
+        # full 1024 budget — two different workloads wearing one cell, worth
+        # 5-8 board points against us (2026-08-24 cliff analysis; the
+        # finish_reasons metric exists to catch exactly this class).
+        extra = self.spec.get("extra_request_fields") or {}
         body.update(extra)
         request = urllib.request.Request(
             self.url.rstrip("/") + "/v1/chat/completions",

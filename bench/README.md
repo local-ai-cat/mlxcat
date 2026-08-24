@@ -146,6 +146,14 @@ of two probe requests so "16k" really is ~16k tokens on that tokenizer.
 | `server_tps` | whatever the engine itself reports in `usage`, if anything — advisory |
 | `finish_reasons` | count per SSE `finish_reason` across the cell's runs (`stop` = EOS, `length` = token budget, `unreported`). At temp 0 on longgen some engines EOS near 520 tokens where others run all 1024 for the same model; a cell mixing the two compares workloads, not engines, and this field makes that visible per row (2026-08-24 concurrency-cliff analysis) |
 
+**Request-body parity (2026-08-24):** the harness sends every engine the SAME body —
+no hidden per-engine defaults. Until that date, engines without `extra_request_fields`
+(only ours) silently received `{"enable_thinking": false}` while the rivals' explicit
+`{}` meant model-default thinking: on hybrid-thinking qwen models our longgen rows
+answered (~520 tokens, `stop`) while rivals thought to the full 1024 (`length`) — two
+workloads in one cell. mlxcat longgen qwen rows from before this date are therefore
+not comparable to rival rows in the same cells; re-measured rows supersede them.
+
 An engine that does not return `usage.completion_tokens` fails the cell: we do
 not estimate tokens from characters.
 
