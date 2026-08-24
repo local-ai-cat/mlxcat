@@ -51,8 +51,11 @@ for model in "${MODELS[@]}"; do
   # as a trailing KEY=VALUE arg they become a build setting the test never
   # sees, and every model silently ran the default (the first iPhone night
   # benched gemma three times under three different names).
+  # Per-device DerivedData: two phones benching concurrently must not race
+  # one build directory.
   TEST_RUNNER_BENCHHOST_MODEL_ID="$model" xcodebuild test \
     -project BenchHost.xcodeproj -scheme BenchHost \
+    -derivedDataPath ".build/dd-$DEVICE" \
     -destination "platform=iOS,id=$DEVICE" \
     -resultBundlePath "$result" \
     -skipMacroValidation -skipPackagePluginValidation \
