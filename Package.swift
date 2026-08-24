@@ -40,6 +40,12 @@ let package = Package(
             name: "mlxcat-baseline",
             targets: ["MLXCatBaseline"]
         ),
+        // Library form of the baseline producer, for the on-device iOS
+        // benchmark host (pkg 113 ios-row-producer).
+        .library(
+            name: "MLXCatBaselineKit",
+            targets: ["MLXCatBaselineKit"]
+        ),
         .executable(
             name: "mlxcat-http",
             targets: ["MLXCatHTTPServer"]

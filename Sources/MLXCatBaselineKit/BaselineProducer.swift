@@ -98,6 +98,7 @@ public enum BaselineError: Error, CustomStringConvertible {
 // MARK: - Footprint (same metric as bench/run.py: proc_pid_rusage / RUSAGE_INFO_V4)
 
 public enum BaselineFootprint {
+    #if os(macOS)
     public static func read() -> (phys: UInt64, lifetimeMax: UInt64)? {
         var info = rusage_info_v4()
         let rc = withUnsafeMutablePointer(to: &info) { pointer -> Int32 in
@@ -108,6 +109,24 @@ public enum BaselineFootprint {
         guard rc == 0 else { return nil }
         return (info.ri_phys_footprint, info.ri_lifetime_max_phys_footprint)
     }
+    #else
+    // iOS has no proc_pid_rusage in the public SDK; task_vm_info reads the
+    // same phys_footprint ledger for the current task, and its ledger peak is
+    // the same "lifetime max" semantic. Values stay comparable to the Mac
+    // rows because both report the kernel's phys_footprint accounting.
+    public static func read() -> (phys: UInt64, lifetimeMax: UInt64)? {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(
+            MemoryLayout<task_vm_info_data_t>.stride / MemoryLayout<natural_t>.stride)
+        let rc = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { raw in
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), raw, &count)
+            }
+        }
+        guard rc == KERN_SUCCESS else { return nil }
+        return (UInt64(info.phys_footprint), UInt64(info.ledger_phys_footprint_peak))
+    }
+    #endif
 }
 
 final class FootprintSampler: @unchecked Sendable {

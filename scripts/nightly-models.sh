@@ -191,6 +191,7 @@ run_gate() {
   env -u MLXSERVE_TEST_MODEL -u MLXSERVE_HYBRID_TEST_MODEL -u MLXSERVE_SLIDING_TEST_MODEL -u MLXSERVE_MOE_TEST_MODEL \
       -u MLXSERVE_VLM_TEST_MODEL -u MLXSERVE_RERANK_TEST_MODEL -u MLXCAT_MEMORY_BUDGET_MODEL \
       -u MLXCAT_POSITIONAL_TEST_MODEL -u MLXCAT_KV_QUANT_TEST_MODEL -u MLXCAT_GEMMA_PROBE_MODEL \
+      -u MLXCAT_MOE_PROBE_MODEL \
       "${budget_env[@]}" "$gate=$model" swift test --skip-build --filter "$filter" > "$log" 2>&1
   rc=$?
   # This package runs BOTH test libraries, so `swift test` prints two summaries:
@@ -235,6 +236,21 @@ for gate in $GATE_ORDER; do
       run_gate "$gate" "$ROOT/$name" "$filter" "${MEMORY_BUDGETS[$name]}" "$name"
     done
     (( ran_any )) || echo "| $gate | (no budgeted model on disk) | — | SKIP |" >> "$OUT"
+    continue
+  fi
+  if [[ "$gate" == MLXCAT_GEMMA_PROBE_MODEL ]]; then
+    # BOTH gemmas, not first-on-disk-wins: gemma4 (E2B) and gemma4_unified
+    # (12B) are distinct loader paths and BOTH are granted batched text decode,
+    # so a probe that stops at the first candidate leaves the other family's
+    # production path unexercised — an E2B regression would stay green behind
+    # a 12B pass (Codex round-1 finding, 2026-08-24).
+    ran_any=0
+    for name in ${=GATE_CANDIDATES[$gate]}; do
+      [[ -f "$ROOT/$name/config.json" ]] || continue
+      ran_any=1
+      run_gate "$gate" "$ROOT/$name" "$filter" "" "$name"
+    done
+    (( ran_any )) || echo "| $gate | (no candidate model on disk) | — | SKIP |" >> "$OUT"
     continue
   fi
   model="$(pick_model "$gate")" || { echo "| $gate | (no candidate model on disk) | — | SKIP |" >> "$OUT"; continue; }

@@ -53,6 +53,16 @@ def load_records(results_dir: Path) -> List[Dict[str, Any]]:
     return records
 
 
+def dominant_finish(metrics: Dict[str, Any]) -> Optional[str]:
+    """The reason most of a cell's requests ended ("stop" = EOS, "length" =
+    token budget). None when the row predates finish_reason recording or the
+    engine never reported one — unknown, not asserted-equal."""
+    reasons = {k: v for k, v in (metrics.get("finish_reasons") or {}).items() if k != "unreported"}
+    if not reasons:
+        return None
+    return max(reasons.items(), key=lambda kv: kv[1])[0]
+
+
 def med(block: Optional[Dict[str, Any]]) -> Optional[float]:
     if not block:
         return None
@@ -215,6 +225,21 @@ def render(records: List[Dict[str, Any]], matrix: Dict[str, Any]) -> str:
                                 r["engine"]["name"],
                             ),
                         )
+                        # Rows in one comparison scope that FINISHED for
+                        # different reasons (EOS vs token budget) did different
+                        # amounts of work; ranking them silently is the
+                        # completion-mix confound. Mark every row in such a
+                        # scope so the disagreement is on the page, not in the
+                        # JSON. (Codex round-1 finding, 2026-08-24.)
+                        finish_scopes: Dict[Tuple, set] = defaultdict(set)
+                        for record in rows:
+                            reason = dominant_finish(record["metrics"])
+                            if reason:
+                                finish_scopes[(
+                                    record["engine"].get("transport") or "http",
+                                    int(record["workload"].get("max_tokens") or 0),
+                                    record["workload"].get("cache_mode", "cold"),
+                                )].add(reason)
                         best_decode = bold_best(rows, "decode_tps", True)
                         best_e2e = bold_best(rows, "e2e_tps", True)
                         best_prefill = bold_best(rows, "prefill_tps", True)
@@ -239,6 +264,8 @@ def render(records: List[Dict[str, Any]], matrix: Dict[str, Any]) -> str:
                                 prefill = f"**{prefill}**"
                             if best_ttft.get(mark_scope + (name,)):
                                 ttft = f"**{ttft}**"
+                            if len(finish_scopes.get(mark_scope, set())) > 1 and dominant_finish(m):
+                                e2e += " ◊"
                             weights_note = ""
                             if record["engine"].get("weights") and "same files" not in record["engine"]["weights"]:
                                 weights_note = " ⚠︎"
@@ -266,11 +293,22 @@ def render(records: List[Dict[str, Any]], matrix: Dict[str, Any]) -> str:
                         out.append("")
                         out.append("| engine | " + " | ".join(f"×{w}" for w in width_list) + " | peak GiB @max |")
                         out.append("|---|" + "---:|" * len(width_list) + "---:|")
+                        finish_by_width: Dict[int, set] = defaultdict(set)
+                        for record in rows_for_tier:
+                            reason = dominant_finish(record["metrics"])
+                            if reason:
+                                finish_by_width[int(record["workload"]["concurrency"])].add(reason)
                         for name in sorted(by_engine):
                             cells = []
                             for w in width_list:
                                 r = by_engine[name].get(w)
-                                cells.append(fmt(med(r["metrics"].get("aggregate_tps"))) if r else "—")
+                                if r is None:
+                                    cells.append("—")
+                                    continue
+                                cell = fmt(med(r["metrics"].get("aggregate_tps")))
+                                if len(finish_by_width.get(w, set())) > 1 and dominant_finish(r["metrics"]):
+                                    cell += " ◊"
+                                cells.append(cell)
                             last = by_engine[name].get(width_list[-1])
                             out.append(f"| {name} | " + " | ".join(cells) + f" | {gib(last['metrics'].get('peak_phys_footprint_bytes')) if last else '—'} |")
                         out.append("")
@@ -282,7 +320,10 @@ def render(records: List[Dict[str, Any]], matrix: Dict[str, Any]) -> str:
                "SAME engine to read what its cache is worth; compare engines within one cache mode.")
     out.append("")
     out.append("⚠︎ = different weight artifacts than the `mlx-community` safetensors the other rows use (e.g. Ollama library, GGUF) — compare quality class, not bits. "
-               "† = fewer measurable runs than requested (some runs had no token-granular decode window).")
+               "† = fewer measurable runs than requested (some runs had no token-granular decode window). "
+               "◊ = engines in this cell finished for DIFFERENT reasons (EOS vs token budget) — their throughput "
+               "figures compare different completion mixes, not the same work; rows without recorded "
+               "finish_reasons are unknown and carry no marker.")
     out.append("")
     out.append("## How to add a row")
     out.append("")

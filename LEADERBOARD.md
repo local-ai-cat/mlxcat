@@ -34,9 +34,9 @@ Metrics: **TTFT** time to first visible token (ms, median) · **prefill** prompt
 | 16k | 64 | cold | mlx-serve | http | 26.8.9 | 16408 | 39,133 | 419 | 35.3 | 1.6 | 21.55 | 2026-08-22 |
 | 16k | 64 | cold | mlx-lm | http | — | 16351 | 45,988 | 356 | 33.7 | 1.3 | 29.09 | 2026-08-21 |
 | 16k | 64 | cold | omlx | http | — | 16410 | 42,219 | 389 | — | 1.5 | 22.36 | 2026-08-21 |
-| longgen | 1024 | cold | mlxcat | http | — | 1039 | 1,270 | 817 | **76.7** | 63.9 | 18.02 | 2026-08-24 |
+| longgen | 1024 | cold | mlxcat | http | — | 1039 | 1,270 | 817 | **76.7** | 63.9 ◊ | 18.02 | 2026-08-24 |
 | longgen | 1024 | cold | mlxcat-moe-uncapped | http | — | 1039 | 1,268 | 819 | 76.2 | 69.2 | 19.39 | 2026-08-23 |
-| longgen | 1024 | cold | mlxcat-cache-held | http | — | 1039 | **1,268** | **820** | 76.1 | **69.3** | 19.84 | 2026-08-24 |
+| longgen | 1024 | cold | mlxcat-cache-held | http | — | 1039 | **1,268** | **820** | 76.1 | **69.3** ◊ | 19.84 | 2026-08-24 |
 | longgen | 1024 | cold | mlx-serve | http | 26.8.9 | 1039 | 1,588 | 656 | 74.9 | 66.9 | 18.92 | 2026-08-22 |
 | longgen | 1024 | cold | omlx | http | — | 1040 | 1,953 | 532 | — | 63.4 | 18.21 | 2026-08-21 |
 | longgen | 1024 | cold | mlx-swift-lm-tokeniterator | in-process | — | 967 | 1,740 | 556 | 72.8 | 64.8 | 17.10 | 2026-08-21 |
@@ -350,7 +350,7 @@ Concurrency (`longgen` prompt, aggregate tok/s across N streams, median of runs)
 
 `cache` column: **cold** = every request carries a unique prefix so no prefix cache can serve it (the fair cross-engine default); **warm** = the same prompt repeated, which is the only cell where a tiered prefix KV cache — the feature mlxcat and oMLX both exist for — can actually hit. Compare warm against cold for the SAME engine to read what its cache is worth; compare engines within one cache mode.
 
-⚠︎ = different weight artifacts than the `mlx-community` safetensors the other rows use (e.g. Ollama library, GGUF) — compare quality class, not bits. † = fewer measurable runs than requested (some runs had no token-granular decode window).
+⚠︎ = different weight artifacts than the `mlx-community` safetensors the other rows use (e.g. Ollama library, GGUF) — compare quality class, not bits. † = fewer measurable runs than requested (some runs had no token-granular decode window). ◊ = engines in this cell finished for DIFFERENT reasons (EOS vs token budget) — their throughput figures compare different completion mixes, not the same work; rows without recorded finish_reasons are unknown and carry no marker.
 
 ## How to add a row
 

@@ -184,12 +184,21 @@ class Footprint:
     _LIFETIME_MAX_INDEX = 28
 
     def __init__(self) -> None:
-        path = ctypes.util.find_library("proc") or "/usr/lib/libproc.dylib"
-        self._lib = ctypes.CDLL(path)
-        self._lib.proc_pid_rusage.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
-        self._lib.proc_pid_rusage.restype = ctypes.c_int
+        # libproc is macOS-only. A missing library must not be fatal at
+        # construction: CI's ubuntu job runs `--dry-run` through main(), which
+        # builds this object but never measures. read() returning None on such
+        # a host is honest — no footprint, rather than no harness.
+        try:
+            path = ctypes.util.find_library("proc") or "/usr/lib/libproc.dylib"
+            self._lib = ctypes.CDLL(path)
+            self._lib.proc_pid_rusage.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
+            self._lib.proc_pid_rusage.restype = ctypes.c_int
+        except OSError:
+            self._lib = None
 
     def read(self, pid: int) -> Optional[Dict[str, int]]:
+        if self._lib is None:
+            return None
         buffer = ctypes.create_string_buffer(1024)
         rc = self._lib.proc_pid_rusage(pid, self.RUSAGE_INFO_V4, buffer)
         if rc != 0:
