@@ -35,7 +35,9 @@ public enum BatchKVCacheError: Error, Equatable, CustomStringConvertible {
 }
 
 public final class BatchKVCache: KVCache, BatchPositionedKVCache {
-    public private(set) var leftPadding: MLXArray
+    public private(set) var leftPadding: MLXArray {
+        didSet { paddingGeneration &+= 1 }
+    }
     public private(set) var idx: Int
     public var offset: Int { idx }
     public var maxSize: Int? { nil }
@@ -84,6 +86,56 @@ public final class BatchKVCache: KVCache, BatchPositionedKVCache {
 
     public var batchOffset: MLXArray {
         positionOffsets
+    }
+
+    // MARK: Single-row scalar RoPE offset
+
+    /// Bumped by `leftPadding.didSet`, so every one of its write sites —
+    /// current and future — invalidates the cached scalar below without any
+    /// per-site bookkeeping. A counter bump is free; reading the offset value
+    /// costs a host sync, which is why it happens lazily in `ropeOffset` and
+    /// at most once per mutation epoch. `leftPadding` is a valid epoch marker
+    /// for `positionOffsets` too: every site that rebases positionOffsets
+    /// independently of the per-step lockstep advance (init, filter, extend,
+    /// state/metaState set, the rotating temporal restore) also assigns
+    /// leftPadding, while `update()` — which does NOT bump the epoch —
+    /// advances positionOffsets and `idx` together, so the cached DELTA below
+    /// stays true across decode steps.
+    private var paddingGeneration: UInt64 = 0
+    /// `positionOffsets[0] - idx` for the sole row. NOT derivable from
+    /// leftPadding: a rotating cache restored by merge reports its ABSOLUTE
+    /// position (e.g. offset 6 over a 4-token kept window), which
+    /// `idx - leftPadding` cannot reconstruct — BatchCacheShapeTests
+    /// testMergeRestoresTemporalOrder holds that line.
+    private var scalarDeltaCache: (generation: UInt64, delta: Int)?
+
+    /// Whether a one-row cache reports its RoPE position as `.scalar`.
+    /// Escape hatch, not a tuning knob: `.scalar(p)` and `.batch([p])` are the
+    /// same number for a single row — but `.scalar` is eligible for MLX's RoPE
+    /// fast path (single-token, row-contiguous) where a length-1 array offset
+    /// forces the general kernel on every layer of every decode step. That gap
+    /// showed up as gemma-4-E2B short/c1 e2e dropping to 0.87x vs best rival
+    /// the day the per-row anchor landed. Set MLXCAT_SINGLE_ROW_SCALAR_ROPE=0
+    /// to restore the unconditional `.batch` for A/B or fault isolation.
+    private static let scalarSingleRowEnabled: Bool =
+        ProcessInfo.processInfo.environment["MLXCAT_SINGLE_ROW_SCALAR_ROPE"] != "0"
+
+    public var ropeOffset: RoPEOffset {
+        // Sequence layout only: batchState layers (hybrid Mamba conv/ssm)
+        // reassign leftPadding on every update(), so the lazy read below would
+        // put a host sync on their hot path. Sequence-layout padding changes
+        // only at admission boundaries (init/filter/extend/state/metaState).
+        if Self.scalarSingleRowEnabled, case .sequence = layout, batchSize == 1 {
+            if scalarDeltaCache?.generation != paddingGeneration {
+                scalarDeltaCache = (paddingGeneration, positionOffsets.item(Int.self) - idx)
+            }
+            if let cached = scalarDeltaCache {
+                return .scalar(idx + cached.delta)
+            }
+        }
+        // Snapshot (+ 0) before cache.update(...) advances the offsets — same
+        // contract as the BatchPositionedKVCache default this replaces.
+        return .batch(positionOffsets + 0)
     }
 
     public func innerState() -> [MLXArray] {

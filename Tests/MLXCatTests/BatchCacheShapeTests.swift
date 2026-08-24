@@ -123,11 +123,17 @@ final class BatchCacheShapeTests: XCTestCase {
 
         XCTAssertEqual(batch.state[0].asArray(Int.self), [2, 3, 0, 1])
         XCTAssertEqual(batch.state[1].asArray(Int.self), [12, 13, 10, 11])
+        // A single-row sequence cache reports `.scalar` (the RoPE fast-path
+        // eligible form) — the ABSOLUTE position is what must survive the
+        // temporal restore, whichever case carries it. This is the test that
+        // caught the first scalar-shortcut draft reconstructing the offset
+        // from idx - leftPadding, which a rotating restore breaks (absolute
+        // position 6 over a 4-token kept window).
         switch (batch as any KVCache).ropeOffset {
+        case .scalar(let offset):
+            XCTAssertEqual(offset, 6)
         case .batch(let offset):
             XCTAssertEqual(offset.asArray(Int.self), [6])
-        default:
-            XCTFail("BatchKVCache must preserve absolute RoPE offsets after temporal restore")
         }
     }
 
