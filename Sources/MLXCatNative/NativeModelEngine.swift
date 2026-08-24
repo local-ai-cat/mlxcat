@@ -885,13 +885,28 @@ public struct NativeModelLoader: EnginePoolModelLoader {
     /// reproduces it in under a second with no model:
     /// `rows-unrotated=[1, 2, 3]`, output bit-identical to input.
     ///
-    /// So this is not a latency-versus-exactness trade — width >= 2 gemma is
-    /// wrong. `.always` is a correctness floor, not conservatism, and it costs
-    /// exactly the win above until the RoPE call is fixed upstream or in a fork.
-    /// `MLXCAT_UNSERIALIZE_MODEL_TYPES=gemma4,gemma4_unified` still lifts it for
-    /// measurement.
+    /// So this was not a latency-versus-exactness trade — width >= 2 gemma was
+    /// wrong. `.always` was a correctness floor, not conservatism, and it held
+    /// until the RoPE call was fixed upstream or in a fork.
+    ///
+    /// **RE-GRANTED later on 2026-08-24: both defects are fixed, in forks.**
+    /// The kernel: mlx-swift is pinned to atlas-open-sources/mlx-swift, whose
+    /// vendored mlx carries the three-line backport of ml-explore/mlx
+    /// `76a977ca` (#3498) — the fast-path grid gets its batch axis back
+    /// (`RoPEBatchGridProbeTests`: `rows-unrotated=[]`). The anchor:
+    /// mlx-swift-lm is pinned to atlas-open-sources/mlx-swift-lm `7b93094e`,
+    /// where `Gemma4TextAttention` rotates with the per-row `cache?.ropeOffset`
+    /// instead of the padded batch length. Evidence on the production factory
+    /// (`GemmaRoPEOffsetProbeTests`, real chat-templated prompts, greedy):
+    /// serial-exact at ragged width 2 and ragged width 4 — the arms the revert
+    /// was made on. The residue is one late-step row flip on equal-length rows
+    /// (unrotated gemma diverged at step 0 on 3 of 4 rows; this is the near-tie
+    /// batch-variance every serving engine on non-invariant kernels shows, and
+    /// the same category the logit sweep measured at `mismatched = 0`).
     private static let multimodalOnlyModelTypes: Set<String> = [
         "qwen3_5",
+        "gemma4",
+        "gemma4_unified",
     ]
 
     private static func cacheCapabilities(for configuration: ModelKindConfiguration) -> ModelCacheCapabilities {

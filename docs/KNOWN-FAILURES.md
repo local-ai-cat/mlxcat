@@ -317,7 +317,7 @@ close it, and which one is a product call:
    That is a change to the standard every family is judged by, so it needs to be
    argued once, in writing, not settled per-family.
 
-## 1f. Batched gemma decoded rows 1..N UNROTATED — an MLX RoPE grid bug — FIXED by reverting the grant 2026-08-24
+## 1f. Batched gemma decoded rows 1..N UNROTATED — an MLX RoPE grid bug — FIXED in forks, re-granted 2026-08-24
 
 `gemma4` and `gemma4_unified` were moved to `.multimodalOnly` earlier on
 2026-08-23, which is what produced the headline result on the board (gemma-4-E2B
@@ -468,6 +468,35 @@ rather than another candidate:
 not conservatism, and it costs exactly the headline it bought — gemma-4-E2B
 longgen c8 goes back to ~39 s at c8. `MLXCAT_UNSERIALIZE_MODEL_TYPES` still
 lifts it for measurement.
+
+### Fixed 2026-08-24 (same day, later): both defects carried in forks, grant restored
+
+"We cannot reach the fix" was the wrong conclusion — with a fork it is three
+lines. Two pins, one per defect:
+
+- **The kernel.** `atlas-open-sources/mlx-swift` (`934264e5`) = mlx-swift 0.31.6
+  with its vendored mlx submodule moved to our backport of ml-explore/mlx
+  `76a977ca` (#3498, upstream's 2026-05-11 fix): the scalar-offset fast path's
+  grid gets its batch axis. `RoPEBatchGridProbeTests` now prints
+  `scalar-offset rows-unrotated=[]` — every row rotates.
+- **The anchor.** `atlas-open-sources/mlx-swift-lm` (`7b93094e`) = upstream
+  `01472a78` plus `Gemma4TextAttention` rotating with the per-row
+  `cache?.ropeOffset` instead of the padded batch length — what every other
+  family in that library already did.
+
+Evidence on the production factory (`GemmaRoPEOffsetProbeTests`, real
+chat-templated prompts, greedy, gemma-4-E2B): **serial-exact at ragged width 2
+and ragged width 4** — the arms the revert was made on. Residue: one late-step
+row flip on equal-length rows (pre-fix: 3 of 4 rows diverged at step 0). That
+is near-tie batch-variance, the category every serving engine on non-invariant
+kernels shows, not contamination.
+
+Both gemmas are re-granted into `multimodalOnlyModelTypes`. Still open:
+`gemma4_unified`'s width-4 ceiling (§ the ceiling table) rests on a logit sweep
+measured 2026-08-23 on the PRE-fix engine — its 1.65 errors at width ≥ 2 were
+almost certainly this bug, so the sweep should be re-run and the ceiling
+re-derived. Un-fork conditions and the upstream watch live in
+`scripts/donor-drift.sh` and pkg 113.
 
 ### Upstream fixed this on 2026-05-11. We cannot reach the fix.
 
