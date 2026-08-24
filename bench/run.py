@@ -20,6 +20,7 @@ Python 3.9+, standard library only.
 from __future__ import annotations
 
 import argparse
+import collections
 import concurrent.futures
 import ctypes
 import ctypes.util
@@ -684,6 +685,7 @@ class Engine:
         chunk_times: List[float] = []
         usage: Dict[str, Any] = {}
         chars = 0
+        finish_reason: Optional[str] = None
         with urllib.request.urlopen(request, timeout=timeout) as response:
             for raw_line in response:
                 line = raw_line.decode(errors="replace").strip()
@@ -699,6 +701,8 @@ class Engine:
                 if event.get("usage"):
                     usage = event["usage"]
                 for choice in event.get("choices") or []:
+                    if choice.get("finish_reason"):
+                        finish_reason = choice["finish_reason"]
                     delta = choice.get("delta") or {}
                     text = delta.get("content") or delta.get("reasoning_content") or delta.get("reasoning")
                     if isinstance(text, str) and text:
@@ -753,6 +757,13 @@ class Engine:
             "wall_ms": (finished - started) * 1000,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
+            # Why the request ended ("stop" = EOS, "length" = max_tokens). At
+            # temp 0 on longgen, some engines run all 1024 tokens while others
+            # EOS near 520 for the same model — aggregate tok/s over different
+            # token mixes is a workload comparison, not an engine one. Recording
+            # this makes the confound visible per row instead of discovered by
+            # archaeology (2026-08-24 concurrency-cliff analysis).
+            "finish_reason": finish_reason,
             "prefill_tps": (prompt_tokens / ttft) if prompt_tokens and ttft > 0 else None,
             "decode_tps": (completion_tokens - 1) / decode_seconds if (completion_tokens > 1 and decode_measurable) else None,
             "e2e_tps": completion_tokens / max(finished - started, 1e-9),
@@ -956,6 +967,12 @@ def run_cell(
         "cold_first_request_ms": cold["wall_ms"],
         "peak_phys_footprint_bytes": peak_sampled or None,
         "lifetime_max_phys_footprint_bytes": lifetime_max,
+        # Count per reason ({"stop": 5, "length": 1, "unreported": ...}) so a
+        # cell whose rows EOS early is distinguishable from one that ran its
+        # full token budget without re-deriving it from completion_tokens.
+        "finish_reasons": dict(
+            collections.Counter(r.get("finish_reason") or "unreported" for r in runs)
+        ),
     }
     if concurrency > 1:
         metrics["aggregate_tps"] = spread(aggregate_samples)

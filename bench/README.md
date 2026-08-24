@@ -144,6 +144,7 @@ of two probe requests so "16k" really is ~16k tokens on that tokenizer.
 | `lifetime_max_phys_footprint_bytes` | `ri_lifetime_max_phys_footprint` after the cell (includes load; monotonic per process) |
 | `cold_first_request_ms` | wall of the discarded first request (shape compilation / lazy load) |
 | `server_tps` | whatever the engine itself reports in `usage`, if anything — advisory |
+| `finish_reasons` | count per SSE `finish_reason` across the cell's runs (`stop` = EOS, `length` = token budget, `unreported`). At temp 0 on longgen some engines EOS near 520 tokens where others run all 1024 for the same model; a cell mixing the two compares workloads, not engines, and this field makes that visible per row (2026-08-24 concurrency-cliff analysis) |
 
 An engine that does not return `usage.completion_tokens` fails the cell: we do
 not estimate tokens from characters.
