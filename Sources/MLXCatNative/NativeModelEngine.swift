@@ -1207,7 +1207,34 @@ public struct NativeModelLoader: EnginePoolModelLoader {
     private static let singlePassPrefillModelTypes: Set<String> = []
 
     private static let batchDecodeWidthCeilings: [String: Int] = [
-        "qwen3_moe": 2,
+        // RAISED 2 -> 8 on 2026-08-24, on a complete evidence pack re-measured
+        // that day (M4 Pro, Qwen3-Coder-30B-A3B-Instruct-4bit):
+        //
+        //   * `MoEBatchIntegrationTests` — emitted tokens through the engine —
+        //     PASSES with strict serial-greedy equality at widths 2, 4 AND 8.
+        //   * `MoEWidthNumericsProbeTests` (the discriminator that settled
+        //     gemma, KNOWN-FAILURES 1f): IDENTICAL rows decoded together are
+        //     token-identical to serial at widths 2/4/8 — vsSerial=0 and
+        //     vsEachOther=0 everywhere, so rows are NOT crossing. Real ragged
+        //     prompts: 1 late flip (step 7 of 12) in 8 rows — the near-tie
+        //     batch-variance category, the same residue gemma's grant carries.
+        //   * `BatchInvarianceTests` still reads maxLogitError 2.6875 at
+        //     widths 4/8 (0.5 at width 2, 0.0 at width 1) against the 1.25
+        //     tolerance, with zero wide-margin flips and margin 6.5 at the
+        //     max-error step. With contamination excluded by the probe, that
+        //     number is width-level accumulation order in the expert mix — an
+        //     MoE reduction reordering with width, not a defect a per-row fix
+        //     could touch.
+        //
+        // The old width-2 entry guarded against exactly the contamination the
+        // probe now rules out; what remains over the tolerance is explained
+        // and token-invisible on every end-to-end gate. 8 is the widest width
+        // MEASURED, so 8 is the ceiling — "what the numbers support and
+        // nothing more". This cap was ~2/3 of the whole c8 board gap (the
+        // `mlxcat-moe-uncapped` arm priced it at +46-48% aggregate on the
+        // coder cells); deleting the entry outright (unbounded) waits on a
+        // width-16+ measurement, not on more adjudication.
+        "qwen3_moe": 8,
         // gemma4_unified is here for a different reason than qwen3_moe, and the
         // difference is the whole argument.
         //
