@@ -47,13 +47,15 @@ for model in "${MODELS[@]}"; do
   stamp=$(date +%Y%m%d-%H%M%S)
   result="$OUT/${model:t}-$stamp.xcresult"
   echo "== $model on $DEVICE =="
-  # Env reaches the test process only through the TEST_RUNNER_ prefix.
-  xcodebuild test \
+  # TEST_RUNNER_ vars work only as ENVIRONMENT of the xcodebuild process —
+  # as a trailing KEY=VALUE arg they become a build setting the test never
+  # sees, and every model silently ran the default (the first iPhone night
+  # benched gemma three times under three different names).
+  TEST_RUNNER_BENCHHOST_MODEL_ID="$model" xcodebuild test \
     -project BenchHost.xcodeproj -scheme BenchHost \
     -destination "platform=iOS,id=$DEVICE" \
     -resultBundlePath "$result" \
     -skipMacroValidation -skipPackagePluginValidation \
-    TEST_RUNNER_BENCHHOST_MODEL_ID="$model" \
     2>&1 | grep -E "Test Case|Test Suite|error:|BENCHHOST |failed" | tail -20 || true
   # Pull every attachment; ours is named mlxcat-bench-ios.jsonl.
   exportdir="$OUT/${model:t}-$stamp-attachments"

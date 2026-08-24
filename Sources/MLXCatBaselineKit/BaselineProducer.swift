@@ -23,6 +23,7 @@ import MLX
 import MLXHuggingFace
 import MLXLLM
 import MLXLMCommon
+import MLXVLM
 import MLXCat
 import Tokenizers
 
@@ -216,8 +217,21 @@ public enum BaselineProducer {
         if applied.memoryLimit > 0 {
             log("allocator: memoryLimit \(applied.memoryLimit) cacheLimit \(applied.cacheLimit)")
         }
-        let container = try await LLMModelFactory.shared.loadContainer(
-            from: configuration.modelDirectory, using: #huggingFaceTokenizerLoader())
+        // VLM factory first, LLM as the text-only fallback — the same order
+        // production's NativeModelLoader and the divergence probes use. Loading
+        // gemma through LLMModelFactory dies on keyNotFound(language_model...):
+        // the LLM Gemma4Model expects flat model.layers.* while the checkpoint
+        // ships language_model.*, and only the VLM class sanitizes that. This
+        // exact wrong-factory mistake is the one KNOWN-FAILURES 1f documents;
+        // the first iPhone run reproduced it on device (2026-08-25).
+        let container: ModelContainer
+        do {
+            container = try await VLMModelFactory.shared.loadContainer(
+                from: configuration.modelDirectory, using: #huggingFaceTokenizerLoader())
+        } catch {
+            container = try await LLMModelFactory.shared.loadContainer(
+                from: configuration.modelDirectory, using: #huggingFaceTokenizerLoader())
+        }
         let loadPeak = BaselineFootprint.read()?.lifetimeMax ?? 0
         log("loaded \(configuration.modelID) (lifetime max footprint after load \(Double(loadPeak) / 1_073_741_824) GiB)")
 
