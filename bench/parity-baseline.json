@@ -50,79 +50,79 @@
     "ttft": 0.7686
   },
   "Apple M4 Pro Mac16,7|Qwen3.5-4B-MLX-4bit|16k|cold|1": {
-    "e2e": 1.0962,
-    "peak": 0.9318,
-    "ttft": 1.1035
+    "e2e": 1.1292,
+    "peak": 0.9451,
+    "ttft": 1.1381
   },
   "Apple M4 Pro Mac16,7|Qwen3.5-4B-MLX-4bit|4k|cold|1": {
-    "e2e": 0.9943,
-    "peak": 0.9086,
-    "ttft": 1.0311
+    "e2e": 0.9945,
+    "peak": 0.9063,
+    "ttft": 1.0313
   },
   "Apple M4 Pro Mac16,7|Qwen3.5-4B-MLX-4bit|longgen|cold|1": {
-    "e2e": 0.9309,
-    "peak": 0.8558,
-    "ttft": 1.4916
+    "e2e": 1.0245,
+    "peak": 0.8527,
+    "ttft": 1.4926
   },
   "Apple M4 Pro Mac16,7|Qwen3.5-4B-MLX-4bit|longgen|cold|2": {
-    "e2e": 1.0444,
-    "peak": 1.2493,
+    "e2e": 1.1332,
+    "peak": 1.2695,
     "ttft": 1.4229
   },
   "Apple M4 Pro Mac16,7|Qwen3.5-4B-MLX-4bit|longgen|cold|4": {
-    "e2e": 0.9273,
-    "peak": 0.9855,
-    "ttft": 0.8518
+    "e2e": 1.0502,
+    "peak": 0.9968,
+    "ttft": 1.1449
   },
   "Apple M4 Pro Mac16,7|Qwen3.5-4B-MLX-4bit|longgen|cold|8": {
-    "e2e": 0.8896,
-    "peak": 0.8296,
-    "ttft": 0.7079
+    "e2e": 1.0117,
+    "peak": 0.8194,
+    "ttft": 0.7262
   },
   "Apple M4 Pro Mac16,7|Qwen3.5-4B-MLX-4bit|short|cold|1": {
-    "e2e": 0.9845,
-    "peak": 0.8595,
-    "ttft": 1.1737
+    "e2e": 0.9886,
+    "peak": 0.8568,
+    "ttft": 1.1751
   },
   "Apple M4 Pro Mac16,7|Qwen3.5-4B-MLX-4bit|short|cold|2": {
-    "e2e": 1.1848,
-    "peak": 1.0653,
-    "ttft": 0.9092
+    "e2e": 1.1805,
+    "peak": 1.0782,
+    "ttft": 0.9104
   },
   "Apple M4 Pro Mac16,7|Qwen3.5-4B-MLX-4bit|short|cold|4": {
-    "e2e": 1.0543,
-    "peak": 0.9996,
-    "ttft": 0.8148
+    "e2e": 1.055,
+    "peak": 0.9975,
+    "ttft": 0.8174
   },
   "Apple M4 Pro Mac16,7|Qwen3.5-4B-MLX-4bit|short|cold|8": {
-    "e2e": 1.0009,
-    "peak": 0.7325,
-    "ttft": 0.7208
+    "e2e": 1.0084,
+    "peak": 0.7006,
+    "ttft": 0.7234
   },
   "Apple M4 Pro Mac16,7|Qwen3.8-27B-4bit|16k|cold|1": {
-    "e2e": 1.1947,
-    "peak": 1.2256,
-    "ttft": 1.1984
+    "e2e": 1.2068,
+    "peak": 1.1971,
+    "ttft": 1.2109
   },
   "Apple M4 Pro Mac16,7|Qwen3.8-27B-4bit|4k|cold|1": {
-    "e2e": 1.159,
-    "peak": 1.0076,
-    "ttft": 1.19
+    "e2e": 1.1551,
+    "peak": 1.008,
+    "ttft": 1.1843
   },
   "Apple M4 Pro Mac16,7|Qwen3.8-27B-4bit|longgen|cold|1": {
-    "e2e": 0.9576,
-    "peak": 0.957,
-    "ttft": 1.1835
+    "e2e": 1.0263,
+    "peak": 0.9226,
+    "ttft": 1.1187
   },
   "Apple M4 Pro Mac16,7|Qwen3.8-27B-4bit|longgen|cold|2": {
-    "e2e": 0.9957,
-    "peak": 1.0763,
-    "ttft": 1.137
+    "e2e": 1.1483,
+    "peak": 1.0615,
+    "ttft": 0.8248
   },
   "Apple M4 Pro Mac16,7|Qwen3.8-27B-4bit|longgen|cold|4": {
-    "e2e": 0.8518,
-    "peak": 0.9986,
-    "ttft": 0.8019
+    "e2e": 0.8753,
+    "peak": 1.0056,
+    "ttft": 0.6946
   },
   "Apple M4 Pro Mac16,7|Qwen3.8-27B-4bit|longgen|cold|8": {
     "e2e": 0.7999,
@@ -130,24 +130,24 @@
     "ttft": 0.622
   },
   "Apple M4 Pro Mac16,7|Qwen3.8-27B-4bit|short|cold|1": {
-    "e2e": 1.0123,
-    "peak": 0.9549,
-    "ttft": 1.0328
+    "e2e": 0.9541,
+    "peak": 0.9499,
+    "ttft": 0.785
   },
   "Apple M4 Pro Mac16,7|Qwen3.8-27B-4bit|short|cold|2": {
-    "e2e": 1.1399,
-    "peak": 0.984,
-    "ttft": 0.8715
+    "e2e": 1.1678,
+    "peak": 0.9721,
+    "ttft": 0.8553
   },
   "Apple M4 Pro Mac16,7|Qwen3.8-27B-4bit|short|cold|4": {
-    "e2e": 1.0146,
-    "peak": 0.908,
-    "ttft": 0.7234
+    "e2e": 0.995,
+    "peak": 0.9235,
+    "ttft": 0.6596
   },
   "Apple M4 Pro Mac16,7|Qwen3.8-27B-4bit|short|cold|8": {
-    "e2e": 0.9901,
-    "peak": 0.8893,
-    "ttft": 0.623
+    "e2e": 0.9902,
+    "peak": 0.8851,
+    "ttft": 0.5771
   },
   "Apple M4 Pro Mac16,7|gemma-4-12B-it-qat-4bit|16k|cold|1": {
     "e2e": 0.9221,
