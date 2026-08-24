@@ -74,30 +74,36 @@ final class SerializationOverrideTests: XCTestCase {
         XCTAssertFalse(NativeModelLoader.usesSerializedDecode(modelType: "qwen3_moe", isVLM: false, overrides: overrides))
     }
 
-    func testGemmaIsFullySerializedUntilTheRoPEGridBugIsFixed() {
-        // gemma was granted `.multimodalOnly` on 2026-08-23 and it produced the
-        // biggest result on the board. The grant was wrong, and not by a
-        // tolerance: MLX's RoPE fast path drops the batch axis from its dispatch
-        // grid (`mlx/backend/metal/rope.cpp:134-139` against `:149`), so batched
-        // gemma decode rotates row 0 and passes rows 1..B-1 through UNROTATED.
-        // `RoPEBatchGridProbeTests` reproduces that in under a second with no
-        // model. Gemma's VLM attention is the only code in our stack that
-        // reaches the primitive with a scalar offset on a batched decode tensor.
+    func testGemmaBatchesTextOnceBothRoPEDefectsAreFixedInForks() {
+        // The 2026-08-23 grant was wrong (MLX's RoPE fast path dropped the
+        // batch axis, so rows 1..B-1 decoded UNROTATED) and gemma fell back to
+        // `.always` — a correctness floor "until the RoPE call is fixed
+        // upstream or in a fork". On 2026-08-24 both defects were fixed in
+        // forks (KNOWN-FAILURES 1f: atlas-open-sources/mlx-swift carries the
+        // kernel backport of ml-explore/mlx 76a977ca; mlx-swift-lm 7b93094e
+        // rotates with the per-row `cache?.ropeOffset`), and the grant was
+        // restored on production-factory evidence: `GemmaRoPEOffsetProbeTests`
+        // reads serial-exact at ragged widths 2 and 4 on real prompts, with
+        // identical rows agreeing with each other and with serial.
         //
-        // So `.always` here is a correctness floor, not a cap chosen from a
-        // logit table, and it must not be relaxed until the RoPE call moves to
-        // the per-row array path.
-        let none: Set<String> = []
-        for family in ["gemma4", "gemma4_unified"] {
-            XCTAssertEqual(
-                NativeModelLoader.serializationPolicy(
-                    modelType: family, isVLM: true, overrides: none),
-                .always,
-                "\(family) must not batch while its rows decode unrotated")
-        }
+        // This pin means: whoever changes gemma's policy again must come back
+        // through the probes, in either direction.
+        XCTAssertEqual(
+            NativeModelLoader.serializationPolicy(
+                modelType: "gemma4", isVLM: true, overrides: []),
+            .multimodalOnly,
+            "gemma4 text rows batch again — both RoPE defects are fixed in the forks")
+        // gemma4_unified keeps its width-4 ceiling: that number came from a
+        // logit sweep measured on the PRE-fix engine (its errors were almost
+        // certainly this bug) and stays until the sweep is re-run.
+        XCTAssertEqual(
+            NativeModelLoader.serializationPolicy(
+                modelType: "gemma4_unified", isVLM: true, overrides: []),
+            .batched(maxWidth: 4, multimodalSolitude: true),
+            "gemma4_unified batches under its pre-fix width ceiling pending a re-sweep")
 
-        // The measurement override still works, because pricing the bug is how
-        // the fix gets justified.
+        // The measurement override still works, because pricing a policy is
+        // how changes to it get justified.
         XCTAssertEqual(
             NativeModelLoader.serializationPolicy(
                 modelType: "gemma4", isVLM: true, overrides: ["gemma4"]),
@@ -143,12 +149,16 @@ final class SerializationOverrideTests: XCTestCase {
     }
 
     func testMoEBatchesOnlyAtTheWidthItWasMeasuredAt() {
-        // qwen3_moe measures max logit error 0.94 at width 2 (inside the 1.25
-        // tolerance) and 2.69 at widths 4 and 8. `.always` refused both; the
-        // ceiling refuses only the widths that failed.
+        // Raised 2 -> 8 on 2026-08-24. The 2.69-vs-1.25 logit reading at
+        // widths 4/8 stands, but `MoEWidthNumericsProbeTests` rules out row
+        // contamination (identical rows token-identical to serial at widths
+        // 2/4/8) and `MoEBatchIntegrationTests` passes strict serial-greedy
+        // token equality at all three widths — so the reading is expert-mix
+        // accumulation order, not a defect. 8 is the widest width MEASURED;
+        // widening further must come back through both gates.
         XCTAssertEqual(
             NativeModelLoader.serializationPolicy(modelType: "qwen3_moe", isVLM: false, overrides: []),
-            .maxWidth(2))
+            .maxWidth(8))
         // The override still lifts it completely, so the benchmark can A/B the
         // ceiling against no ceiling at all.
         XCTAssertEqual(

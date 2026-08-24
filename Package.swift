@@ -117,8 +117,11 @@ let package = Package(
                 .product(name: "Tokenizers", package: "swift-transformers"),
             ]
         ),
-        .executableTarget(
-            name: "MLXCatBaseline",
+        // The measurement core as a library, so an on-device XCTest can produce
+        // iOS leaderboard rows through the same arms/corpus/metric as the CLI
+        // (pkg 113 ios-row-producer).
+        .target(
+            name: "MLXCatBaselineKit",
             dependencies: [
                 "MLXCat",
                 .product(name: "MLX", package: "mlx-swift"),
@@ -127,6 +130,10 @@ let package = Package(
                 .product(name: "MLXLLM", package: "mlx-swift-lm"),
                 .product(name: "Tokenizers", package: "swift-transformers"),
             ]
+        ),
+        .executableTarget(
+            name: "MLXCatBaseline",
+            dependencies: ["MLXCatBaselineKit"]
         ),
         .target(
             name: "MLXCatHTTP",

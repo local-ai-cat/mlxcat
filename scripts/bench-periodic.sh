@@ -29,7 +29,11 @@ cd "$REPO_ROOT"
 ENGINES="${MLXCAT_BENCH_ENGINES:-mlxcat,mlxcat-cache-held}"
 MODELS="${MLXCAT_BENCH_MODELS:-}"
 GIT_ID=(-c user.name="Atlas Codes AI" -c user.email="76924051+atlascodesai@users.noreply.github.com")
-SYNC='git pull --rebase -q && git add bench/results/*.jsonl && git -c user.name="Atlas Codes AI" -c user.email="76924051+atlascodesai@users.noreply.github.com" commit -q -m "bench: checkpoint ${MLXCAT_BENCH_ENGINE} rows" && git push -q'
+# The checkpoint regenerates LEADERBOARD.md too: CI gates every push on
+# "leaderboard derives from results", so a checkpoint that adds rows without
+# re-rendering turns the whole pipeline red until the final commit (this is
+# what kept mlxcat CI failing through 2026-08-24).
+SYNC='git pull --rebase -q && python3 bench/leaderboard.py >/dev/null && git add bench/results/*.jsonl LEADERBOARD.md && git -c user.name="Atlas Codes AI" -c user.email="76924051+atlascodesai@users.noreply.github.com" commit -q -m "bench: checkpoint ${MLXCAT_BENCH_ENGINE} rows" && git push -q'
 
 if [[ "$(sysctl -n hw.model)" != "Mac16,7" ]]; then
   echo "⚠️  $(sysctl -n hw.model) is not the board's device (Mac16,7): rows are kept, the timeline will not move"
