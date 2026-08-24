@@ -158,9 +158,9 @@ footer { margin-top:40px; padding-top:16px; border-top:1px solid var(--line);
   <h2>Are we getting better</h2>
   <p class="note">
     The same ratio at the first measured pass and at the latest, so a change that helped is visible
-    as movement rather than asserted. Rows marked <b>withdrawn</b> were measured with a
-    configuration that has since been reverted — their gain is not something the engine currently
-    delivers.
+    as movement rather than asserted. Every number here comes from a valid measurement: rows a
+    later fix invalidated (batched gemma before the RoPE fixes) are excluded from the math, and a
+    <b>†</b> marks a model whose history carries such withdrawn rows.
   </p>
   <div class="panel"><div id="trend"></div></div>
 </section>
@@ -205,6 +205,7 @@ footer { margin-top:40px; padding-top:16px; border-top:1px solid var(--line);
   function valueAt(cell, m, passIndex) {
     for (var i = passIndex; i >= 0; i--) {
       var row = cell.ours[PASSES[i]];
+      if (row && row.withdrawn) continue;
       if (row && row[m] !== null && row[m] !== undefined) return row[m];
     }
     return null;
@@ -213,6 +214,7 @@ footer { margin-top:40px; padding-top:16px; border-top:1px solid var(--line);
   function firstOurs(cell, m) {
     for (var i = 0; i < PASSES.length; i++) {
       var row = cell.ours[PASSES[i]];
+      if (row && row.withdrawn) continue;
       if (row && row[m] !== null && row[m] !== undefined) return row[m];
     }
     return null;
@@ -253,11 +255,23 @@ footer { margin-top:40px; padding-top:16px; border-top:1px solid var(--line);
   // evening because it left every row but the first unrotated. Leaving them
   // unmarked would let this page advertise a win that was withdrawn — the exact
   // thing it exists to prevent.
-  var WITHDRAWN = {
-    "gemma-4-E2B-it-qat-4bit": "batched decode reverted — see KNOWN-FAILURES 1f",
-    "gemma-4-12B-it-qat-4bit": "batched decode reverted — see KNOWN-FAILURES 1f"
-  };
-  function withdrawn(model) { return WITHDRAWN[model] || null; }
+  // Withdrawal is stamped on the data by bench/timeline.py (point.withdrawn):
+  // batched gemma rows from pre-fix engine builds measured a defect, not the
+  // engine. valueAt/firstOurs skip those points, so every number on this page
+  // comes from a valid measurement; this helper only marks models whose
+  // history contains withdrawn rows so the trend table can say so.
+  function withdrawnHistory(model) {
+    var found = null;
+    cells.forEach(function (c) {
+      if (c.model !== model) return;
+      Object.keys(c.ours).forEach(function (label) {
+        if (c.ours[label] && c.ours[label].withdrawn) {
+          found = "rows through " + label + " withdrawn — pre-fix batched decode (KNOWN-FAILURES 1f)";
+        }
+      });
+    });
+    return found;
+  }
 
   /* ---------------- verdict ---------------- */
   function renderVerdict() {
@@ -404,8 +418,7 @@ footer { margin-top:40px; padding-top:16px; border-top:1px solid var(--line);
       placed.push(ly);
       svg.appendChild(el("text", { x: L + pw + 10, y: ly + 4,
         "font-family": "IBM Plex Mono, monospace", "font-size": 11.5, fill: colour },
-        short(s.model) + "  " + lastPoint.v.toFixed(2) + "×"
-          + (withdrawn(s.model) ? "  (withdrawn)" : "")));
+        short(s.model) + "  " + lastPoint.v.toFixed(2) + "×"));
     });
   }
 
@@ -480,10 +493,11 @@ footer { margin-top:40px; padding-top:16px; border-top:1px solid var(--line);
       var delta = r.last / r.first - 1;
       var colour = Math.abs(delta) < 0.02 ? "var(--muted)"
         : delta > 0 ? "var(--win)" : "var(--lose)";
-      var flag = withdrawn(r.model)
-        ? " <span style='color:var(--lose);font-family:Archivo,sans-serif;font-size:9px;"
-          + "font-weight:700;letter-spacing:.08em'>WITHDRAWN</span>" : "";
-      html += "<tr><td class='model' title='" + (withdrawn(r.model) || "") + "'>" +
+      var history = withdrawnHistory(r.model);
+      var flag = history
+        ? " <span style='color:var(--muted);font-family:Archivo,sans-serif;font-size:9px;"
+          + "font-weight:700;letter-spacing:.08em'>†</span>" : "";
+      html += "<tr><td class='model' title='" + (history || "") + "'>" +
         short(r.model) + flag + "</td>" +
         "<td style='background:" + shade(r.first).bg + ";color:" + shade(r.first).fg + "'>" +
         r.first.toFixed(2) + "</td>" +

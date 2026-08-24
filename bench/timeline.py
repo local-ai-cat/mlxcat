@@ -37,6 +37,16 @@ PASSES = [
     ("2026-08-23-Mac16-7-67c916d5.jsonl", "P5 · 08-23", "qwen3_5 batches, MLX buffer cache released at idle"),
 ]
 
+# Passes P1-P5 were produced by engine builds that predate the RoPE fixes
+# (6ddb1d2 + 30ff507): batched gemma decoded rows 1..N-1 with no positional
+# rotation at all, so those cells measure a defect, not the engine. They stay
+# on the board — ghosted and excluded from parity/trend math — because hiding
+# a withdrawn number is how it gets re-believed later. Runs from fixed builds
+# (P6 onward) are clean and carry no mark.
+WITHDRAWN_THROUGH = {p[0] for p in PASSES}  # result files from pre-fix builds
+WITHDRAWN_MODELS = {"gemma-4-E2B-it-qat-4bit", "gemma-4-12B-it-qat-4bit"}
+WITHDRAWN_MIN_CONCURRENCY = 2
+
 METRICS = {
     # key -> (json path, lower_is_better, unit, label)
     "ttft": ("ttft_ms", True, "ms", "TTFT (median)"),
@@ -83,13 +93,43 @@ def cell_key(row):
     return (row["model"]["id"], w["context_tier"], w["concurrency"])
 
 
+def discover_passes(results_dir):
+    """Curated PASSES first, then any result file the list has not caught up
+    with yet — a periodic run must land on the board without someone editing
+    this file. Auto passes are ordered by first row timestamp and labeled from
+    the harness tag, so the curated labels stay the readable history and an
+    uncurated one still says what the run was for."""
+    passes = list(PASSES)
+    known = {p[0] for p in PASSES}
+    found = []
+    for path in sorted(glob.glob(os.path.join(results_dir, "*.jsonl"))):
+        filename = os.path.basename(path)
+        if filename in known:
+            continue
+        rows = load(path)
+        if not any(row["engine"]["name"] in OURS for row in rows):
+            continue
+        first = min(row.get("timestamp") or "" for row in rows)
+        tag = ""
+        for row in rows:
+            tag = (row.get("harness") or {}).get("tag") or ""
+            if tag:
+                break
+        found.append((first, filename, tag))
+    for index, (first, filename, tag) in enumerate(sorted(found)):
+        label = f"P{len(PASSES) + index + 1} · {first[5:10].replace('-', '-')}"
+        passes.append((filename, label, tag[:80] or "uncurated run"))
+    return passes
+
+
 def build(results_dir):
     by_pass = {}
-    for filename, label, note in PASSES:
+    pass_order = discover_passes(results_dir)
+    for filename, label, note in pass_order:
         path = os.path.join(results_dir, filename)
         if not os.path.exists(path):
             continue
-        by_pass[label] = (note, load(path))
+        by_pass[label] = (note, load(path), filename)
 
     # Competitors are taken from wherever they were measured — they do not have
     # passes, they have one measurement each, and re-measuring them is a
@@ -103,7 +143,7 @@ def build(results_dir):
             competitors[name][cell_key(row)] = row["metrics"]
 
     cells = {}
-    for label, (_, rows) in by_pass.items():
+    for label, (_, rows, filename) in by_pass.items():
         for row in rows:
             if row["engine"]["name"] != "mlxcat":
                 continue
@@ -112,7 +152,14 @@ def build(results_dir):
                 "|".join(str(part) for part in key),
                 {"model": key[0], "tier": key[1], "concurrency": key[2], "ours": {}, "them": {}},
             )
-            entry["ours"][label] = {k: value(row["metrics"], k) for k in METRICS}
+            point = {k: value(row["metrics"], k) for k in METRICS}
+            if (
+                filename in WITHDRAWN_THROUGH
+                and key[0] in WITHDRAWN_MODELS
+                and key[2] >= WITHDRAWN_MIN_CONCURRENCY
+            ):
+                point["withdrawn"] = True
+            entry["ours"][label] = point
 
     for name, byCell in competitors.items():
         for key, metrics in byCell.items():
@@ -125,7 +172,7 @@ def build(results_dir):
         "device": DEVICE,
         "passes": [
             {"label": label, "note": by_pass[label][0]}
-            for label, _ in [(p[1], p[0]) for p in PASSES]
+            for _, label, _ in pass_order
             if label in by_pass
         ],
         "metrics": {k: {"unit": v[2], "label": v[3], "lowerIsBetter": v[1]} for k, v in METRICS.items()},
