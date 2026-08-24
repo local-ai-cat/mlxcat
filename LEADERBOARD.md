@@ -47,8 +47,8 @@ Concurrency (`longgen` prompt, aggregate tok/s across N streams, median of runs)
 |---|---:|---:|---:|---:|
 | mlx-lm | 70.7 | 87.1 | 103.2 | 26.90 |
 | mlx-serve | 67.2 | 67.7 | 67.9 | 20.93 |
-| mlxcat | 85.2 | 98.4 | 118.2 | 24.20 |
-| mlxcat-cache-held | 79.8 | 101.1 | 115.9 | 23.01 |
+| mlxcat | 85.2 | 98.4 ◊ | 118.2 ◊ | 24.20 |
+| mlxcat-cache-held | 79.8 ◊ | 101.1 ◊ | 115.9 ◊ | 23.01 |
 | mlxcat-moe-uncapped | 85.4 | 96.8 | 115.5 | 23.38 |
 | omlx | 76.4 | 85.1 | 96.3 | 20.86 |
 

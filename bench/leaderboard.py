@@ -63,6 +63,18 @@ def dominant_finish(metrics: Dict[str, Any]) -> Optional[str]:
     return max(reasons.items(), key=lambda kv: kv[1])[0]
 
 
+def mixed_finish(metrics: Dict[str, Any]) -> bool:
+    """True when a cell's OWN completion mix is material — the minority reason
+    is >= 25% of reported requests. Two cells can share a plurality label
+    ({length:8, stop:4} and {length:7, stop:5} are both "length") while doing
+    different work; the plurality alone must not launder that."""
+    reasons = {k: v for k, v in (metrics.get("finish_reasons") or {}).items() if k != "unreported"}
+    if len(reasons) < 2:
+        return False
+    total = sum(reasons.values())
+    return total > 0 and (total - max(reasons.values())) / total >= 0.25
+
+
 def med(block: Optional[Dict[str, Any]]) -> Optional[float]:
     if not block:
         return None
@@ -264,7 +276,7 @@ def render(records: List[Dict[str, Any]], matrix: Dict[str, Any]) -> str:
                                 prefill = f"**{prefill}**"
                             if best_ttft.get(mark_scope + (name,)):
                                 ttft = f"**{ttft}**"
-                            if len(finish_scopes.get(mark_scope, set())) > 1 and dominant_finish(m):
+                            if (len(finish_scopes.get(mark_scope, set())) > 1 and dominant_finish(m)) or mixed_finish(m):
                                 e2e += " ◊"
                             weights_note = ""
                             if record["engine"].get("weights") and "same files" not in record["engine"]["weights"]:
@@ -281,7 +293,15 @@ def render(records: List[Dict[str, Any]], matrix: Dict[str, Any]) -> str:
                     for record in conc_rows:
                         by_tier[record["workload"]["context_tier"]].append(record)
                     for tier_name in sorted(by_tier):
-                        rows_for_tier = by_tier[tier_name]
+                        # Cold rows only, sorted oldest-first so the NEWEST row
+                        # deterministically wins the engine x width slot — the
+                        # unfiltered version let file ordering pick between a
+                        # cold and a warm row for the same slot.
+                        rows_for_tier = sorted(
+                            (r for r in by_tier[tier_name]
+                             if r["workload"].get("cache_mode", "cold") == "cold"),
+                            key=parsed_ts,
+                        )
                         by_engine: Dict[str, Dict[int, Dict[str, Any]]] = defaultdict(dict)
                         widths = set()
                         for record in rows_for_tier:
@@ -306,7 +326,7 @@ def render(records: List[Dict[str, Any]], matrix: Dict[str, Any]) -> str:
                                     cells.append("—")
                                     continue
                                 cell = fmt(med(r["metrics"].get("aggregate_tps")))
-                                if len(finish_by_width.get(w, set())) > 1 and dominant_finish(r["metrics"]):
+                                if (len(finish_by_width.get(w, set())) > 1 and dominant_finish(r["metrics"])) or mixed_finish(r["metrics"]):
                                     cell += " ◊"
                                 cells.append(cell)
                             last = by_engine[name].get(width_list[-1])

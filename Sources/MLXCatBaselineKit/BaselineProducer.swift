@@ -132,7 +132,8 @@ public enum BaselineFootprint {
 final class FootprintSampler: @unchecked Sendable {
     private let queue = DispatchQueue(label: "mlxcat-baseline.footprint")
     private var timer: DispatchSourceTimer?
-    private(set) var peak: UInt64 = 0
+    private var peak: UInt64 = 0
+    private var sampled = false
 
     func start() {
         let timer = DispatchSource.makeTimerSource(queue: queue)
@@ -140,15 +141,19 @@ final class FootprintSampler: @unchecked Sendable {
         timer.setEventHandler { [weak self] in
             guard let self, let reading = BaselineFootprint.read() else { return }
             self.peak = max(self.peak, reading.phys)
+            self.sampled = true
         }
         timer.resume()
         self.timer = timer
     }
 
-    func stop() -> UInt64 {
+    /// nil when not a single read succeeded — an absent metric, never a
+    /// measured zero. A row claiming a zero-byte footprint because task_info
+    /// failed would make broken data look ideal (Codex round-2 finding).
+    func stop() -> UInt64? {
         timer?.cancel()
         timer = nil
-        return queue.sync { peak }
+        return queue.sync { sampled ? peak : nil }
     }
 }
 
@@ -284,13 +289,21 @@ public enum BaselineProducer {
                     var samples: [Sample] = []
                     for _ in 0 ..< configuration.runs { samples.append(try await oneRun()) }
                     let peak = sampler.stop()
-                    let lifetimeMax = BaselineFootprint.read()?.lifetimeMax ?? 0
+                    let lifetimeMax = BaselineFootprint.read()?.lifetimeMax
                     guard !samples.isEmpty else { throw BaselineError.noSamples }
 
                     // One process measures every cell, so a long-context cell
                     // would otherwise leave its scratch resident and depress the
                     // next one.
                     Memory.clearCache()
+
+                    let peakValue: Any = peak.map { $0 as Any } ?? NSNull()
+                    let lifetimeValue: Any
+                    if let lifetimeMax, lifetimeMax > 0 {
+                        lifetimeValue = lifetimeMax
+                    } else {
+                        lifetimeValue = NSNull()
+                    }
 
                     let record: [String: Any] = [
                         "schema": "mlxcat-bench/1",
@@ -320,8 +333,8 @@ public enum BaselineProducer {
                             "prompt_tokens": promptTokenCount,
                             "completion_tokens": samples.map(\.generated).sorted()[samples.count / 2],
                             "cold_first_request_ms": coldMilliseconds,
-                            "peak_phys_footprint_bytes": peak,
-                            "lifetime_max_phys_footprint_bytes": lifetimeMax,
+                            "peak_phys_footprint_bytes": peakValue,
+                            "lifetime_max_phys_footprint_bytes": lifetimeValue,
                         ],
                     ]
                     emit(record)
