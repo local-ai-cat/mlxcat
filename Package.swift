@@ -53,7 +53,9 @@ let package = Package(
         // fail to load before it. Repin to a tag once upstream cuts one that
         // contains fd0f13b.
         .package(
-            // atlas-open-sources/mlx-swift-lm = upstream 01472a78 plus one fix:
+            // atlas-open-sources/mlx-swift-lm = upstream 01472a78 plus two changes —
+            // its mlx-swift dependency resolves to the SAME atlas-open-sources URL the
+            // rest of the graph pins (one URL per package identity), and one fix:
             // Gemma4TextAttention rotates with the per-row `cache?.ropeOffset`
             // instead of the scalar `cache?.offset`, so a row with left padding
             // decodes at its own position rather than the padded batch length.
@@ -64,7 +66,7 @@ let package = Package(
             // dispatch grid, carried in atlas-open-sources/mlx. `GemmaRoPEOffsetProbeTests`
             // gates both. Return to upstream if it takes the change.
             url: "https://github.com/atlas-open-sources/mlx-swift-lm.git",
-            revision: "7b93094e7f0276203dea607fb207d4c72f621b41"
+            revision: "b2dfb1665b25f334e82b9c63aba6970ec756c2fc"
         ),
         // atlas-open-sources/mlx-swift = 0.31.6 with its vendored mlx submodule
         // moved to our three-line backport of ml-explore/mlx 76a977ca (#3498).
