@@ -37,13 +37,15 @@ PASSES = [
     ("2026-08-23-Mac16-7-67c916d5.jsonl", "P5 · 08-23", "qwen3_5 batches, MLX buffer cache released at idle"),
 ]
 
-# Passes P1-P5 were produced by engine builds that predate the RoPE fixes
-# (6ddb1d2 + 30ff507): batched gemma decoded rows 1..N-1 with no positional
+# Engine builds that predate the RoPE fixes (6ddb1d2 + 30ff507, pushed
+# 2026-08-23T19:57Z) decoded batched gemma rows 1..N-1 with no positional
 # rotation at all, so those cells measure a defect, not the engine. They stay
 # on the board — ghosted and excluded from parity/trend math — because hiding
-# a withdrawn number is how it gets re-believed later. Runs from fixed builds
-# (P6 onward) are clean and carry no mark.
-WITHDRAWN_THROUGH = {p[0] for p in PASSES}  # result files from pre-fix builds
+# a withdrawn number is how it gets re-believed later. Withdrawal is decided
+# by the ROW's timestamp, not by which file it arrived in: the first version
+# of this keyed on a filename list and a pre-fix file that auto-discovery
+# later admitted re-poisoned the medians unmarked.
+WITHDRAWN_BEFORE = "2026-08-23T19:57:40+00:00"
 WITHDRAWN_MODELS = {"gemma-4-E2B-it-qat-4bit", "gemma-4-12B-it-qat-4bit"}
 WITHDRAWN_MIN_CONCURRENCY = 2
 
@@ -94,13 +96,21 @@ def cell_key(row):
 
 
 def discover_passes(results_dir):
-    """Curated PASSES first, then any result file the list has not caught up
-    with yet — a periodic run must land on the board without someone editing
-    this file. Auto passes are ordered by first row timestamp and labeled from
-    the harness tag, so the curated labels stay the readable history and an
-    uncurated one still says what the run was for."""
+    """Curated PASSES first, then any result file NEWER than the last curated
+    one — a periodic run must land on the board without someone editing this
+    file, but files older than the curation horizon were already adjudicated
+    (superseded reruns, A/B arms) and dragging them back in reorders history.
+    Auto passes are ordered by first row timestamp and labeled from the
+    harness tag, so an uncurated run still says what it was for."""
     passes = list(PASSES)
     known = {p[0] for p in PASSES}
+    horizon = ""
+    for filename, _, _ in PASSES:
+        path = os.path.join(results_dir, filename)
+        if os.path.exists(path):
+            rows = load(path)
+            if rows:
+                horizon = max(horizon, min(row.get("timestamp") or "" for row in rows))
     found = []
     for path in sorted(glob.glob(os.path.join(results_dir, "*.jsonl"))):
         filename = os.path.basename(path)
@@ -110,6 +120,8 @@ def discover_passes(results_dir):
         if not any(row["engine"]["name"] in OURS for row in rows):
             continue
         first = min(row.get("timestamp") or "" for row in rows)
+        if first <= horizon:
+            continue
         tag = ""
         for row in rows:
             tag = (row.get("harness") or {}).get("tag") or ""
@@ -154,7 +166,7 @@ def build(results_dir):
             )
             point = {k: value(row["metrics"], k) for k in METRICS}
             if (
-                filename in WITHDRAWN_THROUGH
+                (row.get("timestamp") or "") < WITHDRAWN_BEFORE
                 and key[0] in WITHDRAWN_MODELS
                 and key[2] >= WITHDRAWN_MIN_CONCURRENCY
             ):
