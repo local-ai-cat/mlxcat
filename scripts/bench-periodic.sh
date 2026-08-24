@@ -53,7 +53,9 @@ args=(--engines "$ENGINES" --profile default
       --sync-after-engine "$SYNC"
       --tag "periodic $(date +%F) @ $(git rev-parse --short HEAD)")
 [[ -n "$MODELS" ]] && args+=(--models "$MODELS")
-python3 bench/run.py "${args[@]}"
+# Unbuffered: piped python block-buffers ~4KB, which once hid 50 minutes of
+# state during an apparent wedge and got a possibly-healthy run killed blind.
+PYTHONUNBUFFERED=1 python3 bench/run.py "${args[@]}"
 rc=$?
 
 echo "== regenerate board (bench exit $rc) =="
