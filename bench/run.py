@@ -313,6 +313,18 @@ def sync_results(args: argparse.Namespace, out_path: Path, engine_name: str) -> 
         )
 
 
+def settle_between_cells(args: argparse.Namespace) -> None:
+    """Let the engine drain to idle before the next cell is timed.
+
+    Cheaper than the model-boundary settle because the process stays up and
+    only its buffer cache needs handing back. 0 disables and restores the
+    back-to-back behaviour every pass before 2026-08-26 used.
+    """
+    pause = float(getattr(args, "cell_settle_s", 0) or 0)
+    if pause > 0:
+        time.sleep(pause)
+
+
 def settle_after_model(args: argparse.Namespace, engine_name: str, model_id: str) -> None:
     """Wait for the host to give back what the last model held, before the next one loads.
 
@@ -1198,6 +1210,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--matrix-file", default=str(DEFAULT_MATRIX))
     parser.add_argument("--max-load", type=float, default=8.0, help="quiet-machine guard: 1-minute load average ceiling")
     parser.add_argument("--min-free-pct", type=float, default=35.0, help="quiet-machine guard: memory_pressure free %% floor")
+    parser.add_argument("--cell-settle-s", type=float, default=15.0,
+                        help="pause between cells of the same model so the engine drains to idle and hands back its buffer cache. 0 = the pre-2026-08-26 back-to-back behaviour.")
     parser.add_argument("--model-settle-floor-s", type=float, default=10.0,
                         help="unconditional pause after each model before the next loads. The free-memory check alone is not enough: a large host reports plenty free immediately after an engine exits.")
     parser.add_argument("--model-settle-s", type=float, default=30.0,
@@ -1527,9 +1541,22 @@ def main(argv: Optional[List[str]] = None) -> int:
                         + [(t, w) for t in conc_tiers for w in widths if w > 1]
                     )
                 ]
-                for tier_name, width, cache_mode in cells:
+                for cell_index, (tier_name, width, cache_mode) in enumerate(cells):
                     if abandon_reason:
                         break
+                    # Cells inside one model SHARE the engine process (it is
+                    # launched per model, not per cell), so MLX's buffer cache
+                    # carries from one cell into the next and the later cells in
+                    # the sequence measure a dirtier engine than the earlier
+                    # ones. Measured 2026-08-26 on the M4 Pro: after the
+                    # model-boundary settle landed, Qwen3.5-4B longgen/c1 — the
+                    # 2nd cell of six — recovered to 1291 ms, while longgen/c2
+                    # and longgen/c4, the 5th and 6th, stayed 0.98x and 0.77x
+                    # against best-other. mlxcat hands the buffer cache back when
+                    # its scheduler drains to idle, so the pause is what lets
+                    # that finish before the next cell starts timing.
+                    if cell_index > 0:
+                        settle_between_cells(args)
                     tier = tiers[tier_name]
                     max_tokens = int(tier.get("max_tokens", args.max_tokens))
                     cell_key = (
