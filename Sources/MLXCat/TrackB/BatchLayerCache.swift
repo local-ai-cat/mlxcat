@@ -58,6 +58,45 @@ final class BatchLayerCache {
         return try mergeBatchState(caches)
     }
 
+    /// Build a width-`rows` batched layer from a FRESH, never-written row cache.
+    ///
+    /// ``merge(_:)`` cannot do this: it infers layout from `state`, and a fresh
+    /// cache has none — `KVCacheSimple.state` is `[keys, values].compactMap`,
+    /// which is `[]` until the first write. Every row entering a prefill stack
+    /// is cold, so without this the stack could never form.
+    ///
+    /// Returns nil for any layer that is not a plain sequence cache. Rotating,
+    /// quantized and recurrent layers each carry their own batch-axis rules
+    /// (window boundaries, per-row scales, folded recurrent state) that an
+    /// empty cache does not yet expose, so there is nothing to infer them from
+    /// here. The caller falls back to solo prefill for that model rather than
+    /// guessing — a narrower fence than it looks, and one the batch-invariance
+    /// gates can widen with evidence instead of argument.
+    static func emptyBatched(rows: Int, like rowCache: any KVCache) -> BatchLayerCache? {
+        guard rows > 0 else { return nil }
+        guard rowCache is KVCacheSimple else { return nil }
+        guard rowCache.state.isEmpty else { return nil }
+
+        return BatchLayerCache(
+            kvCache: BatchKVCache(leftPadding: Array(repeating: 0, count: rows)),
+            layout: .sequence,
+            rowMetaStates: Array(repeating: rowCache.metaState, count: rows)
+        )
+    }
+
+    /// Declare the next write right-padded. No-op on layouts that do not carry
+    /// per-row padding — a stack only forms over layers that do (see
+    /// ``emptyBatched(rows:like:)``), so this stays a guard rather than a throw.
+    func prepare(rightPadding padding: [Int]) throws {
+        guard let batched = kvCache as? BatchKVCache else { return }
+        try batched.prepare(rightPadding: padding)
+    }
+
+    /// Roll an outstanding right-padded write into the left-padded layout.
+    func finalize() {
+        (kvCache as? BatchKVCache)?.finalize()
+    }
+
     func insert(_ cache: any KVCache) throws {
         try extend(Self.merge([cache]))
     }
