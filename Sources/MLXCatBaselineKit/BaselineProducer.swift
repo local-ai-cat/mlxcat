@@ -234,6 +234,13 @@ public enum BaselineProducer {
         }
         let loadPeak = BaselineFootprint.read()?.lifetimeMax ?? 0
         log("loaded \(configuration.modelID) (lifetime max footprint after load \(Double(loadPeak) / 1_073_741_824) GiB)")
+        // Echo the policy that ACTUALLY resolved, not the one that was asked
+        // for. Three separate defects tonight were a setting that never
+        // arrived — an entitlement, a *.jinja glob, a settle whose condition
+        // never fired — and each produced a confident number that meant
+        // nothing. A run that claims kv4 must be able to prove it.
+        let kvEcho = KVQuantizationPolicy.fromEnvironment()
+        log("kv-quantization: \(kvEcho.isEnabled ? "bits=\(kvEcho.bits.map(String.init) ?? "nil") group=\(kvEcho.groupSize) start=\(kvEcho.startTokens)" : "off (fp16)")")
 
         try await container.perform { context in
             // Calibrate chars/token on this tokenizer.
@@ -263,10 +270,19 @@ public enum BaselineProducer {
                                 if count == 1 { firstTokenAt = DispatchTime.now().uptimeNanoseconds }
                             }
                         case .mlxcat:
+                            // KV quantization must be REACHABLE from this arm.
+                            // It was not: the policy's env hook is wired in
+                            // NativeModelEngine, and this producer never passed
+                            // the argument, so MLXCAT_KV_BITS was inert here and
+                            // a ladder run asking for kv4 would have quietly
+                            // measured fp16 and reported it as quantized. Default
+                            // stays .off, so the default path is unchanged.
+                            let kvPolicy = KVQuantizationPolicy.fromEnvironment()
                             let engine = MLXCatEngine(
                                 model: context.model,
                                 parameters: GenerateParameters(maxTokens: cell.maxTokens, temperature: 0),
-                                maxConcurrentRequests: 8
+                                maxConcurrentRequests: 8,
+                                kvQuantization: kvPolicy
                             )
                             let request = Request(
                                 uid: "baseline-\(UUID().uuidString)",
