@@ -11,6 +11,9 @@ public enum BatchKVCacheError: Error, Equatable, CustomStringConvertible {
     case incompatibleLayout(expected: String, actual: String)
     case unsupportedStateMutation(layout: String, stateCount: Int)
     case invalidMetadata([String])
+    case unsupportedRightPadding(layout: String)
+    case rightPaddingWidthMismatch(expected: Int, actual: Int)
+    case rightPaddingAlreadyPrepared
 
     public var description: String {
         switch self {
@@ -30,6 +33,12 @@ public enum BatchKVCacheError: Error, Equatable, CustomStringConvertible {
             return "BatchKVCache cannot set \(stateCount) state arrays on \(layout) layout."
         case .invalidMetadata(let metadata):
             return "BatchKVCache metadata is invalid: \(metadata)."
+        case .unsupportedRightPadding(let layout):
+            return "BatchKVCache cannot right-pad a \(layout) layout; ragged prefill is sequence-layout only."
+        case .rightPaddingWidthMismatch(let expected, let actual):
+            return "BatchKVCache right padding must name every row: expected \(expected) values, found \(actual)."
+        case .rightPaddingAlreadyPrepared:
+            return "BatchKVCache already holds unfinalized right padding; finalize() before preparing another ragged write."
         }
     }
 }
@@ -302,6 +311,98 @@ public final class BatchKVCache: KVCache, BatchPositionedKVCache {
         }
 
         rowMetaStates.append(contentsOf: other.rowMetaStates)
+    }
+
+    // MARK: Right-padded ragged prefill
+
+    /// Set while a ragged multi-row prefill write is outstanding, cleared by
+    /// ``finalize()``. Only rows that FINISH their prompt in the current write
+    /// ever carry padding — a row still prefilling gets 0 and is untouched by
+    /// the roll below — so padding can never end up interleaved between two of
+    /// a row's own chunks.
+    private var rightPadding: MLXArray?
+
+    public var hasPendingRightPadding: Bool { rightPadding != nil }
+
+    /// Declare that the next write is right-padded: row `i` carries
+    /// `padding[i]` junk positions after its real tokens.
+    ///
+    /// Right padding needs no mask. Padding sits AFTER a row's real tokens, and
+    /// under causal attention a real token at position p attends only to <= p,
+    /// so it can never see its own padding; the padded rows' logits are
+    /// discarded. That is why upstream pads prompts on the right and decode
+    /// batches on the left (`guest/mlx-lm/mlx_lm/models/cache.py:967-988`) —
+    /// the two paddings buy different things and only the left one costs a mask.
+    public func prepare(rightPadding padding: [Int]) throws {
+        guard case .sequence = layout else {
+            throw BatchKVCacheError.unsupportedRightPadding(layout: layout.description)
+        }
+        guard padding.count == batchSize else {
+            throw BatchKVCacheError.rightPaddingWidthMismatch(
+                expected: batchSize,
+                actual: padding.count
+            )
+        }
+        guard let maxPadding = padding.max(), maxPadding > 0 else { return }
+        guard rightPadding == nil else {
+            throw BatchKVCacheError.rightPaddingAlreadyPrepared
+        }
+        rightPadding = MLXArray(padding.map(Int32.init))
+    }
+
+    /// Convert an outstanding right-padded write into the left-padded layout
+    /// decode expects, by rolling each row right by its own padding: the junk
+    /// moves from the tail of the written window to its head, every row's tip
+    /// lands on the same column, and `positionOffsets`/`leftPadding` absorb the
+    /// shift. Mirrors `BatchKVCache.finalize` upstream
+    /// (`guest/mlx-lm/mlx_lm/models/cache.py:980-987`).
+    ///
+    /// The roll covers exactly the WRITTEN window `0 ..< idx`, never the
+    /// over-allocated capacity beyond it. Rolling the whole buffer would wrap
+    /// capacity zeros into the valid window and push the last `padding` real
+    /// entries out past `idx` where nothing reads them — silent truncation of
+    /// the tip, which is the token the row is about to decode from.
+    public func finalize() {
+        guard let padding = rightPadding else { return }
+        rightPadding = nil
+        guard case .sequence(let sequenceAxis) = layout, idx > 0 else { return }
+
+        for bufferIndex in buffers.indices {
+            let written = Self.slice(buffers[bufferIndex], sequenceAxis: sequenceAxis, range: 0 ..< idx)
+            let rolled = Self.dynamicRoll(written, shifts: padding, axis: sequenceAxis)
+            buffers[bufferIndex][
+                Self.indices(
+                    sequenceAxis: sequenceAxis,
+                    range: 0 ..< idx,
+                    rank: buffers[bufferIndex].shape.count
+                )
+            ] = rolled
+        }
+
+        positionOffsets = positionOffsets - padding
+        leftPadding = leftPadding + padding
+    }
+
+    /// Per-row circular shift along `axis`, shifting row `i` right by
+    /// `shifts[i]`. Port of upstream's `dynamic_roll`
+    /// (`guest/mlx-lm/mlx_lm/models/cache.py:903-909`) built from `takeAlong`,
+    /// since mlx-swift exposes no roll op.
+    private static func dynamicRoll(_ array: MLXArray, shifts: MLXArray, axis: Int) -> MLXArray {
+        let rank = array.shape.count
+        let length = array.dim(axis)
+
+        var shiftShape = Array(repeating: 1, count: rank)
+        shiftShape[0] = shifts.dim(0)
+
+        var positionShape = Array(repeating: 1, count: rank)
+        positionShape[axis] = length
+
+        let positions = MLXArray((0 ..< length).map(Int32.init)).reshaped(positionShape)
+        // Positive modulo: MLX's remainder keeps the dividend's sign, and a
+        // negative index would read from the wrong end of the row.
+        let raw = positions - shifts.reshaped(shiftShape)
+        let wrapped = remainder(remainder(raw, Int32(length)) + Int32(length), Int32(length))
+        return takeAlong(array, broadcast(wrapped, to: array.shape), axis: axis)
     }
 
     public func update(keys newKeys: MLXArray, values newValues: MLXArray) -> (MLXArray, MLXArray) {
