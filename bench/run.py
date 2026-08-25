@@ -313,6 +313,56 @@ def sync_results(args: argparse.Namespace, out_path: Path, engine_name: str) -> 
         )
 
 
+def settle_after_model(args: argparse.Namespace, engine_name: str, model_id: str) -> None:
+    """Wait for the host to give back what the last model held, before the next one loads.
+
+    MEASURED 2026-08-26 on the M4 Pro. Qwen3.5-4B longgen/c1/cold is 1291 ms
+    TTFT and 807 tok/s prefill when it is the FIRST model of a pass, and
+    1290-1292 ms across independent repeats — this benchmark is extremely
+    reproducible in isolation. Run it SECOND, after gemma-4-E2B in the same
+    invocation, and the same cell measures 2040 ms and 509 tok/s: **58% slower**,
+    with peak footprint DOWN from 4.47 to 4.11 GiB. Lower peak plus slower is
+    the signature of an engine that was handed less memory, not one that ran hot.
+
+    It is not the engine process: `launch_for` already starts a fresh one per
+    model and `stop()` reaps it. It is not thermal, and not page cache: warming
+    the host with gemma and then running Qwen3.5-4B in a SEPARATE invocation —
+    no cooldown at all — gives 1291 ms, and 1290 ms after a 240s cooldown.
+    The contamination lives strictly INSIDE one invocation, where the next
+    `launch_for` follows `stop()` by milliseconds and the kernel has not yet
+    finished reclaiming several GiB.
+
+    Why this matters far beyond one slow cell: `bench/parity.py` keys a cell by
+    (device, model, tier, cache_mode, concurrency) and NOT by position in the
+    pass, so it will happily compare a first-position measurement against a
+    fifth-position one. That is exactly what turned the gate red on 2026-08-24:
+    the baseline was set from a 2-model pass with Qwen3.5-4B FIRST (1290.5 ms),
+    and the failing pass was a 12-model sweep with it FIFTH (1652.3 ms), with
+    gemma-4-E2B — the other failing model — sitting THIRD. No code regression
+    was ever involved; two separate mechanisms were proposed and both were
+    wrong before the measurement settled it.
+
+    Bounded on purpose: a pass that waits forever for a free-memory number that
+    a busy host will never return is worse than one that records what it saw.
+    """
+    budget = float(getattr(args, "model_settle_s", 0) or 0)
+    if budget <= 0:
+        return
+    target = float(getattr(args, "min_free_pct", 0) or 0)
+    deadline = time.time() + budget
+    while time.time() < deadline:
+        free = memory_free_percent()
+        if free is None or free >= target:
+            return
+        time.sleep(1.0)
+    print(
+        f"[{engine_name}/{model_id}] settle: free memory still below {target}% after "
+        f"{budget:.0f}s — the NEXT model may be measured under recovery and is not "
+        f"comparable to a first-position row",
+        file=sys.stderr,
+    )
+
+
 def host_violations(snapshot: Dict[str, Any], args: argparse.Namespace) -> List[str]:
     """`quiet_machine_violations` bound to the run's flags and swap baseline."""
     return quiet_machine_violations(
@@ -1138,6 +1188,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--matrix-file", default=str(DEFAULT_MATRIX))
     parser.add_argument("--max-load", type=float, default=8.0, help="quiet-machine guard: 1-minute load average ceiling")
     parser.add_argument("--min-free-pct", type=float, default=35.0, help="quiet-machine guard: memory_pressure free %% floor")
+    parser.add_argument("--model-settle-s", type=float, default=30.0,
+                        help="after each model, wait up to this long for free memory to return to --min-free-pct before loading the next one. 0 disables. Measured 2026-08-26: without it, a model run SECOND in a pass was 58%% slower with a lower peak than the same cell run first.")
     parser.add_argument("--allow-loaded", action="store_true", help="run even if the guard trips; rows are marked invalid for the leaderboard")
     parser.add_argument(
         "--wait-for-quiet",
@@ -1546,6 +1598,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                         print(f"{label} prompt {metrics['prompt_tokens']} tok · TTFT {metrics['ttft_ms']['median']:.0f} ms · prefill {pre:.0f} tok/s · decode {dec:.1f} tok/s · peak {peak:.2f} GiB{agg}")
             finally:
                 engine.stop()
+                settle_after_model(args, engine_name, model_id)
 
         sync_results(args, out_path, engine_name)
 
