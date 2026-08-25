@@ -348,8 +348,18 @@ def settle_after_model(args: argparse.Namespace, engine_name: str, model_id: str
     budget = float(getattr(args, "model_settle_s", 0) or 0)
     if budget <= 0:
         return
+    # UNCONDITIONAL floor first. The first version of this waited only while
+    # free memory sat under --min-free-pct, and on a 48 GiB host that reads 58%
+    # free the instant a 4 GiB engine exits — so it returned immediately every
+    # time and settled nothing. It LOOKED validated because the run that seemed
+    # to prove it had gemma doing one cell instead of six; the improvement was
+    # less preceding work, not the wait. Free-memory percentage is not the
+    # quantity that recovers slowly here.
+    floor = min(budget, float(getattr(args, "model_settle_floor_s", 10.0) or 0))
+    if floor > 0:
+        time.sleep(floor)
     target = float(getattr(args, "min_free_pct", 0) or 0)
-    deadline = time.time() + budget
+    deadline = time.time() + max(0.0, budget - floor)
     while time.time() < deadline:
         free = memory_free_percent()
         if free is None or free >= target:
@@ -1188,6 +1198,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--matrix-file", default=str(DEFAULT_MATRIX))
     parser.add_argument("--max-load", type=float, default=8.0, help="quiet-machine guard: 1-minute load average ceiling")
     parser.add_argument("--min-free-pct", type=float, default=35.0, help="quiet-machine guard: memory_pressure free %% floor")
+    parser.add_argument("--model-settle-floor-s", type=float, default=10.0,
+                        help="unconditional pause after each model before the next loads. The free-memory check alone is not enough: a large host reports plenty free immediately after an engine exits.")
     parser.add_argument("--model-settle-s", type=float, default=30.0,
                         help="after each model, wait up to this long for free memory to return to --min-free-pct before loading the next one. 0 disables. Measured 2026-08-26: without it, a model run SECOND in a pass was 58%% slower with a lower peak than the same cell run first.")
     parser.add_argument("--allow-loaded", action="store_true", help="run even if the guard trips; rows are marked invalid for the leaderboard")
