@@ -340,6 +340,33 @@
         "ready_timeout_s": 120
       },
       "notes": "Same binary and same ceiling as `mlxcat`; the only difference is the two env overrides. This arm is not a proposal — it is the control that makes the default's footprint claim a measurement. Note the peak column is per PROCESS and one process serves every tier of a model, so this arm's later cells inherit its 16k high-water mark; that inheritance IS the defect being priced."
+    },
+    "mlxcat-scalar-rope-off": {
+      "description": "mlxcat with the single-row scalar RoPE offset turned OFF (MLXCAT_SINGLE_ROW_SCALAR_ROPE=0) — the behaviour that shipped before 97aa3e5. That commit makes a one-row BatchKVCache report .scalar(p) instead of .batch([p]) so MLX's RoPE fast path stays eligible on single-row decode; reading the scalar costs a host sync, cached per mutation epoch. It landed with its own message saying \"Perf A/B queued for the quiet M4\" — the A/B was never run, and the next bench pass showed mlxcat's own cold TTFT rising on Qwen3.5-4B (1290->1652 c1, 1951->2940 c2, 3876->5647 c4) with rivals unchanged, which is what turned the parity gate red. Read the pair `mlxcat` vs `mlxcat-scalar-rope-off` as: is the width-1 fast path worth what it costs. NOTE the fast path is gated on batchSize == 1, so it can only explain c1 — if c2/c4 move too, the cause is elsewhere and this arm says so.",
+      "platforms": [
+        "macos",
+        "ios"
+      ],
+      "launch": {
+        "bin": "{repo}/.build/release/mlxcat-http",
+        "bin_env": "MLXCAT_HTTP_BIN",
+        "args": [
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "{port}",
+          "--model-dir",
+          "{model_root}",
+          "--memory-ceiling-bytes",
+          "{memory_ceiling_bytes}"
+        ],
+        "env": {
+          "MLXCAT_SINGLE_ROW_SCALAR_ROPE": "0"
+        },
+        "port_base": 11960,
+        "ready_timeout_s": 120
+      },
+      "notes": "Same binary, same ceiling, same everything as `mlxcat`; one env override. This arm is the discriminator the parity-gate regression needs, not a proposal."
     }
   }
 }
