@@ -41,6 +41,32 @@ docs and no single list.
 | `MLXCAT_UNSERIALIZE_MODEL_TYPES` | none | Lifts per-family decode serialization. Widening it is a correctness claim — the families are serialized because they failed batching, not for caution. | `MLXCatNative/NativeModelEngine.swift:793` |
 | `MLXCAT_BATCH_INVARIANCE_MODELS` | built-in list | Which models the batch-invariance gate covers. Test surface, not a runtime lever. | `MLXCatNative/NativeModelEngine.swift:1152` |
 
+## Harness levers (measurement, not runtime)
+
+These do not change what the engine does — they change whether a measurement of
+it means anything. Added 2026-08-26 after a night in which SIX apparently-red
+parity cells turned out to be the instrument, not the engine.
+
+| lever | default | trade-off, with the number | exit |
+|---|---|---|---|
+| `--model-settle-floor-s` | `10` (60 used for the clean pass) | Unconditional pause after each model before the next loads. WITHOUT it, Qwen3.5-4B `longgen/c1` measured **2040 ms / 509 tok/s** when it ran second in a pass and **1291 ms / 807 tok/s** when it ran first — 58% slower, with peak DOWN 4.47→4.11 GiB. Cost: that many seconds per model boundary. | `0` restores the pre-2026-08-26 back-to-back behaviour. |
+| `--model-settle-s` | `30` | Upper bound on the settle, after the floor, while free memory is under `--min-free-pct`. | `0` disables. |
+| `--cell-settle-s` | `15` (20 used for the clean pass) | Pause between cells of the SAME model so the engine drains to idle and hands back its buffer cache. Cells share one process (it is per-model, not per-cell). Recovered gemma-4-E2B `longgen/c2` outright (TTFT 433→336 ms) and moved Qwen3.5-4B `longgen/c2` from 0.98x to 1.07x vs best-other. | `0` restores back-to-back cells. |
+
+**Why the defaults are ON despite costing wall-clock.** A pass that is fast and
+measures queue position is worth less than a pass that is slow and measures the
+engine. On a 12-model sweep the settles add roughly `60s x models +
+20s x cells`. If that is ever too expensive for a routine pass, turn them down
+and know that cross-pass comparisons stop being safe — do not turn them down and
+then compare against a baseline recorded with them on.
+
+**The residual, unfixed.** `bench/parity.py` keys a cell by
+`(device, model, tier, cache_mode, concurrency)` and NOT by position in the pass,
+so it can still compare a first-position row against a fifth-position one. The
+settles reduce the contamination; they do not make position part of the cell
+identity. Recording position in the row and refusing cross-position comparisons
+is the real fix and is not done.
+
 ## Levers that were exited
 
 Kept as evidence that the exit works, and so a measured-negative idea is not
