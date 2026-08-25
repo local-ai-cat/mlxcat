@@ -543,6 +543,69 @@ behaviour would sit permanently red and be ignored; asserting the defect means
 it goes red exactly once — the day the grid is fixed — and its message says to
 restore gemma and delete it.
 
+## 1g. The parity gate was measuring queue position — FIXED (instrument), 2 cells open
+
+Red since 2026-08-24 with six cells showing a 28-51% TTFT loss. **No code
+regression was ever involved.** Two mechanisms were proposed and both were wrong
+before measurement settled it; recording that, because the wrong answers were
+each more plausible than the right one.
+
+**Wrong answer 1: "the price of the gemma correctness fix."** The RoPE forks
+(`f995ac5`/`6ddb1d2`/`30ff507`) were already in the FAST pass. Excluded by
+`git merge-base --is-ancestor`.
+
+**Wrong answer 2: `97aa3e5`'s host sync.** `positionOffsets.item(Int.self)` in
+`BatchKVCache.ropeOffset` is a real GPU->CPU sync on the prefill path, it fit the
+TTFT-only / decode-flat / concurrency-scaling signature exactly, and the commit
+itself admitted "Perf A/B queued for the quiet M4" — never run. It was still
+wrong: the `mlxcat-scalar-rope-off` control arm puts the lever inside noise
+(1291 ms ON vs 1323 ms OFF at c1). A mechanism that explains the data is not the
+data. The arm exists now so this stays testable rather than arguable.
+
+**The actual cause: position in the pass.** A cell measured after other work is
+slower than the same cell measured first, and `bench/parity.py` does not key on
+position:
+
+| | Qwen3.5-4B `longgen/c1` |
+|---|---|
+| 1st of 2 models (the BASELINE, `b12aaab8`) | **1290.5 ms** |
+| 5th of 12 models (the red pass, `be888640`) | **1652.3 ms** |
+| measured alone today, 4 independent runs | **1291, 1292, 1291, 1290 ms** |
+
+Isolated, this benchmark is reproducible to ~1 ms. gemma-4-E2B — the other
+failing model — sat THIRD in that same red pass.
+
+**Narrowed by elimination, not by guessing.** Not the engine process:
+`launch_for` already starts a fresh one per model and `stop()` reaps it. Not
+thermal and not page cache: warming the host with gemma and then running
+Qwen3.5-4B in a SEPARATE invocation gives 1291 ms with NO cooldown, and 1290 ms
+after 240s. The contamination lives strictly inside one `run.py` invocation.
+
+**Fixed** by two settles (see `docs/LEVERS.md` for the numbers and exits). First
+attempt was a no-op and looked validated — it waited only while free memory was
+under `--min-free-pct`, and a 48 GiB host reads 58% free the instant a 4 GiB
+engine exits. The run that seemed to prove it had gemma doing one cell instead of
+six. Verify that a fix FIRED, not just that the number moved.
+
+Score: **7 red cells -> 2.** Every recovery came from repairing the instrument.
+`--update` was never used: a gate you satisfy by moving the baseline hides the
+next real regression behind it, permanently.
+
+### Still open
+
+- `Qwen3.5-4B|longgen|cold|2 [ttft]` — 1.42x -> 1.07x. Improved by the cell
+  settle from 0.98x; still short of the 10% tolerance band.
+- `Qwen3.5-4B|longgen|cold|4 [ttft]` — 1.14x -> 0.85x. **Unexplained.** The
+  heaviest cell we run (four concurrent 1k prompts, peak 6.1 GiB). Three
+  isolated repeats give **5206 / 4527 / 5208 ms** — a TIGHT cluster that does
+  not contain the baseline's 3876 ms, so this is not the baseline having caught
+  a lucky sample, and re-baselining it would bury a real difference. Eliminated:
+  the RoPE fork (already in the baseline build), contamination (today's run had
+  LESS preceding work and was still slower), the scalar-RoPE lever (the two A/B
+  runs disagree on its sign here, so it is inside the cell's own noise), and
+  thermal. Next step is a build bisect between `4abfa99` and HEAD over the two
+  commits touching `Sources/`.
+
 ## 2. Hybrid caches cannot be combined mid-batch — FIXED
 
 `BatchLayerCache.extract` built a fresh `KVCacheSimple` and copied the row's
