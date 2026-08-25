@@ -59,6 +59,7 @@ TEST_RUNNER_BENCHHOST_MODEL_ID="$model_list" xcodebuild test \
   -destination "platform=iOS,id=$DEVICE" \
   -resultBundlePath "$result" \
   -test-timeouts-enabled NO \
+  -allowProvisioningUpdates \
   -skipMacroValidation -skipPackagePluginValidation \
   2>&1 | tee "$console" | grep -E "Test Case|Test Suite|error:|BENCHHOST |failed" | tail -30 || true
 

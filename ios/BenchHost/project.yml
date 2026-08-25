@@ -36,6 +36,9 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: pldev.mlxcat.benchhost
         DEVELOPMENT_TEAM: 599WAZ6282
         CODE_SIGN_STYLE: Automatic
+        # Without this the host is capped far below the shipping app's budget
+        # and the headline model cannot load at all — see the entitlements file.
+        CODE_SIGN_ENTITLEMENTS: BenchHost/BenchHost.entitlements
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
   BenchHostTests:

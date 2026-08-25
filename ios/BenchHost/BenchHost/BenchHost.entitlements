@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- The bench host must get the SAME memory budget as the shipping app, or
+	     it measures a phone the app never runs on. Without this entitlement iOS
+	     capped BenchHost at 3.25 GiB available / 2.60 GiB ceiling on an iPhone 17
+	     Pro Max, and gemma-4-E2B-it-qat-4bit (4.1 GB of weights — the headline
+	     row, the model the app actually ships to phones) was jetsam-killed at
+	     load, 25s in, on both phones, producing zero rows (2026-08-26).
+	     `Local AI Chat` carries the same key in AppStore.entitlements. -->
+	<key>com.apple.developer.kernel.increased-memory-limit</key>
+	<true/>
+</dict>
+</plist>
