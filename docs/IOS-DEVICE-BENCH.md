@@ -171,6 +171,56 @@ The kill is the result, not a failure of the run: the ladder recovered its own
 answer from the `BENCHRUNG` console lines after the process was killed, which is
 the whole reason those lines exist.
 
+### Finding 6 — KV quantization is worth 4x the context on a phone
+
+Same device, same model, same ladder; the only difference is
+`MLXCAT_KV_BITS=4 MLXCAT_QUANTIZED_KV_START=0`:
+
+| | fp16 (default) | kv4 |
+|---|---|---|
+| MAX SURVIVED | **16,384** tokens | **65,536** tokens |
+| peak at max | 4.67 GB | 5.64 GiB |
+| 65,536 rung | **JETSAM KILL** | survived |
+| verdict | ceiling found | **ceiling NOT reached — ran out of rungs** |
+
+Qwen3-1.7B is full-attention, so all 28 layers quantize. fp16 KV is
+~112 KiB/token; the measured kv4 ratio is **3.56x, not 4x** — affine group-64
+stores an fp16 scale and bias per group
+(`Sources/MLXCat/TrackB/KVQuantizationPolicy.swift:12-15`).
+
+**This is not free, and it is not on by default.**
+
+- Decode costs **0.80-0.84x**, measured on the Mac.
+- Enabling it forces `serializationPolicy = .always` and **disables the prefix
+  cache** (`Sources/MLXCat/TrackB/Scheduler.swift:103-109`). Harmless for a
+  single-stream ladder; a real turn-2 TTFT loss in a chat session.
+- gemma-4-E2B benefits far less: its rotating layers refuse conversion by
+  design, as they do in mlx-lm (`guest/mlx-lm/mlx_lm/models/cache.py:551`).
+
+**Read the peak column before celebrating.** At 65,536 the process peaked at
+**5.64 GiB against a 4.79 GiB configured ceiling** — 0.85 GiB *over*. It
+survived because the ceiling bounds MLX's allocator, not the process, and iOS's
+real jetsam threshold sits above our 80%-of-available figure. That is exactly
+`KNOWN-FAILURES.md` 1c, and it means kv4 buys context by spending the safety
+margin. Shipping it as an automatic policy needs the device-aware KV budget
+first, so the failure mode is a structured refusal rather than a kill.
+
+Reproduce:
+
+```bash
+# fp16 baseline
+ios/BenchHost/run-context-ladder.sh --device <udid> \
+  --model mlx-community/Qwen3-1.7B-4bit --rungs 16384,32768,49152,65536
+# kv4
+TEST_RUNNER_MLXCAT_KV_BITS=4 TEST_RUNNER_MLXCAT_QUANTIZED_KV_START=0 \
+  ios/BenchHost/run-context-ladder.sh --device <udid> \
+  --model mlx-community/Qwen3-1.7B-4bit --rungs 16384,32768,49152,65536
+```
+
+The run prints `BENCHHOST kv-quantization: bits=4 group=64 start=0` next to the
+load line. **Check it.** Before 2026-08-26 the producer never passed the policy,
+so this exact command would have measured fp16 and called it kv4.
+
 ## Promoting rows
 
 Rows arrive invalid by design. To promote:
