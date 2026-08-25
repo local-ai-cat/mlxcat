@@ -543,6 +543,46 @@ behaviour would sit permanently red and be ignored; asserting the defect means
 it goes red exactly once — the day the grid is fixed — and its message says to
 restore gemma and delete it.
 
+### Verifying the fix on a real build (end-to-end)
+
+`GemmaRoPEOffsetProbeTests` and `RoPEBatchGridProbeTests` gate this in-repo. They
+do NOT prove that a SHIPPED artifact carries it: the bundled sidecar binary is
+supplied at build time via `MLXSERVE_BINARY_DIR` and does not have to match the
+SwiftPM revision the app resolves. Verify the surface, not the pin.
+
+**The invariant:** N identical greedy requests sent CONCURRENTLY must produce
+byte-identical completions, and must match the same prompt sent alone.
+
+```bash
+TOKEN=$(plutil -extract 'localAPI\.token' raw ~/Library/Preferences/pldev.Seek-Deep-Local-AI.plist)
+P='Explain what a Kalman filter does, in exactly three sentences.'
+REQ() { curl -s -X POST http://127.0.0.1:11435/v1/chat/completions \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d "{\"model\":\"gemma-4-E2B-it-qat-4bit\",\"temperature\":0,\"max_tokens\":128,\"messages\":[{\"role\":\"user\",\"content\":\"$P\"}]}" \
+  | python3 -c 'import sys,json; print(json.load(sys.stdin)["choices"][0]["message"]["content"])'; }
+
+REQ > /tmp/gemma-warm.txt                # resident, so the batch really overlaps
+REQ > /tmp/gemma-solo.txt                # width 1 — the reference
+for i in 1 2 3 4; do REQ > /tmp/gemma-c$i.txt & done; wait
+md5 -q /tmp/gemma-solo.txt /tmp/gemma-c[1-4].txt
+```
+
+PASS = all five hashes identical. FAIL = solo matches c1 while c2/c3/c4 diverge.
+
+**Why the obvious version of this test is worthless.** Row 0 is ALWAYS correct
+under this defect — only rows 1..N are unrotated. So a single request, or
+eyeballing one response, passes with the bug fully present. Three ways the check
+goes silently vacuous:
+
+1. **The requests do not overlap.** If they serialise, every row is width 1 and
+   it passes trivially. Warm the model first so load time does not stagger them.
+2. **Wrong family.** `qwen3_5` and `gpt_oss` are unaffected; green there proves
+   nothing.
+3. **temperature > 0.** Divergence becomes expected and the invariant is void.
+
+A failure here points at the sidecar artifact's provenance BEFORE it points at
+the pins — check `MLXSERVE_BINARY_DIR` first.
+
 ## 1g. The parity gate was measuring queue position — FIXED (instrument), 2 cells open
 
 Red since 2026-08-24 with six cells showing a 28-51% TTFT loss. **No code
