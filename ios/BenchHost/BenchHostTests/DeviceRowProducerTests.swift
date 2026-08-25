@@ -75,7 +75,14 @@ final class DeviceRowProducerTests: XCTestCase {
             let hub = HubApi()
             let modelDirectory = try await hub.snapshot(
                 from: modelID,
-                matching: ["*.safetensors", "*.json", "*.txt", "*.model", "*.tiktoken"]
+                // `*.jinja` is NOT optional: gemma-4 keeps its chat template in a
+                // standalone chat_template.jinja rather than inside
+                // tokenizer_config.json, and without it the tokenizer throws
+                // `missingChatTemplate` at first use — after a full weight
+                // download and load (2026-08-26, gemma-4-E2B on both phones).
+                matching: [
+                    "*.safetensors", "*.json", "*.txt", "*.model", "*.tiktoken", "*.jinja",
+                ]
             )
 
             let configuration = BaselineConfiguration(
