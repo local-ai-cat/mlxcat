@@ -551,7 +551,20 @@ supplied at build time via `MLXSERVE_BINARY_DIR` and does not have to match the
 SwiftPM revision the app resolves. Verify the surface, not the pin.
 
 **The invariant:** N identical greedy requests sent CONCURRENTLY must produce
-byte-identical completions, and must match the same prompt sent alone.
+byte-identical completions **to each other**.
+
+**They need NOT match the same prompt sent alone, and requiring that is a bug in
+the test.** Width 1 and width >= 2 take different code paths on purpose — the
+control row of `BatchInvarianceTests` is bit-exact 0.0 for every model precisely
+because a single row has nothing to be contaminated by, while gemma-4-E2B
+measures 0.688 logit error at batch 4 (inside the 1.25 tolerance, `mismatched =
+0`). Greedy decoding turns a sub-tolerance logit delta into a different token at
+a near-tie, and the sequences then diverge visibly. That is documented
+batch-variance, not the RoPE defect.
+
+The first version of this recipe demanded solo == batch and was corrected on
+2026-08-26 after a133 produced exactly that pattern: solo one hash, c1..c4 a
+second hash but all four IDENTICAL. That is a PASS.
 
 ```bash
 TOKEN=$(plutil -extract 'localAPI\.token' raw ~/Library/Preferences/pldev.Seek-Deep-Local-AI.plist)
@@ -567,7 +580,13 @@ for i in 1 2 3 4; do REQ > /tmp/gemma-c$i.txt & done; wait
 md5 -q /tmp/gemma-solo.txt /tmp/gemma-c[1-4].txt
 ```
 
-PASS = all five hashes identical. FAIL = solo matches c1 while c2/c3/c4 diverge.
+**PASS** = `c1..c4` all identical (whether or not they equal `solo`).
+**FAIL** = the concurrent rows disagree AMONG THEMSELVES — classically `c1`
+matches `solo` while `c2/c3/c4` each differ, because row 0 is the only one the
+fast path rotates.
+
+`solo` is kept in the recipe as context, not as an assertion: it tells you which
+row-0 output looked like, which is useful when reading a real failure.
 
 **Why the obvious version of this test is worthless.** Row 0 is ALWAYS correct
 under this defect — only rows 1..N are unrotated. So a single request, or
