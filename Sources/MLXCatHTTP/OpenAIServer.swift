@@ -26,22 +26,52 @@ public struct OpenAIChatImageReference: Sendable, Equatable {
     }
 }
 
+/// An audio or video attachment the MODEL consumes, as opposed to
+/// `/v1/audio/transcriptions`, which is speech-to-text and unrelated.
+///
+/// Same two sources as an image reference: a URL the engine can open, or an inline
+/// base64 data URI. Kept as a separate type rather than reusing
+/// `OpenAIChatImageReference` because "image" in the name of the thing carrying a video
+/// is the sort of detail that later reads as a bug.
+public struct OpenAIChatMediaReference: Sendable, Equatable {
+    public enum Source: Sendable, Equatable {
+        case dataURI(String)
+        case url(String)
+    }
+
+    public let source: Source
+
+    public init(source: Source) {
+        self.source = source
+    }
+}
+
 public struct OpenAIChatMessage: Sendable {
     public let role: String
     public let content: String
     public let reasoningContent: String?
     public let imageReferences: [OpenAIChatImageReference]
+    /// Audio the model consumes. Audio/video-capable models (gemma-4) use them; models
+    /// without those towers ignore them. There is deliberately NO text-description
+    /// fallback at this layer — deciding to describe media into text is a caller's
+    /// policy, not the engine's.
+    public let audioReferences: [OpenAIChatMediaReference]
+    public let videoReferences: [OpenAIChatMediaReference]
 
     public init(
         role: String,
         content: String,
         reasoningContent: String? = nil,
-        imageReferences: [OpenAIChatImageReference] = []
+        imageReferences: [OpenAIChatImageReference] = [],
+        audioReferences: [OpenAIChatMediaReference] = [],
+        videoReferences: [OpenAIChatMediaReference] = []
     ) {
         self.role = role
         self.content = content
         self.reasoningContent = reasoningContent
         self.imageReferences = imageReferences
+        self.audioReferences = audioReferences
+        self.videoReferences = videoReferences
     }
 }
 
@@ -1556,7 +1586,9 @@ public extension OpenAIChatRequest {
                     role: role,
                     content: text,
                     reasoningContent: reasoningContent,
-                    imageReferences: imageReferences
+                    imageReferences: imageReferences,
+                    audioReferences: parts.compactMap { Self.mediaReference(from: $0, kind: .audio) },
+                    videoReferences: parts.compactMap { Self.mediaReference(from: $0, kind: .video) }
                 )
             }
             return nil
@@ -1610,6 +1642,61 @@ public extension OpenAIChatRequest {
             return OpenAIChatImageReference(source: .dataURI(url))
         }
         return OpenAIChatImageReference(source: .url(url))
+    }
+
+    fileprivate enum MediaKind {
+        case audio
+        case video
+
+        /// The content-part spellings we accept. `audio_url`/`video_url` mirror
+        /// `image_url` and are what Local AI Cat sends; `input_audio` is OpenAI's own
+        /// spelling for inline audio and is accepted so ordinary OpenAI clients work.
+        var partTypes: [String] {
+            switch self {
+            case .audio: return ["audio_url", "input_audio"]
+            case .video: return ["video_url"]
+            }
+        }
+
+        var urlKey: String {
+            switch self {
+            case .audio: return "audio_url"
+            case .video: return "video_url"
+            }
+        }
+    }
+
+    private static func mediaReference(
+        from part: [String: Any],
+        kind: MediaKind
+    ) -> OpenAIChatMediaReference? {
+        guard let type = part["type"] as? String, kind.partTypes.contains(type) else {
+            return nil
+        }
+
+        // OpenAI's `input_audio` carries base64 + a format rather than a URL, so it is
+        // reassembled into the data URI the rest of this path already understands.
+        if type == "input_audio" {
+            guard let audio = part["input_audio"] as? [String: Any],
+                let data = audio["data"] as? String, !data.isEmpty
+            else {
+                return nil
+            }
+            let format = (audio["format"] as? String) ?? "wav"
+            return OpenAIChatMediaReference(source: .dataURI("data:audio/\(format);base64,\(data)"))
+        }
+
+        guard let container = part[kind.urlKey] as? [String: Any],
+            let url = container["url"] as? String,
+            !url.isEmpty
+        else {
+            return nil
+        }
+
+        if url.lowercased().hasPrefix("data:") {
+            return OpenAIChatMediaReference(source: .dataURI(url))
+        }
+        return OpenAIChatMediaReference(source: .url(url))
     }
 
     private static func floatValue(_ value: Any?) -> Float? {
