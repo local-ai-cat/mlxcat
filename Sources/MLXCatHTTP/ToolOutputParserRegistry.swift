@@ -12,6 +12,7 @@ import Foundation
 
 public enum ToolCallModelFamily: String, Sendable, Equatable {
     case generic
+    case qwenXML
     case harmony
     case gemma4
     case deepseek
@@ -43,6 +44,7 @@ public func toolCallModelFamily(forModel model: String, output text: String = ""
     if id.contains("gpt-oss") || id.contains("gpt_oss") { return .harmony }
     if id.contains("gemma-4") || id.contains("gemma4") { return .gemma4 }
     if id.contains("deepseek") { return .deepseek }
+    if id.contains("qwen") { return .qwenXML }
 
     if text.contains(harmonyChannelToken), text.contains(harmonyFunctionsRecipientPrefix) {
         return .harmony
@@ -106,7 +108,7 @@ private func extractContentToolCalls(
         if let info = runParser("gemma4", content, idGenerator), info.toolsCalled { return info }
     case .deepseek:
         if let info = runParser("deepseek", content, idGenerator), info.toolsCalled { return info }
-    case .harmony, .generic:
+    case .harmony, .generic, .qwenXML:
         break
     }
     return genericExtract(content, idGenerator: idGenerator)
@@ -157,7 +159,7 @@ public func streamingToolCallParse(
     idGenerator: @escaping () -> String = defaultToolCallID
 ) -> ToolCallParseResult {
     switch toolCallModelFamily(forModel: model, output: rawText) {
-    case .generic:
+    case .generic, .qwenXML:
         let info = genericExtract(bufferedContent, idGenerator: idGenerator)
         return ToolCallParseResult(
             content: info.toolsCalled ? (info.content ?? "") : bufferedContent,

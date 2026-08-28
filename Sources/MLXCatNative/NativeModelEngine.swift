@@ -282,6 +282,7 @@ public final class NativeModelEngine: @unchecked Sendable {
             jsonGrammar: jsonGrammar(from: request.structuredOutput),
             regexGrammar: try regexGrammar(from: request.structuredOutput),
             gbnfGrammar: try gbnfGrammar(from: request.structuredOutput),
+            toolGrammar: toolGrammar(from: request),
             thinkingBudget: thinkingBudgetConfiguration(from: request)
         )
     }
@@ -339,6 +340,78 @@ public final class NativeModelEngine: @unchecked Sendable {
         } catch let error as GBNFGrammarError {
             throw OpenAIServerError.invalidStructuredOutput(error.description)
         }
+    }
+
+    private func toolGrammar(from request: OpenAIChatRequest) -> QwenXMLToolGrammarConfiguration? {
+        guard ProcessInfo.processInfo.environment["MLXCAT_TOOL_GRAMMAR"] == "1" else {
+            return nil
+        }
+        guard case .none = request.structuredOutput else {
+            return nil
+        }
+        switch request.toolChoice {
+        case nil, .some(.auto):
+            break
+        case .some(.none), .some(.required), .some(.function):
+            return nil
+        }
+        guard toolCallModelFamily(forModel: modelID) == .qwenXML
+            || toolCallModelFamily(forModel: request.model) == .qwenXML
+        else {
+            return nil
+        }
+        guard let tools = selectOpenAITools(tools: request.tools, toolChoice: request.toolChoice),
+            !tools.isEmpty
+        else {
+            return nil
+        }
+        let toolNames = tools.compactMap(openAIToolFunctionName)
+        guard !toolNames.isEmpty,
+            let startTokenID = singleTokenID(for: "<tool_call>"),
+            let endTokenID = singleTokenID(for: "</tool_call>")
+        else {
+            return nil
+        }
+
+        let vocabulary = toolGrammarVocabulary(closeTokenID: endTokenID)
+        let whitespaceTokenIDs = vocabulary.tokens.compactMap { token -> Int? in
+            guard !token.isEOS,
+                !token.text.isEmpty,
+                token.text.allSatisfy(QwenXMLToolGrammarConfiguration.isXMLWhitespace)
+            else {
+                return nil
+            }
+            return token.id
+        }
+        var postToolAllowedTokenIDs = Set(whitespaceTokenIDs)
+        postToolAllowedTokenIDs.insert(startTokenID)
+        postToolAllowedTokenIDs.formUnion(eosTokenIds)
+        if let imEndTokenID = singleTokenID(for: "<|im_end|>") {
+            postToolAllowedTokenIDs.insert(imEndTokenID)
+        }
+
+        return QwenXMLToolGrammarConfiguration(
+            vocabulary: vocabulary,
+            toolNames: toolNames,
+            toolCallStartTokenID: startTokenID,
+            toolCallEndTokenID: endTokenID,
+            postToolAllowedTokenIDs: Array(postToolAllowedTokenIDs)
+        )
+    }
+
+    private func singleTokenID(for text: String) -> Int? {
+        let tokenIDs = context.tokenizer.encode(text: text, addSpecialTokens: false)
+        return tokenIDs.count == 1 ? tokenIDs[0] : nil
+    }
+
+    private func toolGrammarVocabulary(closeTokenID: Int) -> JSONGrammarVocabulary {
+        let baseVocabulary = grammarVocabulary()
+        guard !baseVocabulary.tokens.contains(where: { $0.id == closeTokenID }) else {
+            return baseVocabulary
+        }
+        var tokens = baseVocabulary.tokens
+        tokens.append(JSONGrammarToken(id: closeTokenID, text: "</tool_call>"))
+        return JSONGrammarVocabulary(tokens: tokens)
     }
 
     private func grammarVocabulary() -> JSONGrammarVocabulary {

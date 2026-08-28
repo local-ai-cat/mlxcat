@@ -11,7 +11,7 @@ final class ToolOutputParserRegistryTests: XCTestCase {
         XCTAssertEqual(toolCallModelFamily(forModel: "gpt-oss-20b"), .harmony)
         XCTAssertEqual(toolCallModelFamily(forModel: "mlx-community/gemma-4-E4B-it"), .gemma4)
         XCTAssertEqual(toolCallModelFamily(forModel: "deepseek-r1-distill-qwen-7b"), .deepseek)
-        XCTAssertEqual(toolCallModelFamily(forModel: "Qwen3-8B"), .generic)
+        XCTAssertEqual(toolCallModelFamily(forModel: "Qwen3-8B"), .qwenXML)
     }
 
     func testFamilySelectionByOutputMarkersWhenIDUnknown() {

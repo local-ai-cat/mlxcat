@@ -156,6 +156,7 @@ public struct SamplingParameters: Sendable, Equatable {
     public var jsonGrammar: JSONGrammarConfiguration?
     public var regexGrammar: RegexGrammarConfiguration?
     public var gbnfGrammar: GBNFGrammarConfiguration?
+    public var toolGrammar: QwenXMLToolGrammarConfiguration?
     public var thinkingBudget: ThinkingBudgetConfiguration?
 
     public init(
@@ -178,6 +179,7 @@ public struct SamplingParameters: Sendable, Equatable {
         jsonGrammar: JSONGrammarConfiguration? = nil,
         regexGrammar: RegexGrammarConfiguration? = nil,
         gbnfGrammar: GBNFGrammarConfiguration? = nil,
+        toolGrammar: QwenXMLToolGrammarConfiguration? = nil,
         thinkingBudget: ThinkingBudgetConfiguration? = nil
     ) {
         self.temperature = temperature
@@ -199,6 +201,7 @@ public struct SamplingParameters: Sendable, Equatable {
         self.jsonGrammar = jsonGrammar
         self.regexGrammar = regexGrammar
         self.gbnfGrammar = gbnfGrammar
+        self.toolGrammar = toolGrammar
         self.thinkingBudget = thinkingBudget
     }
 
@@ -277,6 +280,8 @@ public enum TokenSampler {
         jsonGrammarMatcher: JSONGrammarMatcher? = nil,
         regexGrammarMatcher: RegexGrammarMatcher? = nil,
         gbnfGrammarMatcher: GBNFGrammarMatcher? = nil,
+        toolGrammarMatcher: QwenXMLToolBodyMatcher? = nil,
+        postToolAllowedTokenIDs: [Int]? = nil,
         randomState: MLXRandom.RandomState? = nil
     ) -> MLXArray {
         var noThinkingBudgetState: ThinkingBudgetState?
@@ -287,6 +292,8 @@ public enum TokenSampler {
             jsonGrammarMatcher: jsonGrammarMatcher,
             regexGrammarMatcher: regexGrammarMatcher,
             gbnfGrammarMatcher: gbnfGrammarMatcher,
+            toolGrammarMatcher: toolGrammarMatcher,
+            postToolAllowedTokenIDs: postToolAllowedTokenIDs,
             randomState: randomState,
             thinkingBudgetState: &noThinkingBudgetState
         )
@@ -299,6 +306,8 @@ public enum TokenSampler {
         jsonGrammarMatcher: JSONGrammarMatcher? = nil,
         regexGrammarMatcher: RegexGrammarMatcher? = nil,
         gbnfGrammarMatcher: GBNFGrammarMatcher? = nil,
+        toolGrammarMatcher: QwenXMLToolBodyMatcher? = nil,
+        postToolAllowedTokenIDs: [Int]? = nil,
         randomState: MLXRandom.RandomState? = nil,
         thinkingBudgetState: inout ThinkingBudgetState?
     ) -> MLXArray {
@@ -309,6 +318,8 @@ public enum TokenSampler {
             jsonGrammarMatcher: jsonGrammarMatcher,
             regexGrammarMatcher: regexGrammarMatcher,
             gbnfGrammarMatcher: gbnfGrammarMatcher,
+            toolGrammarMatcher: toolGrammarMatcher,
+            postToolAllowedTokenIDs: postToolAllowedTokenIDs,
             randomState: randomState,
             thinkingBudgetState: &thinkingBudgetState,
             precomputedGrammarMasks: nil
@@ -322,6 +333,8 @@ public enum TokenSampler {
         jsonGrammarMatcher: JSONGrammarMatcher? = nil,
         regexGrammarMatcher: RegexGrammarMatcher? = nil,
         gbnfGrammarMatcher: GBNFGrammarMatcher? = nil,
+        toolGrammarMatcher: QwenXMLToolBodyMatcher? = nil,
+        postToolAllowedTokenIDs: [Int]? = nil,
         randomState: MLXRandom.RandomState? = nil,
         thinkingBudgetState: inout ThinkingBudgetState?,
         precomputedGrammarMasks: PrecomputedGrammarMasks?
@@ -337,7 +350,9 @@ public enum TokenSampler {
                 generatedTokens: generatedTokens,
                 jsonGrammarMatcher: jsonGrammarMatcher,
                 regexGrammarMatcher: regexGrammarMatcher,
-                gbnfGrammarMatcher: gbnfGrammarMatcher
+                gbnfGrammarMatcher: gbnfGrammarMatcher,
+                toolGrammarMatcher: toolGrammarMatcher,
+                postToolAllowedTokenIDs: postToolAllowedTokenIDs
             ) {
                 return MLXArray([Int32(forcedTokenID)])
             }
@@ -352,6 +367,9 @@ public enum TokenSampler {
         {
             // TRUE constrained decode (prefix trie); choice mode.
             logits = applyAllowedTokenMask(logits, allowedTokenIDs: allowedTokenIDs)
+        }
+        if let postToolAllowedTokenIDs {
+            logits = applyAllowedTokenMask(logits, allowedTokenIDs: postToolAllowedTokenIDs)
         }
         if let jsonGrammarMatcher {
             // Rejection fast path, greedy only: validating the argmax candidate costs a
@@ -398,6 +416,19 @@ public enum TokenSampler {
                     ?? gbnfGrammarMatcher.allowedTokenIDs()
             )
         }
+        if let toolGrammarMatcher {
+            if parameters.temperature == 0 && !parameters.hasSamplingFiltersOrPenalties {
+                let candidate = argMax(logits, axis: -1).reshaped([1])
+                if toolGrammarMatcher.accepts(tokenID: candidate.item(Int.self)) {
+                    return candidate
+                }
+            }
+            logits = applyAllowedTokenMask(
+                logits,
+                allowedTokenIDs: precomputedGrammarMasks?.toolAllowedTokenIDs
+                    ?? toolGrammarMatcher.allowedTokenIDs()
+            )
+        }
         return sampleUnconstrained(
             logits: logits,
             parameters: parameters,
@@ -412,7 +443,9 @@ public enum TokenSampler {
         generatedTokens: [Int],
         jsonGrammarMatcher: JSONGrammarMatcher?,
         regexGrammarMatcher: RegexGrammarMatcher?,
-        gbnfGrammarMatcher: GBNFGrammarMatcher?
+        gbnfGrammarMatcher: GBNFGrammarMatcher?,
+        toolGrammarMatcher: QwenXMLToolBodyMatcher?,
+        postToolAllowedTokenIDs: [Int]?
     ) -> Bool {
         if let allowedSequences = parameters.allowedSequences,
             let allowedTokenIDs = allowedNextTokenIDs(
@@ -430,6 +463,12 @@ public enum TokenSampler {
             return false
         }
         if let gbnfGrammarMatcher, !gbnfGrammarMatcher.accepts(tokenID: tokenID) {
+            return false
+        }
+        if let postToolAllowedTokenIDs, !postToolAllowedTokenIDs.contains(tokenID) {
+            return false
+        }
+        if let toolGrammarMatcher, !toolGrammarMatcher.accepts(tokenID: tokenID) {
             return false
         }
         if generatedTokens.count < parameters.minTokens && parameters.eosTokenIds.contains(tokenID) {

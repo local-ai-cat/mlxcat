@@ -178,6 +178,7 @@ public final class ContinuousBatchGenerator {
     private var jsonGrammarMatchers: [JSONGrammarMatcher?] = []
     private var regexGrammarMatchers: [RegexGrammarMatcher?] = []
     private var gbnfGrammarMatchers: [GBNFGrammarMatcher?] = []
+    private var toolGrammarStates: [QwenXMLToolGrammarState?] = []
     private var jsonGrammarMasks: [AsyncGrammarMask<JSONGrammarMaskSnapshot>?] = []
     private var regexGrammarMasks: [AsyncGrammarMask<RegexGrammarMaskSnapshot>?] = []
     private var gbnfGrammarMasks: [AsyncGrammarMask<GBNFGrammarMaskSnapshot>?] = []
@@ -408,12 +409,14 @@ public final class ContinuousBatchGenerator {
         let matcher = sampling.jsonGrammar?.makeMatcher()
         let regexMatcher = sampling.regexGrammar?.makeMatcher()
         let gbnfMatcher = sampling.gbnfGrammar?.makeMatcher()
+        var toolGrammarState = sampling.toolGrammar.map { QwenXMLToolGrammarState(configuration: $0) }
         var thinkingBudgetState = initialThinkingBudgetState
             ?? sampling.thinkingBudget.map(ThinkingBudgetState.init(configuration:))
         for token in generatedTokens {
             matcher?.advance(tokenID: token)
             regexMatcher?.advance(tokenID: token)
             gbnfMatcher?.advance(tokenID: token)
+            toolGrammarState?.observeGeneratedToken(token)
             if initialThinkingBudgetState == nil {
                 thinkingBudgetState?.advance(tokenID: token)
             }
@@ -421,6 +424,7 @@ public final class ContinuousBatchGenerator {
         jsonGrammarMatchers.append(matcher)
         regexGrammarMatchers.append(regexMatcher)
         gbnfGrammarMatchers.append(gbnfMatcher)
+        toolGrammarStates.append(toolGrammarState)
         let jsonMask = matcher.map { matcher in
             let mask = AsyncGrammarMask<JSONGrammarMaskSnapshot>()
             mask.prepareCurrentState(from: matcher.makeMaskSnapshot())
@@ -503,6 +507,7 @@ public final class ContinuousBatchGenerator {
             jsonGrammarMatchers.removeAll()
             regexGrammarMatchers.removeAll()
             gbnfGrammarMatchers.removeAll()
+            toolGrammarStates.removeAll()
             jsonGrammarMasks.forEach { $0?.invalidate() }
             regexGrammarMasks.forEach { $0?.invalidate() }
             gbnfGrammarMasks.forEach { $0?.invalidate() }
@@ -541,6 +546,7 @@ public final class ContinuousBatchGenerator {
         jsonGrammarMatchers = rows.map { jsonGrammarMatchers[$0] }
         regexGrammarMatchers = rows.map { regexGrammarMatchers[$0] }
         gbnfGrammarMatchers = rows.map { gbnfGrammarMatchers[$0] }
+        toolGrammarStates = rows.map { toolGrammarStates[$0] }
         let keptRows = Set(rows)
         for row in jsonGrammarMasks.indices where !keptRows.contains(row) {
             jsonGrammarMasks[row]?.invalidate()
@@ -620,6 +626,7 @@ public final class ContinuousBatchGenerator {
             && jsonGrammarMatchers.allSatisfy { $0 == nil }
             && regexGrammarMatchers.allSatisfy { $0 == nil }
             && gbnfGrammarMatchers.allSatisfy { $0 == nil }
+            && toolGrammarStates.allSatisfy { $0?.requiresScalarSampling != true }
             && thinkingBudgetStates.allSatisfy { $0 == nil }
     }
 
@@ -820,6 +827,7 @@ public final class ContinuousBatchGenerator {
         guard jsonGrammarMatchers.allSatisfy({ $0 == nil }),
             regexGrammarMatchers.allSatisfy({ $0 == nil }),
             gbnfGrammarMatchers.allSatisfy({ $0 == nil }),
+            toolGrammarStates.allSatisfy({ $0?.requiresScalarSampling != true }),
             thinkingBudgetStates.allSatisfy({ $0 == nil })
         else {
             return nil
@@ -843,12 +851,19 @@ public final class ContinuousBatchGenerator {
                 jsonGrammarMatcher: jsonGrammarMatchers[row],
                 regexGrammarMatcher: regexGrammarMatchers[row],
                 gbnfGrammarMatcher: gbnfGrammarMatchers[row],
+                toolGrammarMatcher: toolGrammarStates[row]?.activeMatcher,
+                postToolAllowedTokenIDs: toolGrammarStates[row]?.activeMatcher == nil
+                    ? toolGrammarStates[row]?.activeAllowedTokenIDs
+                    : nil,
                 randomState: randomStates[row],
                 thinkingBudgetState: &thinkingBudgetStates[row],
                 precomputedGrammarMasks: PrecomputedGrammarMasks(
                     jsonAllowedTokenIDs: jsonGrammarMasks[row]?.readyTokenIDs,
                     regexAllowedTokenIDs: regexGrammarMasks[row]?.readyTokenIDs,
-                    gbnfAllowedTokenIDs: gbnfGrammarMasks[row]?.readyTokenIDs
+                    gbnfAllowedTokenIDs: gbnfGrammarMasks[row]?.readyTokenIDs,
+                    toolAllowedTokenIDs: toolGrammarStates[row]?.activeMatcher == nil
+                        ? nil
+                        : toolGrammarStates[row]?.activeAllowedTokenIDs
                 )
             )
             sampledRows.append(token)
@@ -940,6 +955,7 @@ public final class ContinuousBatchGenerator {
             samplers[row].jsonGrammar == nil,
             samplers[row].regexGrammar == nil,
             samplers[row].gbnfGrammar == nil,
+            samplers[row].toolGrammar == nil,
             samplers[row].thinkingBudget == nil,
             randomStates[row] == nil
         else {
@@ -1004,6 +1020,7 @@ public final class ContinuousBatchGenerator {
                 gbnfGrammarMasks[row]?.prepareAdvancedState(from: matcher.makeMaskSnapshot())
             }
         }
+        toolGrammarStates[row]?.observeGeneratedToken(tokenID)
         thinkingBudgetStates[row]?.advance(tokenID: tokenID)
     }
 
