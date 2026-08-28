@@ -101,7 +101,7 @@ final class QwenXMLToolBodyMatcherBenchmarkTests: XCTestCase {
                 tokens.append(JSONGrammarToken(id: id, text: "", isEOS: true))
                 continue
             }
-            let text = tokenizer.decode(tokenIds: [id], skipSpecialTokens: true)
+            let text = tokenizer.decode(tokens: [id], skipSpecialTokens: true)
             guard !text.isEmpty, !text.contains("\u{FFFD}") else {
                 continue
             }
