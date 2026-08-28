@@ -247,7 +247,7 @@ public struct QwenXMLToolGrammarRuntime: Sendable {
     }
 }
 
-typealias QwenXMLToolGrammarState = QwenXMLToolGrammarRuntime
+public typealias QwenXMLToolGrammarState = QwenXMLToolGrammarRuntime
 
 private enum QwenXMLToolGrammarMode: Sendable {
     case normal

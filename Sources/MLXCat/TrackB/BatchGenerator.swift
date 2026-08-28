@@ -350,6 +350,7 @@ public final class ContinuousBatchGenerator {
         maxGeneratedTokens maxGeneratedTokenCount: Int? = nil,
         speculativeContextTokens: [Int] = [],
         thinkingBudgetState initialThinkingBudgetState: ThinkingBudgetState? = nil,
+        toolGrammarState initialToolGrammarState: QwenXMLToolGrammarState? = nil,
         randomState initialRandomState: MLXRandom.RandomState? = nil,
         modelState: LMOutput.State? = nil
     ) throws {
@@ -409,14 +410,17 @@ public final class ContinuousBatchGenerator {
         let matcher = sampling.jsonGrammar?.makeMatcher()
         let regexMatcher = sampling.regexGrammar?.makeMatcher()
         let gbnfMatcher = sampling.gbnfGrammar?.makeMatcher()
-        var toolGrammarState = sampling.toolGrammar.map { QwenXMLToolGrammarState(configuration: $0) }
+        var toolGrammarState = initialToolGrammarState
+            ?? sampling.toolGrammar.map { QwenXMLToolGrammarState(configuration: $0) }
         var thinkingBudgetState = initialThinkingBudgetState
             ?? sampling.thinkingBudget.map(ThinkingBudgetState.init(configuration:))
         for token in generatedTokens {
             matcher?.advance(tokenID: token)
             regexMatcher?.advance(tokenID: token)
             gbnfMatcher?.advance(tokenID: token)
-            toolGrammarState?.observeGeneratedToken(token)
+            if initialToolGrammarState == nil {
+                toolGrammarState?.observeGeneratedToken(token)
+            }
             if initialThinkingBudgetState == nil {
                 thinkingBudgetState?.advance(tokenID: token)
             }

@@ -536,6 +536,9 @@ public actor Scheduler {
                 thinkingBudgetState: seededGeneratedTokens.isEmpty
                     ? row.initialGeneratedToken?.thinkingBudgetState
                     : nil,
+                toolGrammarState: seededGeneratedTokens.isEmpty
+                    ? row.initialGeneratedToken?.toolGrammarState
+                    : nil,
                 modelState: row.modelState
             )
             running[request.uid] = RunningRequest(
@@ -1022,6 +1025,7 @@ public actor Scheduler {
         let matcher = sampling.jsonGrammar?.makeMatcher()
         let regexMatcher = sampling.regexGrammar?.makeMatcher()
         let gbnfMatcher = sampling.gbnfGrammar?.makeMatcher()
+        var toolGrammarState = sampling.toolGrammar.map { QwenXMLToolGrammarState(configuration: $0) }
         var thinkingBudgetState = sampling.thinkingBudget.map(ThinkingBudgetState.init(configuration:))
         let token = TokenSampler.sample(
             logits: nextTokenLogits[0, 0...],
@@ -1042,10 +1046,12 @@ public actor Scheduler {
         if gbnfMatcher?.accepts(tokenID: tokenID) == true {
             gbnfMatcher?.advance(tokenID: tokenID)
         }
+        toolGrammarState?.observeGeneratedToken(tokenID)
         thinkingBudgetState?.advance(tokenID: tokenID)
         return PreparedGeneratedToken(
             token: token,
             tokenID: tokenID,
+            toolGrammarState: toolGrammarState,
             thinkingBudgetState: thinkingBudgetState
         )
     }
@@ -1092,5 +1098,6 @@ private struct PreparedBatchRow {
 private struct PreparedGeneratedToken {
     let token: MLXArray
     let tokenID: Int
+    let toolGrammarState: QwenXMLToolGrammarState?
     let thinkingBudgetState: ThinkingBudgetState?
 }
