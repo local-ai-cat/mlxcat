@@ -400,8 +400,7 @@ public final class NativeModelEngine: @unchecked Sendable {
     }
 
     private func singleTokenID(for text: String) -> Int? {
-        let tokenIDs = context.tokenizer.encode(text: text, addSpecialTokens: false)
-        return tokenIDs.count == 1 ? tokenIDs[0] : nil
+        context.tokenizer.convertTokenToId(text)
     }
 
     private func toolGrammarVocabulary(closeTokenID: Int) -> JSONGrammarVocabulary {
