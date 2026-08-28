@@ -337,7 +337,8 @@ public enum TokenSampler {
         postToolAllowedTokenIDs: [Int]? = nil,
         randomState: MLXRandom.RandomState? = nil,
         thinkingBudgetState: inout ThinkingBudgetState?,
-        precomputedGrammarMasks: PrecomputedGrammarMasks?
+        precomputedGrammarMasks: PrecomputedGrammarMasks?,
+        precomputedToolAllowedTokenIDs: [Int]? = nil
     ) -> MLXArray {
         var logits = logits
         if logits.shape.count > 1 {
@@ -425,7 +426,7 @@ public enum TokenSampler {
             }
             logits = applyAllowedTokenMask(
                 logits,
-                allowedTokenIDs: precomputedGrammarMasks?.toolAllowedTokenIDs
+                allowedTokenIDs: precomputedToolAllowedTokenIDs
                     ?? toolGrammarMatcher.allowedTokenIDs()
             )
         }

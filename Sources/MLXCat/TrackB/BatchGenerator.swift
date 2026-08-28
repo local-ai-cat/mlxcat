@@ -864,11 +864,11 @@ public final class ContinuousBatchGenerator {
                 precomputedGrammarMasks: PrecomputedGrammarMasks(
                     jsonAllowedTokenIDs: jsonGrammarMasks[row]?.readyTokenIDs,
                     regexAllowedTokenIDs: regexGrammarMasks[row]?.readyTokenIDs,
-                    gbnfAllowedTokenIDs: gbnfGrammarMasks[row]?.readyTokenIDs,
-                    toolAllowedTokenIDs: toolGrammarStates[row]?.activeMatcher == nil
-                        ? nil
-                        : toolGrammarStates[row]?.activeAllowedTokenIDs
-                )
+                    gbnfAllowedTokenIDs: gbnfGrammarMasks[row]?.readyTokenIDs
+                ),
+                precomputedToolAllowedTokenIDs: toolGrammarStates[row]?.activeMatcher == nil
+                    ? nil
+                    : toolGrammarStates[row]?.activeAllowedTokenIDs
             )
             sampledRows.append(token)
         }
@@ -916,6 +916,15 @@ public final class ContinuousBatchGenerator {
                 generatedTokens: generatedHistory
             ).item(Int.self)
 
+            // A speculative verification batch was built while the tool grammar was
+            // still in NORMAL. Never accept it across the trigger: replay this step
+            // through the ordinary path so the body matcher is armed before another
+            // token is sampled.
+            if sampled == samplers[0].toolGrammar?.toolCallStartTokenID {
+                acceptedAllProposals = false
+                break
+            }
+
             if position < proposedTokens.count, sampled != proposedTokens[position] {
                 acceptedAllProposals = false
                 break
@@ -959,7 +968,7 @@ public final class ContinuousBatchGenerator {
             samplers[row].jsonGrammar == nil,
             samplers[row].regexGrammar == nil,
             samplers[row].gbnfGrammar == nil,
-            samplers[row].toolGrammar == nil,
+            toolGrammarStates[row]?.requiresScalarSampling != true,
             samplers[row].thinkingBudget == nil,
             randomStates[row] == nil
         else {

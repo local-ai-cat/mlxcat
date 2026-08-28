@@ -126,5 +126,4 @@ struct PrecomputedGrammarMasks {
     var jsonAllowedTokenIDs: [Int]?
     var regexAllowedTokenIDs: [Int]?
     var gbnfAllowedTokenIDs: [Int]?
-    var toolAllowedTokenIDs: [Int]?
 }
