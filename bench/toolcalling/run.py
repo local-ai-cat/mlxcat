@@ -121,7 +121,7 @@ SCENARIOS = {
         "messages": [{"role": "user", "content":
             "Use bash to print exactly: she said \"don't\" and left. Use printf."}],
         "call_expected": True,
-        "max_tokens": 256,
+        "max_tokens": 1024,
     },
     # Unforced: does the model choose to call at all? (tool_choice omitted)
     "auto_call": {
@@ -129,7 +129,7 @@ SCENARIOS = {
         "messages": [{"role": "user", "content":
             "What's the weather in London right now, in celsius? Use the tool."}],
         "call_expected": True,
-        "max_tokens": 256,
+        "max_tokens": 1024,
     },
     # Unforced with no reason to call: a call here is a FALSE call.
     "auto_no_call": {
@@ -137,7 +137,7 @@ SCENARIOS = {
         "messages": [{"role": "user", "content":
             "What is 2+2? Answer directly with just the number."}],
         "call_expected": False,
-        "max_tokens": 128,
+        "max_tokens": 1024,
     },
     # Two independent lookups in one turn: parallel/multi tool calls.
     "parallel": {
@@ -147,7 +147,7 @@ SCENARIOS = {
             "Call the tool once per city."}],
         "call_expected": True,
         "min_calls": 2,
-        "max_tokens": 512,
+        "max_tokens": 1024,
     },
     # Deep nested schema: arrays of objects with required keys.
     "nested_schema": {
@@ -158,7 +158,7 @@ SCENARIOS = {
             "tags auth and ui, two repro steps (open login page expecting the "
             "form to render, submit valid credentials expecting the dashboard)."}],
         "call_expected": True,
-        "max_tokens": 512,
+        "max_tokens": 1024,
     },
     # Unicode, newlines, escapes riding through argument encoding.
     "unicode_args": {
@@ -168,7 +168,7 @@ SCENARIOS = {
             "Save this note verbatim, preserving the line break:\n"
             "こんにちは \"世界\" — 100% ✓\nsecond line with a\ttab"}],
         "call_expected": True,
-        "max_tokens": 256,
+        "max_tokens": 1024,
     },
     # A long free-text argument: enclosure integrity over ~200+ tokens.
     "long_args": {
@@ -179,7 +179,7 @@ SCENARIOS = {
             "mill works, mentioning the wheel, the millstones, and the sluice "
             "gate. Prose only, no lists."}],
         "call_expected": True,
-        "max_tokens": 768,
+        "max_tokens": 1536,
         "min_arg_chars": 400,
     },
     # Turn 2: after a tool result comes back, the model must ANSWER, not loop.
@@ -196,7 +196,7 @@ SCENARIOS = {
         ],
         "call_expected": False,
         "expect_answer_contains": "7",
-        "max_tokens": 256,
+        "max_tokens": 1024,
     },
 }
 
