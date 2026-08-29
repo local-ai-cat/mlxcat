@@ -193,6 +193,24 @@ The kill is the result, not a failure of the run: the ladder recovered its own
 answer from the `BENCHRUNG` console lines after the process was killed, which is
 the whole reason those lines exist.
 
+**Follow-up (2026-08-30) — the 8 GB phone, and a 32k rung.** The same ladder on
+the iPhone 16 Pro Max (`iPhone17,2`, 8 GB), fp16 KV, with a 32,768 rung in the
+set:
+
+| | iPhone17,2 (8 GB) | iPhone18,2 (12 GB, above) |
+|---|---|---|
+| entitled ceiling | 4.79 GiB | 4.77 GiB |
+| 32,768 rung | **survived — peak 4.91 GiB** | (not attempted) |
+| 65,536 rung | **JETSAM KILL** | **JETSAM KILL** |
+
+Two claims land as measurements: Finding 1's transfer — the 8 GB phone dies at
+the same rung as the 12 GB phone, because the entitled budget is the same — and
+KNOWN-FAILURES 1c again: the surviving 32k peak (4.91 GiB) is *over* the
+4.79 GiB advisory ceiling, which bounds the allocator, not the process. The
+"practical ceiling is 16k" line above was an artifact of the rung set: with a
+32k rung offered, 32k survives with negative advisory headroom. The fp16
+ceiling for this model sits between 32k and 64k on both phones.
+
 ### Finding 6 — KV quantization is worth 4x the context on a phone
 
 Same device, same model, same ladder; the only difference is
