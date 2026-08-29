@@ -44,10 +44,16 @@ echo "== ladder: $model_list on $DEVICE (variant $VARIANT, rungs ${RUNGS:-defaul
 
 # `|| true`: the ladder SUCCEEDING means the process dies, so a non-zero
 # xcodebuild exit is the expected ending, not an error to propagate.
+# KV-quantization env must be FORWARDED with the TEST_RUNNER_ prefix or it
+# never reaches the device process and a "kv4 ladder" silently measures fp16
+# — the exact settings-that-never-arrive failure the producer's kv echo line
+# exists to catch. Invoke as: MLXCAT_KV_BITS=4 MLXCAT_QUANTIZED_KV_START=0 <script>
 TEST_RUNNER_BENCHHOST_LADDER=1 \
 TEST_RUNNER_BENCHHOST_MODEL_ID="$model_list" \
 TEST_RUNNER_BENCHHOST_LADDER_RUNGS="$RUNGS" \
 TEST_RUNNER_BENCHHOST_LADDER_VARIANT="$VARIANT" \
+${MLXCAT_KV_BITS:+TEST_RUNNER_MLXCAT_KV_BITS="$MLXCAT_KV_BITS"} \
+${MLXCAT_QUANTIZED_KV_START:+TEST_RUNNER_MLXCAT_QUANTIZED_KV_START="$MLXCAT_QUANTIZED_KV_START"} \
 xcodebuild test \
   -project BenchHost.xcodeproj -scheme BenchHost \
   -derivedDataPath ".build/dd-$DEVICE" \
