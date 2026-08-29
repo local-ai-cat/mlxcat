@@ -57,6 +57,39 @@ public final class QwenXMLToolBodyDenyIndex: Sendable {
     }
 }
 
+/// Resolves whether the tool grammar is armed for a request.
+///
+/// Three layers, strongest first:
+///   1. `MLXCAT_TOOL_GRAMMAR=0/off/false` — the operator kill switch. Beats a
+///      client asking for the grammar, because this is the documented exit
+///      (docs/LEVERS.md): rollback must not depend on every client's request.
+///   2. The request's `tool_grammar` field — per-request client override.
+///   3. `MLXCAT_TOOL_GRAMMAR=1/on/true`, else the built-in default.
+public enum QwenXMLToolGrammarPolicy {
+    /// Ships OFF until the LM Studio A/B prices the lever (LEVERS.md rule 5:
+    /// an unmeasured lever is a guess with a config surface). Flip to true is
+    /// a one-line change here once the measurement lands.
+    public static let defaultEnabled = false
+
+    public static func isEnabled(
+        requestOverride: Bool?,
+        environmentValue: String?,
+        defaultEnabled: Bool = Self.defaultEnabled
+    ) -> Bool {
+        let env = environmentValue?.lowercased()
+        if env == "0" || env == "off" || env == "false" {
+            return false
+        }
+        if let requestOverride {
+            return requestOverride
+        }
+        if env == "1" || env == "on" || env == "true" {
+            return true
+        }
+        return defaultEnabled
+    }
+}
+
 public struct QwenXMLToolGrammarConfiguration: Sendable, Equatable {
     public let vocabulary: JSONGrammarVocabulary
     public let toolNames: [String]

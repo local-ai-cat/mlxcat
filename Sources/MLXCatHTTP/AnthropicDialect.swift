@@ -14,6 +14,7 @@ public struct AnthropicMessagesRequest {
     public let chatTemplateKwargs: [String: OpenAIJSONValue]?
     public let tools: [OpenAIJSONValue]?
     public let toolChoice: OpenAIToolChoice?
+    public let toolGrammar: Bool?
 
     public static func parse(_ body: Data) throws -> AnthropicMessagesRequest {
         let parsed = try anthropicParsedBase(body)
@@ -47,7 +48,8 @@ public struct AnthropicMessagesRequest {
             thinkingBudget: anthropicIntValue(thinking?["budget_tokens"]),
             chatTemplateKwargs: try anthropicChatTemplateKwargs(from: object),
             tools: try anthropicOpenAITools(from: object["tools"]),
-            toolChoice: try anthropicToolChoice(from: object["tool_choice"])
+            toolChoice: try anthropicToolChoice(from: object["tool_choice"]),
+            toolGrammar: object["tool_grammar"] as? Bool
         )
     }
 
@@ -65,7 +67,8 @@ public struct AnthropicMessagesRequest {
             thinkingBudget: thinkingBudget,
             chatTemplateKwargs: chatTemplateKwargs,
             tools: tools,
-            toolChoice: toolChoice
+            toolChoice: toolChoice,
+            toolGrammar: toolGrammar
         )
     }
 

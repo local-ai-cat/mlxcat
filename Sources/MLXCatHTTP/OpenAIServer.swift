@@ -140,6 +140,9 @@ public struct OpenAIChatRequest: Sendable {
     public let structuredOutput: StructuredOutputSpec
     public let tools: [OpenAIJSONValue]?
     public let toolChoice: OpenAIToolChoice?
+    /// Per-request override for the Qwen-XML tool grammar (`tool_grammar` in the
+    /// JSON body). nil = server default; see `QwenXMLToolGrammarPolicy`.
+    public let toolGrammar: Bool?
     public let cacheSession: String?
 
     public init(
@@ -167,6 +170,7 @@ public struct OpenAIChatRequest: Sendable {
         structuredOutput: StructuredOutputSpec = .none,
         tools: [OpenAIJSONValue]? = nil,
         toolChoice: OpenAIToolChoice? = nil,
+        toolGrammar: Bool? = nil,
         cacheSession: String? = nil
     ) {
         self.model = model
@@ -193,6 +197,7 @@ public struct OpenAIChatRequest: Sendable {
         self.structuredOutput = structuredOutput
         self.tools = tools
         self.toolChoice = toolChoice
+        self.toolGrammar = toolGrammar
         self.cacheSession = cacheSession
     }
 }
@@ -1625,6 +1630,7 @@ public extension OpenAIChatRequest {
             structuredOutput: structuredOutput,
             tools: tools,
             toolChoice: toolChoice,
+            toolGrammar: object["tool_grammar"] as? Bool,
             cacheSession: stringValue(object["cache_session"])
         )
     }

@@ -345,7 +345,10 @@ public final class NativeModelEngine: @unchecked Sendable {
     }
 
     private func toolGrammar(from request: OpenAIChatRequest) -> QwenXMLToolGrammarConfiguration? {
-        guard ProcessInfo.processInfo.environment["MLXCAT_TOOL_GRAMMAR"] == "1" else {
+        guard QwenXMLToolGrammarPolicy.isEnabled(
+            requestOverride: request.toolGrammar,
+            environmentValue: ProcessInfo.processInfo.environment["MLXCAT_TOOL_GRAMMAR"]
+        ) else {
             return nil
         }
         guard case .none = request.structuredOutput else {

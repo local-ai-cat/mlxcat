@@ -370,7 +370,8 @@ public func anthropicMessagesRequestByReplacingTools(
         thinkingBudget: request.thinkingBudget,
         chatTemplateKwargs: request.chatTemplateKwargs,
         tools: tools,
-        toolChoice: request.toolChoice
+        toolChoice: request.toolChoice,
+        toolGrammar: request.toolGrammar
     )
 }
 
@@ -407,7 +408,8 @@ public func responsesRequestByReplacingTools(
         thinkingBudget: request.thinkingBudget,
         chatTemplateKwargs: request.chatTemplateKwargs,
         tools: tools,
-        toolChoice: request.toolChoice
+        toolChoice: request.toolChoice,
+        toolGrammar: request.toolGrammar
     )
 }
 
