@@ -211,6 +211,18 @@ KNOWN-FAILURES 1c again: the surviving 32k peak (4.91 GiB) is *over* the
 32k rung offered, 32k survives with negative advisory headroom. The fp16
 ceiling for this model sits between 32k and 64k on both phones.
 
+**And the kv4 payoff does NOT transfer to 8 GB.** Same ladder, same device,
+`MLXCAT_KV_BITS=4` (policy echo confirmed on-device): 32k survives at
+4.69 GiB — only 0.2 GiB under fp16's peak, the peak being prefill scratch,
+not stored KV — and **65,536 jetsam-kills, exactly like fp16**. Finding 6's
+"kv4 is worth 4x the context" was measured on the 12 GB phone, whose kv4 65k
+survival peaked at 5.64 GiB — a footprint the 8 GB phone cannot host at all.
+So the two phones share an entitled ceiling but not a kill line: past the
+advisory ceiling, physical RAM is what jetsam actually prices, and it is
+exactly there that kv4's extra context lives. On an 8 GB iPhone, kv4 buys
+this model zero additional rungs; on a 12 GB iPhone it buys ≥ 4x. A lever
+whose payoff is device-conditional needs the device in its pricing table.
+
 ### Finding 6 — KV quantization is worth 4x the context on a phone
 
 Same device, same model, same ladder; the only difference is
