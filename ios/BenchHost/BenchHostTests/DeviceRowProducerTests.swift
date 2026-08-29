@@ -53,6 +53,8 @@ final class DeviceRowProducerTests: XCTestCase {
             .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
         let maxTokens = Int(environment["BENCHHOST_MAX_TOKENS"] ?? "") ?? 128
         let runs = Int(environment["BENCHHOST_RUNS"] ?? "") ?? 3
+        let promptTokenTargets = (environment["BENCHHOST_PROMPT_TOKENS"] ?? "256,4096")
+            .split(separator: ",").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
 
         // Jetsam guard: without an allocator ceiling MLX defaults to a cache
         // limit of 1.5x the working set, and the first iPhone night ended at
@@ -98,12 +100,13 @@ final class DeviceRowProducerTests: XCTestCase {
             let configuration = BaselineConfiguration(
                 modelDirectory: modelDirectory,
                 modelID: URL(fileURLWithPath: modelID).lastPathComponent,
-                // The device tiers: short and 4k. 16k on a phone is a memory
-                // campaign of its own — add it deliberately, not by default.
-                cells: [
-                    BaselineCell(promptTokens: 256, maxTokens: maxTokens),
-                    BaselineCell(promptTokens: 4096, maxTokens: maxTokens),
-                ],
+                // The device tiers: short and 4k by default. 16k stays out of
+                // the default — the ladder proved it FITS (4.67-4.91 GiB
+                // against a 4.79 ceiling), which is exactly why it only runs
+                // when asked for deliberately: BENCHHOST_PROMPT_TOKENS=16384.
+                cells: promptTokenTargets.map {
+                    BaselineCell(promptTokens: $0, maxTokens: maxTokens)
+                },
                 runs: runs,
                 warmup: 1,
                 memoryCeilingBytes: ceiling,

@@ -54,6 +54,13 @@ stamp=$(date +%Y%m%d-%H%M%S)
 result="$OUT/night-$stamp.xcresult"
 console="$OUT/night-$stamp.console.log"
 echo "== roster: $model_list on $DEVICE =="
+# Optional knobs forwarded only when set (env(1): an assignment produced by
+# expansion is a command word, not an assignment).
+extra_env=()
+for var in BENCHHOST_PROMPT_TOKENS BENCHHOST_MAX_TOKENS BENCHHOST_RUNS BENCHHOST_MEMORY_CEILING_BYTES; do
+  [[ -n "${(P)var:-}" ]] && extra_env+=("TEST_RUNNER_${var}=${(P)var}")
+done
+env "${extra_env[@]}" \
 TEST_RUNNER_BENCHHOST_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || true)" \
 TEST_RUNNER_BENCHHOST_MODEL_ID="$model_list" xcodebuild test \
   -project BenchHost.xcodeproj -scheme BenchHost \
