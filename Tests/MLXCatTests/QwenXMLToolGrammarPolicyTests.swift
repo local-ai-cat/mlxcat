@@ -56,9 +56,10 @@ final class QwenXMLToolGrammarPolicyTests: XCTestCase {
         ))
     }
 
-    /// Today's shipped posture, spelled out so a default flip is a deliberate
-    /// edit to BOTH the policy and this line.
-    func testShippedDefaultIsOff() {
-        XCTAssertFalse(QwenXMLToolGrammarPolicy.defaultEnabled)
+    /// The shipped posture, spelled out so a default flip is a deliberate
+    /// edit to BOTH the policy and this line. ON since the 2026-08-29 A/B
+    /// measured the grammar at zero throughput cost.
+    func testShippedDefaultIsOn() {
+        XCTAssertTrue(QwenXMLToolGrammarPolicy.defaultEnabled)
     }
 }

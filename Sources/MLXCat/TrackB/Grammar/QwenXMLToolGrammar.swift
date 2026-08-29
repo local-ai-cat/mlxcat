@@ -66,10 +66,12 @@ public final class QwenXMLToolBodyDenyIndex: Sendable {
 ///   2. The request's `tool_grammar` field — per-request client override.
 ///   3. `MLXCAT_TOOL_GRAMMAR=1/on/true`, else the built-in default.
 public enum QwenXMLToolGrammarPolicy {
-    /// Ships OFF until the LM Studio A/B prices the lever (LEVERS.md rule 5:
-    /// an unmeasured lever is a guess with a config surface). Flip to true is
-    /// a one-line change here once the measurement lands.
-    public static let defaultEnabled = false
+    /// ON since the 2026-08-29 A/B priced the lever at zero: grammar-on
+    /// t=0.7 decoded at 60.6 tok/s vs 60.7 unconstrained (12 quote-heavy
+    /// prompts, Qwen3-Coder-30B, identical weights vs LM Studio), with no
+    /// validity regression. The exit is `MLXCAT_TOOL_GRAMMAR=0` (operator) or
+    /// `tool_grammar: false` (per request); rollback = flip this line back.
+    public static let defaultEnabled = true
 
     public static func isEnabled(
         requestOverride: Bool?,
