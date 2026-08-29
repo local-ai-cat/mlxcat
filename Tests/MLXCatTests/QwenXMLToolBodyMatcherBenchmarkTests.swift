@@ -52,11 +52,31 @@ final class QwenXMLToolBodyMatcherBenchmarkTests: XCTestCase {
                 )
             }
 
-            _ = matcher.allowedTokenIDs()
+            // Time the SAMPLING path (`tokenMask`), not the exhaustive reference
+            // (`allowedTokenIDs`) — the reference is retained only as the
+            // equivalence oracle and is O(vocab) by design.
+            _ = matcher.tokenMask()
             let durations = (0 ..< 80).map { _ in
                 let started = DispatchTime.now().uptimeNanoseconds
-                _ = matcher.allowedTokenIDs()
+                _ = matcher.tokenMask()
                 return DispatchTime.now().uptimeNanoseconds - started
+            }
+
+            // A latency number means nothing without knowing which path produced
+            // it: an allow-shaped mask here would be a silent regression that
+            // still "passes" any equivalence check.
+            let mask = matcher.tokenMask()
+            let universe = Set(vocabulary.tokens.map(\.id)).union([endTokenID])
+            switch mask {
+            case .deny(let denied):
+                XCTAssertGreaterThan(prefixLength, 0, "prefix 0 is a restrictive state")
+                print("TOOLGRAMMAR_MASK_SHAPE prefix=\(prefixLength) shape=deny size=\(denied.count)")
+                XCTAssertLessThan(denied.count * 10, vocabulary.tokens.count)
+                XCTAssertEqual(universe.subtracting(denied), Set(matcher.allowedTokenIDs()))
+            case .allow(let allowed):
+                XCTAssertEqual(prefixLength, 0, "a parameter body must be deny-shaped")
+                print("TOOLGRAMMAR_MASK_SHAPE prefix=\(prefixLength) shape=allow size=\(allowed.count)")
+                XCTAssertEqual(Set(allowed), Set(matcher.allowedTokenIDs()))
             }
             let sorted = durations.sorted()
             let p50 = Self.percentile(sorted, 0.50)
@@ -71,8 +91,60 @@ final class QwenXMLToolBodyMatcherBenchmarkTests: XCTestCase {
                     sorted.count
                 )
             )
+            XCTAssertLessThan(
+                Double(p99) / 1_000_000,
+                Self.maskLatencyCeilingMilliseconds,
+                "mask p99 exceeds the ceiling at prefix \(prefixLength)"
+            )
+        }
+
+        try Self.measureAdversarialSuffixes(configuration: configuration, tokenizer: tokenizer, endTokenID: endTokenID, vocabulary: vocabulary)
+    }
+
+    /// A benign parameter body denies almost nothing, so the prefix rows above
+    /// measure the complement mask at its easiest. The worst case is a suffix
+    /// that is ALREADY a partial closing tag: every token that could complete it
+    /// has to be denied, which is the only way the deny set can grow.
+    private static func measureAdversarialSuffixes(
+        configuration: QwenXMLToolGrammarConfiguration,
+        tokenizer: any Tokenizer,
+        endTokenID: Int,
+        vocabulary: JSONGrammarVocabulary
+    ) throws {
+        let universe = Set(vocabulary.tokens.map(\.id)).union([endTokenID])
+        for suffix in ["</functio", "</tool_cal", "</paramete"] {
+            let matcher = configuration.makeMatcher()
+            try advance(matcher, text: "<function=bash><parameter=command>", tokenizer: tokenizer)
+            try advance(matcher, text: suffix, tokenizer: tokenizer)
+
+            _ = matcher.tokenMask()
+            let durations = (0 ..< 40).map { _ in
+                let started = DispatchTime.now().uptimeNanoseconds
+                _ = matcher.tokenMask()
+                return DispatchTime.now().uptimeNanoseconds - started
+            }
+            let p99 = percentile(durations.sorted(), 0.99)
+            guard case .deny(let denied) = matcher.tokenMask() else {
+                return XCTFail("a parameter body must stay deny-shaped with suffix \(suffix)")
+            }
+            print(
+                String(
+                    format: "TOOLGRAMMAR_MASK_ADVERSARIAL suffix=%@ deny=%d p99_ms=%.3f",
+                    suffix,
+                    denied.count,
+                    Double(p99) / 1_000_000
+                )
+            )
+            XCTAssertEqual(
+                universe.subtracting(denied),
+                Set(matcher.allowedTokenIDs()),
+                "deny mask diverges from the exhaustive reference at suffix \(suffix)"
+            )
+            XCTAssertLessThan(Double(p99) / 1_000_000, maskLatencyCeilingMilliseconds)
         }
     }
+
+    private static let maskLatencyCeilingMilliseconds = 10.0
 
     private static func advance(
         _ matcher: QwenXMLToolBodyMatcher,

@@ -140,3 +140,97 @@ The worst p99 is about `11.0x` the allowed ceiling. The synchronous fallback is 
 - No claim is made for out-of-scope tool dialects, required/named tool choice, mixed-batch preservation, or streaming tool-call deltas.
 
 Bottom line: **functionally implemented, live behavior demonstrated, performance gate failed, feature remains off by default.**
+
+---
+
+# Follow-up: Gate 4 met (2026-08-29)
+
+Gate 4 now **passes**, and the diagnosis above was incomplete in a way that
+mattered more than the gate.
+
+## The defect was not "the mask is slow"
+
+`AsyncGrammarMask` could never be ready in a parameter body. Every accepted
+token calls `prepareAdvancedState`, which bumps `stateID` and clears the ready
+mask; the compute needed ~107 ms while the inter-token gap at 88 tok/s is
+~11 ms, so the in-flight compute was always cancelled and the sampler always
+fell through to the synchronous path. At temperature 0 that is invisible —
+argmax is validated by a single-token `accepts` — but any request with
+temperature > 0 or a filter/penalty paid the full mask **per token**, i.e. a
+~10x decode collapse rather than a missed micro-gate. Off-path precomputation
+cannot fix this: the next state depends on the token just sampled.
+
+## Fix: publish the complement, not the enumeration
+
+A permissive state must not enumerate its admissions. Both permissive states —
+`.parameterText` and `.parameterName` — can only reject a character, or leave
+the state, on `>`, because all three tags (`</function>`, `</tool_call>`,
+`</parameter>`) end in `>`. So a token containing no `>` is accepted
+unconditionally, which makes "tokens containing `>`" a **complete** candidate
+set rather than a heuristic. Each candidate is then simulated by the same,
+unmodified DFA the allow path uses, so the two masks cannot disagree.
+
+- `QwenXMLToolBodyDenyIndex` — candidates plus the always-denied ids (EOS, and
+  any empty-text token: both are rejected by the DFA but contain no `>`, so a
+  complement mask has to name them explicitly). Built once per model and cached
+  next to the vocabulary; the tool vocabulary is now cached too, having been
+  rebuilt (O(vocab)) on every tools-carrying request.
+- `GrammarTokenMask` — `.allow` for restrictive states, `.deny` for permissive
+  ones — plus `applyDeniedTokenMask`, which scatters `-inf` at |deny| indices.
+  Inverting only the computation would have left the O(vocab) cost in the MLX
+  upload, outside the benchmark's timed region.
+- Restrictive states now use the `tokensByFirstCharacter` bucket pruning the
+  JSON/regex/GBNF grammars already used; this path was bypassing it.
+- The tool grammar no longer uses `AsyncGrammarMask` at all. `AsyncGrammarMask.swift`
+  itself remains unmodified and is still used by the other three grammars.
+
+## Measured (release, Qwen3-Coder-30B-A3B-Instruct-4bit, vocab 150,199)
+
+| state | shape | mask size | p50 ms | p99 ms | was p99 |
+|---|---|---:|---:|---:|---:|
+| prefix 0 | allow | 372 | 4.073 | 4.114 | 8.8 |
+| prefix 64 | deny | 2 | 0.263 | 0.287 | 109.6 |
+| prefix 256 | deny | 2 | 0.266 | 0.290 | 110.1 |
+| prefix 1024 | deny | 2 | 0.267 | 0.294 | 110.3 |
+| suffix `</functio` | deny | 2 | — | 0.263 | — |
+| suffix `</tool_cal` | deny | 2 | — | 0.275 | — |
+| suffix `</paramete` | deny | 2 | — | 0.282 | — |
+
+~375x on the body states, against a 10 ms ceiling. The prefix-0 allow path is
+now the slowest state; bucket pruning took it from 8.8 ms to 4.1 ms.
+
+The last three rows are the honest worst case for a complement mask — a suffix
+that is already a partial closing tag, so every token completing it must be
+denied. On this vocabulary that adds nothing (no token completes a split tag),
+so the growth path is covered by the synthetic suite instead.
+
+## Testing
+
+- `QwenXMLToolMaskEquivalenceTests` (7 tests, **no model, no env gate** — it
+  runs in CI): checks `tokenMask()` against the retained exhaustive
+  `allowedTokenIDs()` reference across 15 states, over a vocabulary built to
+  break the candidate filter (split tags, bare `>`, `</parameter></function>`,
+  an empty-text non-EOS token). It also pins the mask *shape* per state, since
+  an allow-shaped mask in a permissive state would still be correct and would
+  silently restore the regression.
+- The benchmark now times `tokenMask()` (the sampling path) rather than the
+  reference, asserts the shape, checks deny/allow equivalence against the
+  reference over the **real** 150k vocabulary, and **asserts** the 10 ms
+  ceiling instead of printing a number for a human to read.
+- Mutation-tested: dropping the always-denied list, and narrowing the candidate
+  filter to the wrong character, each produce 11 failures.
+- Full suite: 490 tests, 57 skipped, 0 failures (was 483).
+
+Note: `swift test -c release` on this package exits 1 from a swift-testing
+sidecar crash (`--test-bundle-path`, signal 5) that reproduces on untouched
+suites such as `ToolCallParserTests`. The XCTest results are the signal; debug
+runs exit 0.
+
+## Still open
+
+- The end-to-end **application** cost of a mask is measured by no gate. The
+  deny mask makes it O(deny) rather than O(vocab), but nothing proves it.
+- Speculative decoding is still disabled whenever the grammar is armed, and
+  whole-batch scalar sampling still degrades while any row is armed. Cheap
+  per-token `accepts` makes both worth revisiting.
+- The LM Studio A/B has still never run.

@@ -865,10 +865,7 @@ public final class ContinuousBatchGenerator {
                     jsonAllowedTokenIDs: jsonGrammarMasks[row]?.readyTokenIDs,
                     regexAllowedTokenIDs: regexGrammarMasks[row]?.readyTokenIDs,
                     gbnfAllowedTokenIDs: gbnfGrammarMasks[row]?.readyTokenIDs
-                ),
-                precomputedToolAllowedTokenIDs: toolGrammarStates[row]?.activeMatcher == nil
-                    ? nil
-                    : toolGrammarStates[row]?.activeAllowedTokenIDs
+                )
             )
             sampledRows.append(token)
         }

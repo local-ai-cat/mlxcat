@@ -337,8 +337,7 @@ public enum TokenSampler {
         postToolAllowedTokenIDs: [Int]? = nil,
         randomState: MLXRandom.RandomState? = nil,
         thinkingBudgetState: inout ThinkingBudgetState?,
-        precomputedGrammarMasks: PrecomputedGrammarMasks?,
-        precomputedToolAllowedTokenIDs: [Int]? = nil
+        precomputedGrammarMasks: PrecomputedGrammarMasks?
     ) -> MLXArray {
         var logits = logits
         if logits.shape.count > 1 {
@@ -424,11 +423,14 @@ public enum TokenSampler {
                     return candidate
                 }
             }
-            logits = applyAllowedTokenMask(
-                logits,
-                allowedTokenIDs: precomputedToolAllowedTokenIDs
-                    ?? toolGrammarMatcher.allowedTokenIDs()
-            )
+            // Deny-shaped in a parameter body (~150k admissions collapse to a
+            // small complement), allow-shaped in the restrictive states.
+            switch toolGrammarMatcher.tokenMask() {
+            case .allow(let allowedTokenIDs):
+                logits = applyAllowedTokenMask(logits, allowedTokenIDs: allowedTokenIDs)
+            case .deny(let deniedTokenIDs):
+                logits = applyDeniedTokenMask(logits, deniedTokenIDs: deniedTokenIDs)
+            }
         }
         return sampleUnconstrained(
             logits: logits,
@@ -565,6 +567,26 @@ public enum TokenSampler {
         let indices = MLXArray(validTokenIDs.map(Int32.init)).asType(.uint32)
         let masked = MLXArray(Array(repeating: -Float.infinity, count: vocabularySize))
         return putAlong(masked, indices, values: logits[indices], axis: -1)
+    }
+
+    /// Complement of `applyAllowedTokenMask`: scatters -inf at |deny| indices,
+    /// leaving every other logit untouched. The allow-shaped version has to
+    /// build and upload a full-vocabulary array, so using it for a permissive
+    /// state would re-introduce the O(vocab) cost that the deny-shaped mask
+    /// exists to remove — just on the MLX side instead of the CPU side.
+    private static func applyDeniedTokenMask(_ logits: MLXArray, deniedTokenIDs: [Int]) -> MLXArray {
+        var logits = logits
+        if logits.dtype == .bfloat16 {
+            logits = logits.asType(.float32)
+        }
+
+        let vocabularySize = logits.dim(-1)
+        let validTokenIDs = deniedTokenIDs.filter { $0 >= 0 && $0 < vocabularySize }
+        guard !validTokenIDs.isEmpty else { return logits }
+
+        let indices = MLXArray(validTokenIDs.map(Int32.init)).asType(.uint32)
+        let blocked = MLXArray(Array(repeating: -Float.infinity, count: validTokenIDs.count))
+        return putAlong(logits, indices, values: blocked, axis: -1)
     }
 
     private static func applyPenalties(
