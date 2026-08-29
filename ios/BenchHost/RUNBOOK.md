@@ -34,14 +34,18 @@ ios/BenchHost/run-device-bench.sh --device <udid>
   (plugged in; the E2B is ~3 GB). Later runs reuse them.
 - Run conditions are MEASURED, not attested (2026-08-30): the harness
   samples thermal / power / lock / foreground / Low Power Mode every 2 s
-  for the whole session and stamps each row's `valid_for_leaderboard` from
-  the worst state observed during that row's own cell, with the evidence
-  in the row's `host` object (the iOS analog of the Mac quiet-machine
-  guard). Before each measurement it also waits — bounded at 10 min — for
-  the thermal state to drop to ≤ fair, the device analog of the Mac
-  wait-for-quiet. The only condition it cannot see is a finger on the
-  screen that never locks or backgrounds the app; that costs no more than
-  compositing a static view, so it is out of the promotion gate.
+  and stamps each row's `valid_for_leaderboard` from its own cell's
+  measurements, evidence in the row's `host` object. The gate mirrors the
+  Mac methodology: pre-run state gates, in-run state is evidence. A cell
+  must START at ≤ fair (a bounded 10-min cool-down before each
+  measurement makes that the normal case — the device wait-for-quiet),
+  and power / unlocked / foregrounded / no-LPM must hold throughout;
+  `critical` anywhere invalidates. Worst thermal state and the fraction
+  of samples at ≥ serious ride in `host`, because a phone under
+  sustained inference re-enters `serious` within a minute of a cooled
+  start (measured 2026-08-30) — an all-samples gate would just mean no
+  iPhone row can exist. The only condition the platform cannot see is a
+  finger on the screen that never locks or backgrounds the app.
 - Valid rows append straight into `bench/results/`; re-render with
   `python3 bench/leaderboard.py && python3 bench/timeline.py`. The
   leaderboard is stratified platform → device, so iPhone17,x and

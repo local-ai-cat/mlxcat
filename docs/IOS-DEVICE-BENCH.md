@@ -53,15 +53,26 @@ a quiet-machine guard (loadavg, free memory); the phone's equivalent used to be
 ever promoted, because a human attestation after a multi-hour night is a check
 that never returns true. `RunConditionMonitor` now samples thermal state,
 battery/power, lock (`isProtectedDataAvailable`), foreground, and Low Power
-Mode every 2 s; each row is stamped `valid_for_leaderboard` from the worst
-state observed during its own cell, with the evidence in the row's `host`
-object, so a mid-night thermal event invalidates exactly the cells it touched.
-Before each measurement the harness also waits (bounded, 10 min) for thermal
-≤ fair — the device analog of wait-for-quiet; the very first guarded run
-opened with a correctly-invalidated `thermal serious` row, which is what
-motivated the wait. The one condition the platform cannot expose — a finger on
-an unlocked, foregrounded screen — costs no more than compositing a static
-view and stays out of the gate.
+Mode every 2 s; each row is stamped `valid_for_leaderboard` from its own
+cell's measurements, evidence in the row's `host` object.
+
+The thermal gate is the START state, mirroring the Mac methodology (the
+quiet-machine guard gates on pre-run state; in-run state is recorded, not
+disqualifying). Before each measurement the harness waits — bounded, 10 min —
+for ≤ fair, the device analog of wait-for-quiet. Both halves of this design
+were forced by measurement on 2026-08-30 (iPhone17,2): the first un-guarded
+night ran `serious` throughout and its decode medians sat 25–35% below the
+2026-08-26 baselines (gemma-E2B 256: 16.9 vs 23.4 tok/s legacy arm — a hot
+START costs real throughput), while a cooled start re-entered `serious`
+within a minute of sustained inference on every cell — an all-samples gate
+would simply mean the platform can produce no valid row. So: start cool,
+gate on it; stamp `thermal_state_start`, `thermal_state_worst`, and
+`thermal_serious_sample_fraction` so a reader wanting a stricter cut can
+apply one from the evidence. `critical` anywhere still invalidates, and
+power / unlocked / foregrounded / no-LPM must hold for every sample. The one
+condition the platform cannot expose — a finger on an unlocked, foregrounded
+screen — costs no more than compositing a static view and stays out of the
+gate.
 
 **Both arms, always.** `mlxcat-inprocess` is the engine; the
 `mlx-swift-lm-tokeniterator` arm is the raw `TokenIterator` loop, which is

@@ -28,7 +28,9 @@ import XCTest
 final class RunConditionMonitor: @unchecked Sendable {
 
     struct Snapshot {
+        var startThermal: ProcessInfo.ThermalState?
         var worstThermal: ProcessInfo.ThermalState = .nominal
+        var seriousSamples = 0
         var everOnBattery = false
         var everBatteryUnknown = false
         var everLocked = false
@@ -37,8 +39,8 @@ final class RunConditionMonitor: @unchecked Sendable {
         var lastBatteryLevel: Float = -1
         var sampleCount = 0
 
-        var thermalName: String {
-            switch worstThermal {
+        static func name(of state: ProcessInfo.ThermalState) -> String {
+            switch state {
             case .nominal: return "nominal"
             case .fair: return "fair"
             case .serious: return "serious"
@@ -47,18 +49,29 @@ final class RunConditionMonitor: @unchecked Sendable {
             }
         }
 
-        /// Empty means every measured condition held for every sample.
-        /// `fair` thermal is allowed: a phone charging under load sits at fair
-        /// routinely; `serious` is the state where iOS begins throttling the
-        /// GPU, which is the point where a perf number stops being the device's.
+        var thermalName: String { Self.name(of: worstThermal) }
+
+        /// Empty means the cell is promotable. The thermal criterion is the
+        /// START state, matching the Mac methodology: the quiet-machine guard
+        /// gates on pre-run state (wait-for-quiet), and what happens DURING
+        /// the run is stamped as evidence, not disqualification. Measured
+        /// 2026-08-30 on iPhone17,2: sustained inference re-enters `serious`
+        /// within a minute of a cooled start on every cell — an all-samples
+        /// gate would simply mean no iPhone row can ever exist, while a
+        /// serious START (the first un-cooled night) measurably cost 25-35%
+        /// decode. So: start cool (the bounded cool-down makes that the
+        /// normal case), and the worst state + serious fraction ride in
+        /// `host` for any reader who wants a stricter cut. `critical`
+        /// anywhere still invalidates — that is emergency throttling.
         var violations: [String] {
             var out: [String] = []
             if sampleCount == 0 { out.append("no condition samples") }
             if everOnBattery { out.append("ran on battery") }
             if everBatteryUnknown { out.append("battery state unreadable") }
-            if worstThermal == .serious || worstThermal == .critical {
-                out.append("thermal \(thermalName)")
+            if let start = startThermal, start.rawValue > ProcessInfo.ThermalState.fair.rawValue {
+                out.append("started at thermal \(Self.name(of: start))")
             }
+            if worstThermal == .critical { out.append("thermal critical") }
             if everLocked { out.append("screen locked during cell") }
             if everBackgrounded { out.append("app left foreground") }
             if everLowPower { out.append("low power mode") }
@@ -71,7 +84,10 @@ final class RunConditionMonitor: @unchecked Sendable {
         var hostEvidence: [String: Any] {
             let batteryLevel: Any = lastBatteryLevel >= 0 ? lastBatteryLevel as Any : NSNull()
             return [
+                "thermal_state_start": startThermal.map { Self.name(of: $0) as Any } ?? NSNull(),
                 "thermal_state_worst": thermalName,
+                "thermal_serious_sample_fraction": sampleCount > 0
+                    ? Double(seriousSamples) / Double(sampleCount) : 0,
                 "on_power_throughout": !everOnBattery && !everBatteryUnknown,
                 "battery_level": batteryLevel,
                 "screen_locked_ever": everLocked,
@@ -130,6 +146,8 @@ final class RunConditionMonitor: @unchecked Sendable {
         let level = device.batteryLevel
 
         lock.lock()
+        if current.startThermal == nil { current.startThermal = thermal }
+        if thermal.rawValue >= ProcessInfo.ThermalState.serious.rawValue { current.seriousSamples += 1 }
         if thermal.rawValue > current.worstThermal.rawValue { current.worstThermal = thermal }
         switch batteryState {
         case .charging, .full: break

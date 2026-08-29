@@ -36,7 +36,11 @@ Per (model × arm × temperature × scenario × trial), one JSONL evidence row:
 
 Models whose tool dialect the grammar does not cover should show
 indistinguishable arms — that is evidence the lever is inert there, worth
-having on record, not noise.
+having on record, not noise. The `forced` and `nested_schema` scenarios pin
+`tool_choice` to a named function, and the engine arms the grammar only for
+`auto`/omitted tool_choice — so those cells are an arm-equivalence CONTROL
+(the arms must match within noise), while the `auto_*`/`parallel`/`unicode`/
+`long_args`/`round_trip` cells carry the lever's actual signal.
 
 ## Scenarios
 
