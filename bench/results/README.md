@@ -10,3 +10,9 @@ JSON object per measured cell, schema `mlxcat-bench/1` (see `../README.md`).
 * Engine logs land in `.logs/` (gitignored).
 * File names: `<date>-<Mac model>-<run id>.jsonl`. iOS producers use the same
   schema with `platform: "ios"` and a `device.model` like `iPhone17,2`.
+* The `host` object is the run-condition evidence and is platform-shaped:
+  Mac rows carry the quiet-machine guard's readings (loadavg, free memory,
+  swap, thermal speed limit); iOS rows carry the measured device guard
+  (worst thermal state, on-power/lock/foreground/Low-Power-Mode booleans,
+  sample count) that decides `valid_for_leaderboard` — see
+  `docs/IOS-DEVICE-BENCH.md`. iOS rows land via `bench/promote_ios_rows.py`.
