@@ -66,6 +66,11 @@ public struct BaselineConfiguration: Sendable {
     public var warmup: Int
     public var variants: [BaselineVariant]
     public var memoryCeilingBytes: Int64
+    /// Awaited before each (cell × variant) measurement. The device analog of
+    /// the Mac harness's wait-for-quiet: an iOS caller waits (bounded) for the
+    /// thermal state to drop back to fair before measuring, so a hot phone
+    /// cools instead of producing a night of correctly-invalidated rows.
+    public var beforeMeasurement: (@Sendable () async -> Void)?
 
     public init(
         modelDirectory: URL,
@@ -74,7 +79,8 @@ public struct BaselineConfiguration: Sendable {
         runs: Int = 3,
         warmup: Int = 1,
         variants: [BaselineVariant] = BaselineVariant.allCases,
-        memoryCeilingBytes: Int64 = 0
+        memoryCeilingBytes: Int64 = 0,
+        beforeMeasurement: (@Sendable () async -> Void)? = nil
     ) {
         self.modelDirectory = modelDirectory
         self.modelID = modelID
@@ -83,6 +89,7 @@ public struct BaselineConfiguration: Sendable {
         self.warmup = warmup
         self.variants = variants
         self.memoryCeilingBytes = memoryCeilingBytes
+        self.beforeMeasurement = beforeMeasurement
     }
 }
 
@@ -254,6 +261,9 @@ public enum BaselineProducer {
                 let promptTokenCount = input.text.tokens.size
 
                 for variant in configuration.variants {
+                    if let beforeMeasurement = configuration.beforeMeasurement {
+                        await beforeMeasurement()
+                    }
                     func oneRun() async throws -> Sample {
                         let started = DispatchTime.now().uptimeNanoseconds
                         var firstTokenAt = started

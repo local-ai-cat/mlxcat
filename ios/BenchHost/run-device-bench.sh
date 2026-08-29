@@ -6,10 +6,11 @@
 # For each model (default: the ios roster below) it runs DeviceRowProducerTests
 # on the device, pulls the mlxcat-bench-ios.jsonl attachment out of the
 # xcresult, and appends the rows into --out (default .build/ios-rows/).
-# Rows arrive valid_for_leaderboard=false; promote them after confirming the
-# run conditions held (device unlocked ONCE to launch, then screen left alone;
-# on power; not hot). First run per model downloads weights into the app
-# container over the cable — leave the phone plugged in.
+# Rows self-validate: the harness samples thermal/power/lock/foreground/LPM
+# during every cell and stamps valid_for_leaderboard from the measurements
+# (evidence in the row's `host` object) — no operator attestation step.
+# First run per model downloads weights into the app container over the
+# cable — leave the phone plugged in.
 #
 # The phone must be paired, trusted, and unlocked when the test starts.
 # MLX does not run on simulators.
@@ -53,6 +54,7 @@ stamp=$(date +%Y%m%d-%H%M%S)
 result="$OUT/night-$stamp.xcresult"
 console="$OUT/night-$stamp.console.log"
 echo "== roster: $model_list on $DEVICE =="
+TEST_RUNNER_BENCHHOST_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || true)" \
 TEST_RUNNER_BENCHHOST_MODEL_ID="$model_list" xcodebuild test \
   -project BenchHost.xcodeproj -scheme BenchHost \
   -derivedDataPath ".build/dd-$DEVICE" \
@@ -81,4 +83,6 @@ else
     echo "⚠️  no attachment and no BENCHROW lines — read $result in Xcode"
   fi
 fi
-echo "DONE. Review $OUT/ios-rows.jsonl, flip valid_for_leaderboard on rows whose run conditions held, then append into bench/results/ and re-render."
+echo "DONE. Rows self-validated (see each row's host object + invalid_reason)."
+echo "Append valid rows into bench/results/ and re-render:"
+echo "  python3 bench/leaderboard.py && python3 bench/timeline.py"

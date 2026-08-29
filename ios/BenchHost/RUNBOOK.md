@@ -32,15 +32,21 @@ ios/BenchHost/run-device-bench.sh --device <udid>
 
 - First run per model downloads the weights into BenchHost's container
   (plugged in; the E2B is ~3 GB). Later runs reuse them.
-- Run conditions for a row to be promotable: phone on power, not hot,
-  screen untouched after the test launches, no other apps foregrounded.
-- Rows come out `valid_for_leaderboard: false` with the reason stamped —
-  a phone has no loadavg guard, so the operator is the guard. Promote by
-  flipping the flag on rows whose conditions held, append to
-  `bench/results/`, re-render (`python3 bench/leaderboard.py && python3
-  bench/timeline.py`). The leaderboard is stratified platform → device, so
-  iPhone17,x and iPhone18,x rows land as their own sections — an iPhone is
-  never compared against a Mac.
+- Run conditions are MEASURED, not attested (2026-08-30): the harness
+  samples thermal / power / lock / foreground / Low Power Mode every 2 s
+  for the whole session and stamps each row's `valid_for_leaderboard` from
+  the worst state observed during that row's own cell, with the evidence
+  in the row's `host` object (the iOS analog of the Mac quiet-machine
+  guard). Before each measurement it also waits — bounded at 10 min — for
+  the thermal state to drop to ≤ fair, the device analog of the Mac
+  wait-for-quiet. The only condition it cannot see is a finger on the
+  screen that never locks or backgrounds the app; that costs no more than
+  compositing a static view, so it is out of the promotion gate.
+- Valid rows append straight into `bench/results/`; re-render with
+  `python3 bench/leaderboard.py && python3 bench/timeline.py`. The
+  leaderboard is stratified platform → device, so iPhone17,x and
+  iPhone18,x rows land as their own sections — an iPhone is never
+  compared against a Mac.
 
 ## Other engines on iOS (watchlist, not this runbook)
 

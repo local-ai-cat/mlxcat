@@ -68,6 +68,16 @@ final class DeviceRowProducerTests: XCTestCase {
         let box = RowBox()
         let deviceModel = Self.hardwareModel()
         let osVersion = await MainActor.run { "iOS " + UIDevice.current.systemVersion }
+        let commit = environment["BENCHHOST_COMMIT"]
+
+        // The measured replacement for "operator must confirm run conditions":
+        // thermal, power, lock, foreground and Low Power Mode are sampled for
+        // the whole session, and each row carries the worst state observed
+        // during its own cell. See RunConditionMonitor for why each condition
+        // is in the set.
+        let monitor = RunConditionMonitor()
+        monitor.start()
+        defer { monitor.stop() }
 
         for modelID in modelIDs {
             print("BENCHHOST model \(modelID) starting")
@@ -96,7 +106,25 @@ final class DeviceRowProducerTests: XCTestCase {
                 ],
                 runs: runs,
                 warmup: 1,
-                memoryCeilingBytes: ceiling
+                memoryCeilingBytes: ceiling,
+                // The device analog of the Mac wait-for-quiet: a number taken
+                // on a throttling phone belongs to the throttle, not the
+                // silicon. Wait (bounded) for ≤ fair before each measurement,
+                // then reset the monitor so the wait's own hot samples don't
+                // invalidate the cell that cooled past them. If the budget
+                // runs out we measure anyway — the guard stamps the row
+                // invalid with the measured reason, which is still a result.
+                beforeMeasurement: {
+                    let deadline = Date().addingTimeInterval(600)
+                    while ProcessInfo.processInfo.thermalState.rawValue
+                        > ProcessInfo.ThermalState.fair.rawValue,
+                        Date() < deadline {
+                        print("BENCHHOST cooling: thermal state "
+                            + "\(ProcessInfo.processInfo.thermalState.rawValue), waiting")
+                        try? await Task.sleep(nanoseconds: 15_000_000_000)
+                    }
+                    _ = monitor.snapshotAndReset()
+                }
             )
 
             try await BaselineProducer.run(
@@ -108,13 +136,27 @@ final class DeviceRowProducerTests: XCTestCase {
                         "model": deviceModel,
                         "os": osVersion,
                     ]
-                    // Validity is stamped false on purpose: the harness's
-                    // quiet-machine guard has no equivalent on the phone, so
-                    // the operator promotes rows to valid when the run
-                    // conditions (untouched screen, on power, cool device)
-                    // actually held.
-                    stamped["valid_for_leaderboard"] = false
-                    stamped["invalid_reason"] = "ios producer: operator must confirm run conditions"
+                    // Validity is DECIDED BY MEASUREMENT, not attestation: the
+                    // row is valid iff every measured condition (on power, ≤
+                    // fair thermal, unlocked, foregrounded, no Low Power Mode)
+                    // held for every sample of this cell. The evidence rides in
+                    // `host` so a promotion is auditable from the row alone —
+                    // the iOS analog of the Mac quiet-machine guard.
+                    let conditions = monitor.snapshotAndReset()
+                    stamped["host"] = conditions.hostEvidence
+                    let harness: [String: Any] = [
+                        "producer": "BenchHost DeviceRowProducerTests",
+                        "commit": commit.map { $0 as Any } ?? NSNull(),
+                    ]
+                    stamped["harness"] = harness
+                    let violations = conditions.violations
+                    if violations.isEmpty {
+                        stamped["valid_for_leaderboard"] = true
+                        stamped["invalid_reason"] = NSNull()
+                    } else {
+                        stamped["valid_for_leaderboard"] = false
+                        stamped["invalid_reason"] = "ios guard: " + violations.joined(separator: ", ")
+                    }
                     guard
                         let data = try? JSONSerialization.data(
                             withJSONObject: stamped, options: [.sortedKeys]),
