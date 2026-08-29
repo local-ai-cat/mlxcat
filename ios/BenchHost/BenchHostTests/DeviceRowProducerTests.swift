@@ -134,6 +134,12 @@ final class DeviceRowProducerTests: XCTestCase {
                     stamped["platform"] = "ios"
                     stamped["device"] = [
                         "model": deviceModel,
+                        // chip mirrors model: iOS has no public chip-name API,
+                        // and the leaderboard's device label renders "unknown"
+                        // for an absent chip. model==chip collapses to one
+                        // token in the label, which is the honest rendering.
+                        "chip": deviceModel,
+                        "memory_bytes": ProcessInfo.processInfo.physicalMemory,
                         "os": osVersion,
                     ]
                     // Validity is DECIDED BY MEASUREMENT, not attestation: the
