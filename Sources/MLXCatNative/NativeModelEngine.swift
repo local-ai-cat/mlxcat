@@ -21,6 +21,8 @@ public final class NativeModelEngine: @unchecked Sendable {
     private let maxContextTokens: Int?
     private let grammarVocabularyLock = NSLock()
     private var cachedGrammarVocabulary: JSONGrammarVocabulary?
+    private var cachedToolGrammarVocabulary: JSONGrammarVocabulary?
+    private var cachedToolGrammarDenyIndex: QwenXMLToolBodyDenyIndex?
 
     init(
         context: ModelContext,
@@ -282,6 +284,7 @@ public final class NativeModelEngine: @unchecked Sendable {
             jsonGrammar: jsonGrammar(from: request.structuredOutput),
             regexGrammar: try regexGrammar(from: request.structuredOutput),
             gbnfGrammar: try gbnfGrammar(from: request.structuredOutput),
+            toolGrammar: toolGrammar(from: request),
             thinkingBudget: thinkingBudgetConfiguration(from: request)
         )
     }
@@ -339,6 +342,101 @@ public final class NativeModelEngine: @unchecked Sendable {
         } catch let error as GBNFGrammarError {
             throw OpenAIServerError.invalidStructuredOutput(error.description)
         }
+    }
+
+    private func toolGrammar(from request: OpenAIChatRequest) -> QwenXMLToolGrammarConfiguration? {
+        guard QwenXMLToolGrammarPolicy.isEnabled(
+            requestOverride: request.toolGrammar,
+            environmentValue: ProcessInfo.processInfo.environment["MLXCAT_TOOL_GRAMMAR"]
+        ) else {
+            return nil
+        }
+        guard case .none = request.structuredOutput else {
+            return nil
+        }
+        switch request.toolChoice {
+        case nil, .some(.auto):
+            break
+        case .some(.none), .some(.required), .some(.function):
+            return nil
+        }
+        guard toolCallModelFamily(forModel: modelID) == .qwenXML
+            || toolCallModelFamily(forModel: request.model) == .qwenXML
+        else {
+            return nil
+        }
+        guard let tools = selectOpenAITools(tools: request.tools, toolChoice: request.toolChoice),
+            !tools.isEmpty
+        else {
+            return nil
+        }
+        let toolNames = tools.compactMap(openAIToolFunctionName)
+        guard !toolNames.isEmpty,
+            let startTokenID = singleTokenID(for: "<tool_call>"),
+            let endTokenID = singleTokenID(for: "</tool_call>")
+        else {
+            return nil
+        }
+
+        let (vocabulary, denyIndex) = toolGrammarVocabulary(closeTokenID: endTokenID)
+        let whitespaceTokenIDs = vocabulary.tokens.compactMap { token -> Int? in
+            guard !token.isEOS,
+                !token.text.isEmpty,
+                token.text.allSatisfy(QwenXMLToolGrammarConfiguration.isXMLWhitespace)
+            else {
+                return nil
+            }
+            return token.id
+        }
+        var postToolAllowedTokenIDs = Set(whitespaceTokenIDs)
+        postToolAllowedTokenIDs.insert(startTokenID)
+        postToolAllowedTokenIDs.formUnion(eosTokenIds)
+        if let imEndTokenID = singleTokenID(for: "<|im_end|>") {
+            postToolAllowedTokenIDs.insert(imEndTokenID)
+        }
+
+        return QwenXMLToolGrammarConfiguration(
+            vocabulary: vocabulary,
+            toolNames: toolNames,
+            toolCallStartTokenID: startTokenID,
+            toolCallEndTokenID: endTokenID,
+            postToolAllowedTokenIDs: Array(postToolAllowedTokenIDs),
+            denyIndex: denyIndex
+        )
+    }
+
+    private func singleTokenID(for text: String) -> Int? {
+        context.tokenizer.convertTokenToId(text)
+    }
+
+    /// Both the augmented vocabulary and its deny index are O(vocab) to build and
+    /// depend only on the loaded model, but this runs on every tools-carrying
+    /// request — so cache them next to the base vocabulary rather than rebuilding
+    /// ~150k tokens per completion.
+    private func toolGrammarVocabulary(closeTokenID: Int) -> (JSONGrammarVocabulary, QwenXMLToolBodyDenyIndex) {
+        grammarVocabularyLock.lock()
+        if let cachedToolGrammarVocabulary, let cachedToolGrammarDenyIndex {
+            grammarVocabularyLock.unlock()
+            return (cachedToolGrammarVocabulary, cachedToolGrammarDenyIndex)
+        }
+        grammarVocabularyLock.unlock()
+
+        let baseVocabulary = grammarVocabulary()
+        let vocabulary: JSONGrammarVocabulary
+        if baseVocabulary.tokens.contains(where: { $0.id == closeTokenID }) {
+            vocabulary = baseVocabulary
+        } else {
+            var tokens = baseVocabulary.tokens
+            tokens.append(JSONGrammarToken(id: closeTokenID, text: "</tool_call>"))
+            vocabulary = JSONGrammarVocabulary(tokens: tokens)
+        }
+        let denyIndex = QwenXMLToolBodyDenyIndex(vocabulary: vocabulary)
+
+        grammarVocabularyLock.lock()
+        cachedToolGrammarVocabulary = vocabulary
+        cachedToolGrammarDenyIndex = denyIndex
+        grammarVocabularyLock.unlock()
+        return (vocabulary, denyIndex)
     }
 
     private func grammarVocabulary() -> JSONGrammarVocabulary {

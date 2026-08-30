@@ -43,6 +43,49 @@ final class SchedulerPreemptionTests: XCTestCase {
         XCTAssertGreaterThan(result.prefixStore.fetchHitCount, hitCountAfterResume)
     }
 
+    func testPreemptionAfterToolTriggerResumesWithBodyGrammarArmed() async throws {
+        let trigger = CountingPreemptionTrigger(preemptOnRunningSnapshots: [1])
+        let scheduler = Scheduler(
+            modelBox: LanguageModelBox(LengthTrackingLanguageModel(vocabularySize: 6)),
+            parameters: Self.parameters,
+            maxConcurrentRequests: 1,
+            pressurePolicy: Scheduler.PressurePolicy { snapshot in
+                trigger.shouldPreempt(snapshot)
+            }
+        )
+        let vocabulary = JSONGrammarVocabulary(tokens: [
+            JSONGrammarToken(id: 0, text: "invalid"),
+            JSONGrammarToken(id: 1, text: "<function=bash>"),
+            JSONGrammarToken(id: 2, text: "</function>"),
+            JSONGrammarToken(id: 3, text: "</tool_call>"),
+            JSONGrammarToken(id: 4, text: " "),
+            JSONGrammarToken(id: 5, text: "", isEOS: true),
+        ])
+        let toolGrammar = QwenXMLToolGrammarConfiguration(
+            vocabulary: vocabulary,
+            toolNames: ["bash"],
+            toolCallStartTokenID: 0,
+            toolCallEndTokenID: 3,
+            postToolAllowedTokenIDs: [0, 4, 5]
+        )
+
+        try await scheduler.submit(
+            Request(
+                uid: "preempted",
+                input: tokenInput([4, 4]),
+                maxTokens: 4,
+                sampling: SamplingParameters(temperature: 0, toolGrammar: toolGrammar)
+            )
+        )
+
+        var responses: [Response] = []
+        while await !scheduler.isIdle {
+            responses.append(contentsOf: try await scheduler.step())
+        }
+
+        XCTAssertEqual(responses.generatedTokens(for: "preempted"), [0, 1, 2, 3])
+    }
+
     private static let parameters = GenerateParameters(
         maxTokens: 4,
         temperature: 0,

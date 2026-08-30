@@ -178,6 +178,7 @@ public final class ContinuousBatchGenerator {
     private var jsonGrammarMatchers: [JSONGrammarMatcher?] = []
     private var regexGrammarMatchers: [RegexGrammarMatcher?] = []
     private var gbnfGrammarMatchers: [GBNFGrammarMatcher?] = []
+    private var toolGrammarStates: [QwenXMLToolGrammarState?] = []
     private var jsonGrammarMasks: [AsyncGrammarMask<JSONGrammarMaskSnapshot>?] = []
     private var regexGrammarMasks: [AsyncGrammarMask<RegexGrammarMaskSnapshot>?] = []
     private var gbnfGrammarMasks: [AsyncGrammarMask<GBNFGrammarMaskSnapshot>?] = []
@@ -349,6 +350,7 @@ public final class ContinuousBatchGenerator {
         maxGeneratedTokens maxGeneratedTokenCount: Int? = nil,
         speculativeContextTokens: [Int] = [],
         thinkingBudgetState initialThinkingBudgetState: ThinkingBudgetState? = nil,
+        toolGrammarState initialToolGrammarState: QwenXMLToolGrammarState? = nil,
         randomState initialRandomState: MLXRandom.RandomState? = nil,
         modelState: LMOutput.State? = nil
     ) throws {
@@ -408,12 +410,17 @@ public final class ContinuousBatchGenerator {
         let matcher = sampling.jsonGrammar?.makeMatcher()
         let regexMatcher = sampling.regexGrammar?.makeMatcher()
         let gbnfMatcher = sampling.gbnfGrammar?.makeMatcher()
+        var toolGrammarState = initialToolGrammarState
+            ?? sampling.toolGrammar.map { QwenXMLToolGrammarState(configuration: $0) }
         var thinkingBudgetState = initialThinkingBudgetState
             ?? sampling.thinkingBudget.map(ThinkingBudgetState.init(configuration:))
         for token in generatedTokens {
             matcher?.advance(tokenID: token)
             regexMatcher?.advance(tokenID: token)
             gbnfMatcher?.advance(tokenID: token)
+            if initialToolGrammarState == nil {
+                toolGrammarState?.observeGeneratedToken(token)
+            }
             if initialThinkingBudgetState == nil {
                 thinkingBudgetState?.advance(tokenID: token)
             }
@@ -421,6 +428,7 @@ public final class ContinuousBatchGenerator {
         jsonGrammarMatchers.append(matcher)
         regexGrammarMatchers.append(regexMatcher)
         gbnfGrammarMatchers.append(gbnfMatcher)
+        toolGrammarStates.append(toolGrammarState)
         let jsonMask = matcher.map { matcher in
             let mask = AsyncGrammarMask<JSONGrammarMaskSnapshot>()
             mask.prepareCurrentState(from: matcher.makeMaskSnapshot())
@@ -503,6 +511,7 @@ public final class ContinuousBatchGenerator {
             jsonGrammarMatchers.removeAll()
             regexGrammarMatchers.removeAll()
             gbnfGrammarMatchers.removeAll()
+            toolGrammarStates.removeAll()
             jsonGrammarMasks.forEach { $0?.invalidate() }
             regexGrammarMasks.forEach { $0?.invalidate() }
             gbnfGrammarMasks.forEach { $0?.invalidate() }
@@ -541,6 +550,7 @@ public final class ContinuousBatchGenerator {
         jsonGrammarMatchers = rows.map { jsonGrammarMatchers[$0] }
         regexGrammarMatchers = rows.map { regexGrammarMatchers[$0] }
         gbnfGrammarMatchers = rows.map { gbnfGrammarMatchers[$0] }
+        toolGrammarStates = rows.map { toolGrammarStates[$0] }
         let keptRows = Set(rows)
         for row in jsonGrammarMasks.indices where !keptRows.contains(row) {
             jsonGrammarMasks[row]?.invalidate()
@@ -620,6 +630,7 @@ public final class ContinuousBatchGenerator {
             && jsonGrammarMatchers.allSatisfy { $0 == nil }
             && regexGrammarMatchers.allSatisfy { $0 == nil }
             && gbnfGrammarMatchers.allSatisfy { $0 == nil }
+            && toolGrammarStates.allSatisfy { $0?.requiresScalarSampling != true }
             && thinkingBudgetStates.allSatisfy { $0 == nil }
     }
 
@@ -820,6 +831,7 @@ public final class ContinuousBatchGenerator {
         guard jsonGrammarMatchers.allSatisfy({ $0 == nil }),
             regexGrammarMatchers.allSatisfy({ $0 == nil }),
             gbnfGrammarMatchers.allSatisfy({ $0 == nil }),
+            toolGrammarStates.allSatisfy({ $0?.requiresScalarSampling != true }),
             thinkingBudgetStates.allSatisfy({ $0 == nil })
         else {
             return nil
@@ -843,6 +855,10 @@ public final class ContinuousBatchGenerator {
                 jsonGrammarMatcher: jsonGrammarMatchers[row],
                 regexGrammarMatcher: regexGrammarMatchers[row],
                 gbnfGrammarMatcher: gbnfGrammarMatchers[row],
+                toolGrammarMatcher: toolGrammarStates[row]?.activeMatcher,
+                postToolAllowedTokenIDs: toolGrammarStates[row]?.activeMatcher == nil
+                    ? toolGrammarStates[row]?.activeAllowedTokenIDs
+                    : nil,
                 randomState: randomStates[row],
                 thinkingBudgetState: &thinkingBudgetStates[row],
                 precomputedGrammarMasks: PrecomputedGrammarMasks(
@@ -897,6 +913,15 @@ public final class ContinuousBatchGenerator {
                 generatedTokens: generatedHistory
             ).item(Int.self)
 
+            // A speculative verification batch was built while the tool grammar was
+            // still in NORMAL. Never accept it across the trigger: replay this step
+            // through the ordinary path so the body matcher is armed before another
+            // token is sampled.
+            if sampled == samplers[0].toolGrammar?.toolCallStartTokenID {
+                acceptedAllProposals = false
+                break
+            }
+
             if position < proposedTokens.count, sampled != proposedTokens[position] {
                 acceptedAllProposals = false
                 break
@@ -940,6 +965,7 @@ public final class ContinuousBatchGenerator {
             samplers[row].jsonGrammar == nil,
             samplers[row].regexGrammar == nil,
             samplers[row].gbnfGrammar == nil,
+            toolGrammarStates[row]?.requiresScalarSampling != true,
             samplers[row].thinkingBudget == nil,
             randomStates[row] == nil
         else {
@@ -1004,6 +1030,7 @@ public final class ContinuousBatchGenerator {
                 gbnfGrammarMasks[row]?.prepareAdvancedState(from: matcher.makeMaskSnapshot())
             }
         }
+        toolGrammarStates[row]?.observeGeneratedToken(tokenID)
         thinkingBudgetStates[row]?.advance(tokenID: tokenID)
     }
 

@@ -61,12 +61,58 @@ final class SchedulerSpeculativeDecodingTests: XCTestCase {
         XCTAssertGreaterThan(speculative.stats.rejectedBatchCount, 0)
     }
 
+    func testToolGrammarKeepsSpeculationEnabledBeforeTrigger() async throws {
+        let prompt: [Int32] = [1, 2, 3, 1, 2, 3, 1, 2]
+        let model = RepeatingTokenLanguageModel(vocabularySize: 8)
+        let result = try await generate(
+            prompt: prompt,
+            model: model,
+            speculativeDecoding: SpeculativeDecodingConfiguration(
+                enabled: true,
+                maxProposalTokens: 4,
+                minContextTokens: 8
+            ),
+            toolGrammar: Self.toolGrammar(triggerTokenID: 7)
+        )
+
+        XCTAssertGreaterThan(result.stats.proposalBatchCount, 0)
+        XCTAssertGreaterThan(result.stats.acceptedTokenCount, 0)
+    }
+
+    func testSpeculationReplaysTriggerBeforeSamplingToolBody() async throws {
+        let prompt: [Int32] = [1, 2, 3, 1, 2, 3]
+        let baseline = try await generate(
+            prompt: prompt,
+            model: RepeatingTokenLanguageModel(vocabularySize: 8),
+            speculativeDecoding: .disabled,
+            toolGrammar: Self.toolGrammar(triggerTokenID: 2),
+            maxTokens: 5
+        )
+        let speculative = try await generate(
+            prompt: prompt,
+            model: RepeatingTokenLanguageModel(vocabularySize: 8),
+            speculativeDecoding: SpeculativeDecodingConfiguration(
+                enabled: true,
+                maxProposalTokens: 4,
+                minContextTokens: 6
+            ),
+            toolGrammar: Self.toolGrammar(triggerTokenID: 2),
+            maxTokens: 5
+        )
+
+        XCTAssertEqual(baseline.tokens, [1, 2, 4, 5, 6])
+        XCTAssertEqual(speculative.tokens, baseline.tokens)
+        XCTAssertGreaterThan(speculative.stats.rejectedBatchCount, 0)
+    }
+
     private static let maxTokens = 10
 
     private func generate(
         prompt: [Int32],
         model: SpeculativeTestLanguageModel,
-        speculativeDecoding: SpeculativeDecodingConfiguration
+        speculativeDecoding: SpeculativeDecodingConfiguration,
+        toolGrammar: QwenXMLToolGrammarConfiguration? = nil,
+        maxTokens: Int = SchedulerSpeculativeDecodingTests.maxTokens
     ) async throws -> (tokens: [Int], stats: SpeculativeDecodingStats) {
         let scheduler = Scheduler(
             modelBox: LanguageModelBox(model),
@@ -83,8 +129,8 @@ final class SchedulerSpeculativeDecodingTests: XCTestCase {
             Request(
                 uid: "repeat",
                 input: LMInput(tokens: MLXArray(prompt)),
-                maxTokens: Self.maxTokens,
-                sampling: SamplingParameters(temperature: 0)
+                maxTokens: maxTokens,
+                sampling: SamplingParameters(temperature: 0, toolGrammar: toolGrammar)
             )
         )
 
@@ -95,6 +141,25 @@ final class SchedulerSpeculativeDecodingTests: XCTestCase {
         return (
             responses.generatedTokens(for: "repeat"),
             await scheduler.speculativeDecodingStats
+        )
+    }
+
+    private static func toolGrammar(triggerTokenID: Int) -> QwenXMLToolGrammarConfiguration {
+        QwenXMLToolGrammarConfiguration(
+            vocabulary: JSONGrammarVocabulary(tokens: [
+                JSONGrammarToken(id: 0, text: "invalid"),
+                JSONGrammarToken(id: 1, text: "ordinary"),
+                JSONGrammarToken(id: 2, text: "trigger-or-ordinary"),
+                JSONGrammarToken(id: 3, text: "ordinary"),
+                JSONGrammarToken(id: 4, text: "<function=bash>"),
+                JSONGrammarToken(id: 5, text: "</function>"),
+                JSONGrammarToken(id: 6, text: "</tool_call>"),
+                JSONGrammarToken(id: 7, text: "", isEOS: true),
+            ]),
+            toolNames: ["bash"],
+            toolCallStartTokenID: triggerTokenID,
+            toolCallEndTokenID: 6,
+            postToolAllowedTokenIDs: [triggerTokenID, 7]
         )
     }
 }

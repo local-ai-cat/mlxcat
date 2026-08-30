@@ -16,6 +16,7 @@ public struct ResponsesRequest {
     public let chatTemplateKwargs: [String: OpenAIJSONValue]?
     public let tools: [OpenAIJSONValue]?
     public let toolChoice: OpenAIToolChoice?
+    public let toolGrammar: Bool?
 
     public static func parse(_ body: Data) throws -> ResponsesRequest {
         guard
@@ -48,7 +49,8 @@ public struct ResponsesRequest {
             thinkingBudget: responsesIntValue(object["thinking_budget"]),
             chatTemplateKwargs: try responsesChatTemplateKwargs(from: object),
             tools: try responsesOpenAITools(from: object["tools"]),
-            toolChoice: try responsesToolChoice(from: object["tool_choice"])
+            toolChoice: try responsesToolChoice(from: object["tool_choice"]),
+            toolGrammar: object["tool_grammar"] as? Bool
         )
     }
 
@@ -64,7 +66,8 @@ public struct ResponsesRequest {
             thinkingBudget: thinkingBudget,
             chatTemplateKwargs: chatTemplateKwargs,
             tools: tools,
-            toolChoice: toolChoice
+            toolChoice: toolChoice,
+            toolGrammar: toolGrammar
         )
     }
 
