@@ -16,12 +16,16 @@ BIN="${REPO_ROOT}/.build/release/mlxcat-http"
 PORT=11702
 MODELS="Qwen3-1.7B-4bit,Llama-3.2-3B-Instruct-4bit,Qwen3.5-4B-MLX-4bit,Qwen2.5-Coder-7B-Instruct-4bit,gemma-4-E2B-it-qat-4bit,gpt-oss-20b-MXFP4-Q8,Qwen3.6-27B-4bit,Qwen3-Coder-30B-A3B-Instruct-4bit"
 MODEL_DIR="${HOME}/Library/Caches/models"
+SCENARIOS=""
+NO_STREAM=""
 while (( $# )); do
   case "$1" in
     --bin) BIN="$2"; shift 2 ;;
     --port) PORT="$2"; shift 2 ;;
     --models) MODELS="$2"; shift 2 ;;
     --model-dir) MODEL_DIR="$2"; shift 2 ;;
+    --scenarios) SCENARIOS="$2"; shift 2 ;;
+    --no-stream-arm) NO_STREAM=1; shift ;;
     *) echo "unknown arg $1" >&2; exit 64 ;;
   esac
 done
@@ -42,8 +46,11 @@ for _ in {1..60}; do
 done
 curl -sf "http://127.0.0.1:$PORT/v1/models" >/dev/null || { echo "server never came up — $SRVLOG" >&2; exit 69; }
 
+extra_args=()
+[[ -n "$SCENARIOS" ]] && extra_args+=(--scenarios "$SCENARIOS")
+[[ -n "$NO_STREAM" ]] && extra_args+=(--no-stream-arm)
 python3 "$SCRIPT_DIR/run.py" --base "http://127.0.0.1:$PORT" \
-  --models "$MODELS" \
+  --models "$MODELS" "${extra_args[@]}" \
   --summary "$SCRIPT_DIR/evidence/summary-$(date +%F).md"
 rc=$?
 echo "== campaign done (rc=$rc); server log: $SRVLOG =="
