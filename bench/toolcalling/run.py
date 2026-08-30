@@ -235,6 +235,20 @@ SCENARIOS = {
         "max_tokens": 1536,
         "min_arg_chars": 400,
     },
+    # The ORIGINAL failure, verbatim territory: the bad pi chat that started
+    # the tool-grammar work had the model call bash with quoted globs and
+    # break the JSON encoding on the inner quotes (the exact payload is
+    # pinned in QwenXMLToolBodyMatcherTests). Unforced so the grammar arms,
+    # exactly as pi traffic reaches the server.
+    "pi_find_repro": {
+        "tools": [BASH_TOOL],
+        "messages": [{"role": "user", "content":
+            "Find every Xcode project in the on-the-app-store directory. "
+            "Use the bash tool with a single find command matching both "
+            "*.xcodeproj and *.xcworkspace names."}],
+        "call_expected": True,
+        "max_tokens": 1024,
+    },
     # The grammar's value case: the same simple call, but emitted after a
     # deep KV cache. Unforced tool_choice so the grammar actually arms.
     "longctx_4k": dict(
