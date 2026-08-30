@@ -356,11 +356,14 @@ def schema_valid(value, schema):
 
 # --- transport ---------------------------------------------------------------
 
-def post_chat(base, body, timeout):
+def post_chat(base, body, timeout, api_key=None):
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = "Bearer " + api_key
     req = urllib.request.Request(
         base + "/v1/chat/completions",
         data=json.dumps(body).encode(),
-        headers={"Content-Type": "application/json"},
+        headers=headers,
     )
     started = time.monotonic()
     with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -415,7 +418,8 @@ def assemble_stream(chunks):
 
 # --- one trial ---------------------------------------------------------------
 
-def run_trial(base, model, scenario_name, scenario, arm, temperature, stream, timeout):
+def run_trial(base, model, scenario_name, scenario, arm, temperature, stream,
+              timeout, api_key=None):
     body = {
         "model": model,
         "messages": scenario["messages"],
@@ -441,7 +445,7 @@ def run_trial(base, model, scenario_name, scenario, arm, temperature, stream, ti
         "temperature": temperature, "stream": stream,
     }
     try:
-        result, started, first_at, ended = post_chat(base, body, timeout)
+        result, started, first_at, ended = post_chat(base, body, timeout, api_key)
     except Exception as e:  # noqa: BLE001 — the failure IS the evidence
         row.update({"error": f"{type(e).__name__}: {e}", "ok": False})
         return row
@@ -524,6 +528,8 @@ def main():
     ap.add_argument("--scenarios", default=",".join(SCENARIOS))
     ap.add_argument("--engine-label", default="mlxcat")
     ap.add_argument("--timeout", type=int, default=600)
+    ap.add_argument("--api-key", default=None,
+                    help="Bearer token (e.g. the app's Local API on :11434)")
     ap.add_argument("--out", default="bench/toolcalling/evidence")
     ap.add_argument("--summary", default=None)
     ap.add_argument("--no-stream-arm", action="store_true",
@@ -561,7 +567,8 @@ def main():
                         for stream in stream_modes:
                             for _ in range(args.trials):
                                 row = run_trial(args.base, model, name, scenario,
-                                                arm, temp, stream, args.timeout)
+                                                arm, temp, stream, args.timeout,
+                                                args.api_key)
                                 row["engine"] = args.engine_label
                                 evidence.write(json.dumps(row) + "\n")
                                 evidence.flush()
