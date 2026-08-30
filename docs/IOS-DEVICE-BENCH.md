@@ -273,13 +273,51 @@ The run prints `BENCHHOST kv-quantization: bits=4 group=64 start=0` next to the
 load line. **Check it.** Before 2026-08-26 the producer never passed the policy,
 so this exact command would have measured fp16 and called it kv4.
 
+## Measured: the iPhone 17 Pro Max night (2026-08-30, iPhone18,2)
+
+The full roster ran on the 12 GB iPhone 17 Pro Max the night after the 16 Pro
+Max nights, same harness, same corpus. Two findings and a cross-check:
+
+### Finding 7 — the vapor chamber changes what a benchmark night looks like
+
+The 16 Pro Max (iPhone17,2) lived in `serious` — under the strict
+worst-anywhere gate its first night scored 0/12, and the physics section above
+exists because of it. The 18,2 passed **10/12 under that same stricter gate**
+(the run happened to ship a pre-fix binary): only the two Qwen3.5-4B 4k cells —
+the heaviest workload, last in the night — ever reached `serious`, and console
+evidence shows even those *started* at ≤ fair. On this phone the thermal guard
+is a formality; on the 16 it is the whole story. Sustained on-device inference
+is a cooling benchmark first and a silicon benchmark second, and the A19 Pro's
+vapor chamber is worth more than its clock uplift.
+
+### Finding 8 — generational prefill jump is much larger than decode
+
+gemma-4-E2B, 4k tier, valid medians, 17,2 → 18,2: prefill **604 → 2,067 tok/s
+(3.4x)**, decode 17.7 → 23.7 tok/s (1.3x), TTFT 6.7 s → 1.95 s. Qwen3-1.7B 4k:
+prefill 283 → 956 (3.4x), decode 24.7 → 31.8 (1.3x). The A19 Pro's
+GPU-integrated neural accelerators are a prefill feature: compute-bound prompt
+processing scales with them, bandwidth-bound decode does not. For long-context
+phone workloads the generation gap is the difference between usable and not.
+
+### Finding 9 — mlxcat's short-cell decode deficit reproduces on both phones
+
+On the 256-token tier the mlxcat in-process arm decodes measurably below the
+raw-TokenIterator legacy arm, and the gap is consistent across generations:
+Qwen3-1.7B 256 reads 61.0 vs 42.6 tok/s on 18,2 and 49.2 vs 35.5 on 17,2 —
+about 7 ms/token of overhead in both cases. At 4k the deficit vanishes or
+inverts (mlxcat wins the 1.7B 4k cell on both phones, and won the 16k tier
+outright: 15.1 vs 12.3 tok/s). Overhead that appears at small KV and
+disappears at large KV points at the engine's cache path, not the sampler —
+the standing optimisation lead for the in-process engine on iOS.
+
 ## Promoting rows
 
-Rows arrive invalid by design. To promote:
-
-1. Confirm the conditions held for the rows you are promoting.
-2. Flip `valid_for_leaderboard` on those rows, append into `bench/results/`.
-3. Re-render: `python3 bench/leaderboard.py && python3 bench/timeline.py`.
+Rows self-validate: the harness samples run conditions per cell and stamps
+`valid_for_leaderboard` from measurement (see the guard section above). To
+promote, run `python3 bench/promote_ios_rows.py --since <UTC-date>` — it
+copies valid rows (plus invalid ones as audit rows) into `bench/results/`,
+dedupes, and re-renders the leaderboard and timeline. Dates in rows are UTC;
+a 3 a.m. local night usually needs the *previous* UTC date.
 
 The leaderboard is stratified platform → device, so `iPhone17,x` and
 `iPhone18,x` land as their own sections. **An iPhone is never compared against
