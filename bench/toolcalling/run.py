@@ -113,6 +113,59 @@ NOTE_TOOL = {
     },
 }
 
+# --- long-context distractor -------------------------------------------------
+# The grammar lever's documented value case is the long-context tail
+# (TOOLGRAMMAR-RESULTS.md): unconstrained decoding once collapsed when the
+# call had to be emitted after a large KV cache. The fleet campaign measured
+# short-context scenarios only; these cells load the cache with neutral prose
+# and then ask for the same calls, so any validity gap between arms is
+# attributable to context depth, not task difficulty. The filler is
+# deterministic (same text every run) and the ask explicitly sets it aside —
+# pure KV load, no retrieval confound.
+
+def distractor_text(approx_tokens):
+    topics = [
+        ("watermill", "the wheel turns the shaft, the shaft turns the "
+         "stones, and the sluice gate meters the head of water"),
+        ("lighthouse", "the lamp rotates behind a Fresnel lens whose panels "
+         "concentrate the beam into timed flashes keepers once logged by hand"),
+        ("orchard", "grafted rootstock sets the tree's size while the scion "
+         "sets the fruit, and pruning trades this year's yield for next"),
+        ("glacier", "accumulated snow compresses into firn and then ice that "
+         "flows downhill, plucking and grinding the bedrock beneath"),
+        ("printing press", "movable type is locked into a forme, inked, and "
+         "pressed into dampened paper one sheet at a time"),
+        ("tidal flat", "each ebb exposes a mud plain worked by wading birds "
+         "whose bills are tuned to different burrow depths"),
+    ]
+    paragraphs = []
+    total_chars = 0
+    i = 0
+    while total_chars < approx_tokens * 4:  # ~4 chars/token for English prose
+        name, body = topics[i % len(topics)]
+        para = (f"Section {i + 1}: notes on the {name}. In this section we "
+                f"revisit how {body}. Observation {i + 1} was recorded on day "
+                f"{(i * 7) % 365 + 1} of the survey and cross-checked twice; "
+                f"no anomalies were found, and the log was archived unchanged.")
+        paragraphs.append(para)
+        total_chars += len(para) + 2
+        i += 1
+    return "\n\n".join(paragraphs)
+
+def _longctx(approx_tokens, tool, ask):
+    return {
+        "tools": [tool],
+        "messages": [
+            {"role": "user", "content":
+                "Here is a survey document for our records:\n\n"
+                + distractor_text(approx_tokens)
+                + "\n\nYou've read the document above. Setting it aside "
+                  "completely: " + ask},
+        ],
+        "call_expected": True,
+        "max_tokens": 1024,
+    }
+
 SCENARIOS = {
     # The original A/B's territory: forced call, hostile quoting.
     "forced": {
@@ -182,6 +235,27 @@ SCENARIOS = {
         "max_tokens": 1536,
         "min_arg_chars": 400,
     },
+    # The grammar's value case: the same simple call, but emitted after a
+    # deep KV cache. Unforced tool_choice so the grammar actually arms.
+    "longctx_4k": dict(
+        _longctx(4000, WEATHER_TOOL,
+                 "what's the weather in London right now, in celsius? "
+                 "Use the tool."),
+    ),
+    "longctx_12k": dict(
+        _longctx(12000, WEATHER_TOOL,
+                 "what's the weather in London right now, in celsius? "
+                 "Use the tool."),
+    ),
+    # Nested schema after a deep cache — the hardest shape at the hardest
+    # depth. Same file_ticket ask as nested_schema, but unforced.
+    "longctx_nested_12k": dict(
+        _longctx(12000, TICKET_TOOL,
+                 "use the file_ticket tool to file a ticket: title 'Login "
+                 "fails on retina displays', priority 2, tags auth and ui, "
+                 "two repro steps (open login page expecting the form to "
+                 "render, submit valid credentials expecting the dashboard)."),
+    ),
     # Turn 2: after a tool result comes back, the model must ANSWER, not loop.
     "round_trip": {
         "tools": [WEATHER_TOOL],
@@ -339,6 +413,7 @@ def run_trial(base, model, scenario_name, scenario, arm, temperature, stream, ti
     wall = ended - started
     completion_tokens = usage.get("completion_tokens")
     row["wall_s"] = round(wall, 3)
+    row["prompt_tokens"] = usage.get("prompt_tokens")
     row["completion_tokens"] = completion_tokens
     if completion_tokens and wall > 0:
         row["tok_per_s"] = round(completion_tokens / wall, 2)
