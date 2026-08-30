@@ -530,6 +530,9 @@ def main():
     ap.add_argument("--timeout", type=int, default=600)
     ap.add_argument("--api-key", default=None,
                     help="Bearer token (e.g. the app's Local API on :11434)")
+    ap.add_argument("--dump-scenarios", default=None, metavar="FILE",
+                    help="write the selected scenarios as JSON and exit — the "
+                         "single source of truth for the on-device suite")
     ap.add_argument("--out", default="bench/toolcalling/evidence")
     ap.add_argument("--summary", default=None)
     ap.add_argument("--no-stream-arm", action="store_true",
@@ -543,6 +546,13 @@ def main():
     unknown = [s for s in scenario_names if s not in SCENARIOS]
     if unknown:
         sys.exit(f"unknown scenarios: {unknown}; have {list(SCENARIOS)}")
+
+    if args.dump_scenarios:
+        with open(args.dump_scenarios, "w") as f:
+            json.dump({name: SCENARIOS[name] for name in scenario_names},
+                      f, indent=1, sort_keys=True)
+        print(f"wrote {len(scenario_names)} scenarios -> {args.dump_scenarios}")
+        return
 
     import os
     os.makedirs(args.out, exist_ok=True)

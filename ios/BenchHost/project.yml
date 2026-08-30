@@ -49,6 +49,11 @@ targets:
       - target: BenchHost
       - package: mlxcat
         product: MLXCatBaselineKit
+      # Tool-call correctness test boots the real OpenAIServer in-app:
+      - package: mlxcat
+        product: MLXCatHTTP
+      - package: mlxcat
+        product: MLXCatNative
       - package: swift-transformers
         product: Hub
     settings:
