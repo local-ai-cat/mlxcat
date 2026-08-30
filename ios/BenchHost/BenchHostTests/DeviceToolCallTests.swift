@@ -187,7 +187,6 @@ final class DeviceToolCallTests: XCTestCase {
                 return
             }
             print("TOOLHOST serving \(shortID) on 127.0.0.1:\(port)")
-            defer { server.stop() }
 
             for (name, scenario) in scenarios.sorted(by: { $0.key < $1.key }) {
                 for temp in temps {
@@ -197,6 +196,7 @@ final class DeviceToolCallTests: XCTestCase {
                             scenario: scenario, temperature: temp)
                         var stamped = row
                         stamped["schema"] = "mlxcat-toolcall/1"
+                        stamped["model"] = shortID
                         stamped["platform"] = "ios"
                         stamped["engine"] = "mlxcat-openaiserver-ondevice"
                         stamped["device"] = ["model": deviceModel]
@@ -212,6 +212,14 @@ final class DeviceToolCallTests: XCTestCase {
                     }
                 }
             }
+
+            // Tear down BEFORE the next model: the first device run died
+            // loading model 2 while model 1's pool was still resident — the
+            // OS killed the process and xcodebuild reported a hollow
+            // zero-test "passed". One model's memory at a time.
+            server.stop()
+            try? await pool.unload(shortID)
+            print("TOOLHOST \(shortID) done, unloaded")
         }
 
         XCTAssertFalse(lines.isEmpty, "no tool-call rows produced")
