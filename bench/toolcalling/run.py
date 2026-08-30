@@ -152,6 +152,34 @@ def distractor_text(approx_tokens):
         i += 1
     return "\n\n".join(paragraphs)
 
+def agentic_history(rounds, per_result_lines=12):
+    """Synthetic pi-shaped history: alternating assistant tool_calls and tool
+    results, the way a real coding-agent conversation loads the context. Depth
+    alone (prose filler) may not be what broke the original chat — a history
+    full of prior tool-call tokens is the faithful reproduction of that
+    regime. Deterministic; ~250 tokens per round at the default size."""
+    messages = [{"role": "user", "content":
+                 "Explore this repository and catalog what you find."}]
+    for i in range(rounds):
+        call_id = f"call_h{i}"
+        cmd = ["ls -la src/module_%d" % i,
+               "grep -rn 'TODO' src/module_%d --include='*.swift'" % i,
+               "wc -l src/module_%d/*.swift" % i][i % 3]
+        messages.append({"role": "assistant", "content": None, "tool_calls": [{
+            "id": call_id, "type": "function",
+            "function": {"name": "bash",
+                         "arguments": json.dumps({"command": cmd})}}]})
+        lines = [f"-rw-r--r--  1 dev  staff  {1200 + 37 * (i + j)} Aug 30 09:0{j % 10} "
+                 f"src/module_{i}/File{j}.swift" for j in range(per_result_lines)]
+        messages.append({"role": "tool", "tool_call_id": call_id,
+                         "content": "\n".join(lines)})
+    messages.append({"role": "user", "content":
+        "Good. Now find every Xcode project in the on-the-app-store "
+        "directory. Use the bash tool with a single find command matching "
+        "both *.xcodeproj and *.xcworkspace names."})
+    return {"tools": [BASH_TOOL], "messages": messages,
+            "call_expected": True, "max_tokens": 1024}
+
 def _longctx(approx_tokens, tool, ask):
     return {
         "tools": [tool],
@@ -261,6 +289,15 @@ SCENARIOS = {
                  "what's the weather in London right now, in celsius? "
                  "Use the tool."),
     ),
+    "longctx_32k": dict(
+        _longctx(32000, WEATHER_TOOL,
+                 "what's the weather in London right now, in celsius? "
+                 "Use the tool."),
+    ),
+    # The pi-shaped regime: tool-call/result history, not prose filler.
+    # ~30 rounds ≈ 8k tokens; ~90 rounds ≈ 24k.
+    "agentic_8k": agentic_history(30),
+    "agentic_24k": agentic_history(90),
     # Nested schema after a deep cache — the hardest shape at the hardest
     # depth. Same file_ticket ask as nested_schema, but unforced.
     "longctx_nested_12k": dict(
