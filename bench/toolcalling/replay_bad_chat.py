@@ -140,8 +140,12 @@ def main():
     ap.add_argument("--base", default="http://127.0.0.1:11702")
     ap.add_argument("--model", default="Qwen3-Coder-30B-A3B-Instruct-4bit")
     ap.add_argument("--trials", type=int, default=20)
-    ap.add_argument("--temps", default="0,0.7")
-    ap.add_argument("--arms", default="grammar-on,grammar-off")
+    ap.add_argument("--temps", default="0,0.7",
+                    help="comma list; 'default' omits the field (pi's shape)")
+    ap.add_argument("--arms", default="grammar-on,grammar-off",
+                    help="'default' sends no tool_grammar field (non-mlxcat servers)")
+    ap.add_argument("--api-key", default=None,
+                    help="Bearer token (e.g. the app's Local API)")
     ap.add_argument("--max-tokens", type=int, default=1024)
     ap.add_argument("--out", default="bench/toolcalling/evidence")
     args = ap.parse_args()
@@ -157,14 +161,21 @@ def main():
         args.out,
         f"{stamp}-{socket.gethostname().split('.')[0]}-badchat-{run_id}.jsonl")
 
+    temps = [None if t.strip() == "default" else float(t)
+             for t in args.temps.split(",")]
+    headers = {"Content-Type": "application/json"}
+    if args.api_key:
+        headers["Authorization"] = "Bearer " + args.api_key
+
     tally = {}
     with open(evidence_path, "a") as evidence:
         for arm in [a.strip() for a in args.arms.split(",")]:
-            for temp in [float(t) for t in args.temps.split(",")]:
+            for temp in temps:
                 for i in range(args.trials):
                     body = {"model": args.model, "messages": messages,
-                            "tools": TOOLS, "max_tokens": args.max_tokens,
-                            "temperature": temp}
+                            "tools": TOOLS, "max_tokens": args.max_tokens}
+                    if temp is not None:
+                        body["temperature"] = temp
                     if arm == "grammar-on":
                         body["tool_grammar"] = True
                     elif arm == "grammar-off":
@@ -172,7 +183,7 @@ def main():
                     req = urllib.request.Request(
                         args.base + "/v1/chat/completions",
                         data=json.dumps(body).encode(),
-                        headers={"Content-Type": "application/json"})
+                        headers=headers)
                     row = {"schema": "mlxcat-badchat-replay/1",
                            "timestamp": datetime.datetime.now(
                                datetime.timezone.utc).isoformat(timespec="seconds"),
@@ -203,7 +214,8 @@ def main():
         ["structured_ok", "structured_bad", "leaked_text", "no_call",
          "length", "error"]) + " |")
     print("|---|---:|" + "---:|" * 6)
-    for (arm, temp), counts in sorted(tally.items()):
+    for (arm, temp), counts in sorted(tally.items(),
+                                      key=lambda kv: (kv[0][0], str(kv[0][1]))):
         cells = " | ".join(str(counts.get(k, 0)) for k in
                            ["structured_ok", "structured_bad", "leaked_text",
                             "no_call", "length", "error"])
