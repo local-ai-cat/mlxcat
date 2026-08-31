@@ -479,10 +479,11 @@ lines. Two pins, one per defect:
   `76a977ca` (#3498, upstream's 2026-05-11 fix): the scalar-offset fast path's
   grid gets its batch axis. `RoPEBatchGridProbeTests` now prints
   `scalar-offset rows-unrotated=[]` — every row rotates.
-- **The anchor.** `atlas-open-sources/mlx-swift-lm` (`7b93094e`) = upstream
-  `01472a78` plus `Gemma4TextAttention` rotating with the per-row
-  `cache?.ropeOffset` instead of the padded batch length — what every other
-  family in that library already did.
+- **The anchor.** `atlas-open-sources/mlx-swift-lm` (`b653679f`) = upstream
+  `37688d2` plus the focused `b14d62d` candidate: `Gemma4TextAttention` rotates
+  with the per-row `cache?.ropeOffset` instead of the padded batch length, and
+  `Gemma4RoPEOffsetTests` pins that propagation without a model download. The
+  second deployment-only commit keeps the mlx-swift package identity aligned.
 
 Evidence on the production factory (`GemmaRoPEOffsetProbeTests`, real
 chat-templated prompts, greedy, gemma-4-E2B): **serial-exact at ragged width 2
