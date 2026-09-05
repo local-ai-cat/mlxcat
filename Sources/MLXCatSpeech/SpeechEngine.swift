@@ -41,14 +41,19 @@ public struct SpeechModelInfo: Sendable, Equatable {
     public let id: String
     public let engineID: String
     public let displayName: String
-    /// Bytes on disk/memory when loaded; nil = unknown (pool treats as unaccounted).
+    public enum FootprintSource: String, Sendable { case diskEstimate, configuredEstimate, unknown }
+    /// Estimated resident bytes, never a model count. Unknown is unavailable
+    /// under a finite pool ceiling; it is not interpreted as zero.
     public let footprint: Int64?
+    public let footprintSource: FootprintSource
 
-    public init(id: String, engineID: String, displayName: String, footprint: Int64? = nil) {
+    public init(id: String, engineID: String, displayName: String, footprint: Int64? = nil,
+                footprintSource: FootprintSource = .configuredEstimate) {
         self.id = id
         self.engineID = engineID
         self.displayName = displayName
         self.footprint = footprint
+        self.footprintSource = footprint == nil ? .unknown : footprintSource
     }
 }
 
@@ -218,7 +223,7 @@ public protocol SpeechEngineAdapter: Sendable {
     // these as advisory; the engine pool drives them in phase 2 (audio_stt).
     func loadModel(_ modelID: String) async throws
     func unloadModel(_ modelID: String) async
-    func loadedFootprint() async -> Int64
+    func loadedFootprint() async -> Int64?
 
     func transcribeFile(_ request: SpeechFileTranscriptionRequest) async throws -> SpeechTranscriptionResult
     func makeStreamSession(modelID: String, language: String?) async throws -> any SpeechStreamSession
@@ -227,5 +232,5 @@ public protocol SpeechEngineAdapter: Sendable {
 public extension SpeechEngineAdapter {
     func loadModel(_ modelID: String) async throws {}
     func unloadModel(_ modelID: String) async {}
-    func loadedFootprint() async -> Int64 { 0 }
+    func loadedFootprint() async -> Int64? { nil }
 }

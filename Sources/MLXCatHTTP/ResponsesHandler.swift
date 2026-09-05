@@ -12,13 +12,17 @@ struct ResponsesHandler {
         self.mcpManager = mcpManager
     }
 
-    func handleCreate(_ request: HTTPRequest, connection: NWConnection) async throws {
+    func handleCreate(_ request: HTTPRequest, connection: any HTTPResponseWriting) async throws {
         let responsesRequest: ResponsesRequest
         do {
             responsesRequest = try ResponsesRequest.parse(request.body)
         } catch {
             let status = (error as? OpenAIServerError)?.httpStatus ?? 422
-            try await sendJSON(openAIErrorBody(message: String(describing: error), status: status), status: status, connection: connection)
+            try await sendJSON(
+                openAIErrorBody(message: String(describing: error), status: status),
+                status: status,
+                connection: connection
+            )
             return
         }
 
@@ -33,62 +37,78 @@ struct ResponsesHandler {
         let stream = try await backend.startChatCompletion(
             effectiveRequest.openAIRequest(previousMessages: previousMessages)
         )
-        if effectiveRequest.stream {
-            try await sendStreaming(
-                request: effectiveRequest,
-                previousMessages: previousMessages,
-                stream: stream,
-                connection: connection
-            )
-        } else {
-            let completion = try await collectBufferedCompletion(stream: stream)
-            let id = "resp_\(UUID().uuidString.prefix(8))"
-            let response = buildResponsesObject(
-                request: effectiveRequest,
-                id: id,
-                promptTokens: stream.promptTokens,
-                completion: completion
-            )
-            let data = try responsesJSONData(response)
-            if effectiveRequest.store {
-                let extracted = extractThinking(completion.text)
-                await store.put(
-                    id: id,
-                    responseData: data,
-                    contextMessages: previousMessages + effectiveRequest.inputMessages + [
-                        OpenAIChatMessage(
-                            role: "assistant",
-                            content: extracted.content,
-                            reasoningContent: extracted.reasoning.isEmpty ? nil : extracted.reasoning
-                        )
-                    ]
+        try await stream.withLifetime { stream in
+            if effectiveRequest.stream {
+                try await sendStreaming(
+                    request: effectiveRequest,
+                    previousMessages: previousMessages,
+                    stream: stream,
+                    connection: connection
                 )
+            } else {
+                try await sendBuffered(request: effectiveRequest, previousMessages: previousMessages,
+                                       stream: stream, connection: connection)
             }
-            try await sendJSONData(data, status: 200, connection: connection)
         }
     }
 
-    func handleGet(id: String, connection: NWConnection) async throws {
+    private func sendBuffered(request: ResponsesRequest, previousMessages: [OpenAIChatMessage],
+                              stream: OpenAIChatStream, connection: any HTTPResponseWriting) async throws {
+        let completion = try await collectBufferedCompletion(stream: stream)
+        let id = "resp_\(UUID().uuidString.prefix(8))"
+        let response = buildResponsesObject(request: request, id: id,
+                                            promptTokens: stream.promptTokens, completion: completion)
+        let data = try responsesJSONData(response)
+        if request.store {
+            let extracted = extractThinking(completion.text)
+            await store.put(
+                id: id,
+                responseData: data,
+                contextMessages: previousMessages + request.inputMessages + [
+                    OpenAIChatMessage(
+                        role: "assistant",
+                        content: extracted.content,
+                        reasoningContent: extracted.reasoning.isEmpty ? nil : extracted.reasoning
+                    )
+                ]
+            )
+        }
+        try await sendJSONData(data, status: 200, connection: connection)
+    }
+
+    func handleGet(id: String, connection: any HTTPResponseWriting) async throws {
         guard let data = await store.responseData(id: id) else {
-            try await sendJSON(openAIErrorBody(message: "response not found", status: 404), status: 404, connection: connection)
+            try await sendJSON(
+                openAIErrorBody(message: "response not found", status: 404),
+                status: 404,
+                connection: connection
+            )
             return
         }
         try await sendJSONData(data, status: 200, connection: connection)
     }
 
-    func handleDelete(id: String, connection: NWConnection) async throws {
+    func handleDelete(id: String, connection: any HTTPResponseWriting) async throws {
         guard await store.delete(id: id) else {
-            try await sendJSON(openAIErrorBody(message: "response not found", status: 404), status: 404, connection: connection)
+            try await sendJSON(
+                openAIErrorBody(message: "response not found", status: 404),
+                status: 404,
+                connection: connection
+            )
             return
         }
-        try await sendJSON(["id": id, "object": "response.deleted", "deleted": true], status: 200, connection: connection)
+        try await sendJSON(
+            ["id": id, "object": "response.deleted", "deleted": true],
+            status: 200,
+            connection: connection
+        )
     }
 
     private func sendStreaming(
         request: ResponsesRequest,
         previousMessages: [OpenAIChatMessage],
         stream: OpenAIChatStream,
-        connection: NWConnection
+        connection: any HTTPResponseWriting
     ) async throws {
         try await connection.send(data: Data(streamingHeader.utf8))
 
@@ -126,7 +146,10 @@ struct ResponsesHandler {
             try await sendSSE(
                 ResponseSSEEvent(
                     name: "error",
-                    payload: ["type": "error", "error": openAIErrorObject(message: String(describing: error), status: 500)]
+                    payload: [
+                        "type": "error",
+                        "error": openAIErrorObject(message: String(describing: error), status: 500)
+                    ]
                 ),
                 connection: connection
             )
@@ -144,18 +167,19 @@ struct ResponsesHandler {
         return ResponsesBufferedCompletion(text: text, completionTokens: completionTokens)
     }
 
-    private func sendSSE(_ event: ResponseSSEEvent, connection: NWConnection) async throws {
+    private func sendSSE(_ event: ResponseSSEEvent, connection: any HTTPResponseWriting) async throws {
         let data = try JSONSerialization.data(withJSONObject: event.payload, options: [])
-        let payload = "event: \(event.name)\ndata: \(String(decoding: data, as: UTF8.self))\n\n"
+        guard let json = String(data: data, encoding: .utf8) else { throw OpenAIServerError.invalidJSON }
+        let payload = "event: \(event.name)\ndata: \(json)\n\n"
         try await connection.send(data: Data(payload.utf8))
     }
 
-    private func sendJSON(_ object: [String: Any], status: Int, connection: NWConnection) async throws {
+    private func sendJSON(_ object: [String: Any], status: Int, connection: any HTTPResponseWriting) async throws {
         let data = try JSONSerialization.data(withJSONObject: object, options: [])
         try await sendJSONData(data, status: status, connection: connection)
     }
 
-    private func sendJSONData(_ data: Data, status: Int, connection: NWConnection) async throws {
+    private func sendJSONData(_ data: Data, status: Int, connection: any HTTPResponseWriting) async throws {
         let header = "HTTP/1.1 \(status) \(responsesReasonPhrase(status))\r\n"
             + "Content-Type: application/json\r\n"
             + "Content-Length: \(data.count)\r\n"

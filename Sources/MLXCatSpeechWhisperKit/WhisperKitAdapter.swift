@@ -48,7 +48,9 @@ public actor WhisperKitSpeechAdapter: SpeechEngineAdapter {
                 SpeechModelInfo(
                     id: url.lastPathComponent,
                     engineID: engineID,
-                    displayName: url.lastPathComponent
+                    displayName: url.lastPathComponent,
+                    footprint: Self.diskEstimateBytes(at: url),
+                    footprintSource: .diskEstimate
                 )
             }
             .sorted { $0.id < $1.id }
@@ -62,10 +64,32 @@ public actor WhisperKitSpeechAdapter: SpeechEngineAdapter {
         loaded[modelID] = nil
     }
 
-    public func loadedFootprint() -> Int64 {
-        // CoreML working-set size isn't queryable; report model count as a
-        // placeholder until pool citizenship (M8b-2) defines accounting.
-        Int64(loaded.count)
+    public func loadedFootprint() -> Int64? {
+        guard !loaded.isEmpty else { return 0 }
+        let estimates = Dictionary(uniqueKeysWithValues: availableModels().map { ($0.id, $0.footprint) })
+        var bytes: Int64 = 0
+        for id in loaded.keys {
+            guard let estimate = estimates[id] ?? nil else { return nil }
+            bytes += estimate
+        }
+        return bytes
+    }
+
+    /// Compiled model files are a disk-derived estimate, not CoreML/ANE resident
+    /// measurement. Unknown/missing bundles remain nil rather than a zero cost.
+    static func diskEstimateBytes(at root: URL) -> Int64? {
+        guard let files = FileManager.default.enumerator(
+            at: root, includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
+            options: [.skipsHiddenFiles]
+        ) else { return nil }
+        var bytes: Int64 = 0
+        for case let file as URL in files {
+            guard let values = try? file.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]) else {
+                return nil
+            }
+            if values.isRegularFile == true { bytes += Int64(values.fileSize ?? 0) }
+        }
+        return bytes > 0 ? bytes : nil
     }
 
     public func transcribeFile(_ request: SpeechFileTranscriptionRequest) async throws -> SpeechTranscriptionResult {
@@ -212,7 +236,7 @@ actor WhisperKitStreamSession: SpeechStreamSession {
     nonisolated let segments: AsyncThrowingStream<SpeechStreamSegment, Error>
     private let continuation: AsyncThrowingStream<SpeechStreamSegment, Error>.Continuation
 
-    private let pipeline: WhisperKitPipeline
+    private var pipeline: WhisperKitPipeline?
     private let language: String?
     private let partialInterval: Double
     /// Window cap: beyond this, the oldest audio is trimmed (its transcript was
@@ -258,11 +282,13 @@ actor WhisperKitStreamSession: SpeechStreamSession {
         guard !finished else { return }
         try await emit(kind: .final)
         finished = true
+        pipeline = nil
         continuation.finish()
     }
 
     func cancel() {
         finished = true
+        pipeline = nil
         continuation.finish()
     }
 
@@ -301,6 +327,7 @@ actor WhisperKitStreamSession: SpeechStreamSession {
         let windowStart = trimmedSeconds
         let windowEnd = trimmedSeconds + Double(samples.count) / sampleRate
         let started = DispatchTime.now()
+        guard let pipeline else { return }
         let results = try await pipeline.transcribe(audioArray: samples, language: language)
         // cancel() may have closed the stream while transcription was in flight.
         guard !finished else { return }

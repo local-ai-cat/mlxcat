@@ -7,6 +7,7 @@ public struct Request: @unchecked Sendable {
     public let sampling: SamplingParameters
     public let eosTokenIds: Set<Int>
     public let cacheSession: String?
+    public let retainedAllocation: RetainedAllocation?
 
     public init(
         uid: String,
@@ -14,7 +15,8 @@ public struct Request: @unchecked Sendable {
         maxTokens: Int,
         sampling: SamplingParameters = SamplingParameters(),
         eosTokenIds: Set<Int> = [],
-        cacheSession: String? = nil
+        cacheSession: String? = nil,
+        retainedAllocation: RetainedAllocation? = nil
     ) {
         self.uid = uid
         self.input = input
@@ -22,10 +24,16 @@ public struct Request: @unchecked Sendable {
         self.sampling = sampling
         self.eosTokenIds = eosTokenIds
         self.cacheSession = cacheSession
+        self.retainedAllocation = retainedAllocation
     }
 }
 
 extension Request {
+    public func retaining(_ allocation: RetainedAllocation?) -> Request {
+        Request(uid: uid, input: input, maxTokens: maxTokens, sampling: sampling,
+                eosTokenIds: eosTokenIds, cacheSession: cacheSession, retainedAllocation: allocation)
+    }
+
     /// Whether this request carries anything but text.
     ///
     /// This is the property that decides batchability for the families whose

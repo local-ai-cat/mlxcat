@@ -10,7 +10,11 @@ struct CompletionsHandler {
             completionRequest = try OpenAICompletionRequest.parse(request.body)
         } catch {
             let status = (error as? OpenAIServerError)?.httpStatus ?? 422
-            try await sendJSON(openAIErrorBody(message: String(describing: error), status: status), status: status, connection: connection)
+            try await sendJSON(
+                openAIErrorBody(message: String(describing: error), status: status),
+                status: status,
+                connection: connection
+            )
             return
         }
 
@@ -26,7 +30,9 @@ struct CompletionsHandler {
 
         if completionRequest.stream {
             let stream = try await backend.startCompletion(completionRequest.request(forPrompt: prompts[0]))
-            try await sendStreaming(request: completionRequest, stream: stream, connection: connection)
+            try await stream.withLifetime { stream in
+                try await sendStreaming(request: completionRequest, stream: stream, connection: connection)
+            }
         } else {
             try await sendBuffered(request: completionRequest, prompts: prompts, connection: connection)
         }
@@ -46,7 +52,9 @@ struct CompletionsHandler {
 
         for (index, prompt) in prompts.enumerated() {
             let stream = try await backend.startCompletion(request.request(forPrompt: prompt))
-            let completion = try await collectCompletion(stream: stream, stopSequences: request.stop)
+            let completion = try await stream.withLifetime { stream in
+                try await collectCompletion(stream: stream, stopSequences: request.stop)
+            }
             promptTokens += stream.promptTokens
             completionTokens += completion.completionTokens
             cachedPromptTokens += completion.cachedPromptTokens
@@ -62,8 +70,7 @@ struct CompletionsHandler {
         try await sendJSON(
             buildCompletionResponse(
                 request: request,
-                id: id,
-                created: created,
+                metadata: CompletionResponseMetadata(id: id, created: created),
                 choices: choices,
                 promptTokens: promptTokens,
                 completionTokens: completionTokens,
@@ -114,27 +121,39 @@ struct CompletionsHandler {
                             promptTokens: stream.promptTokens,
                             completionTokens: formatter.completionTokens,
                             cachedPromptTokens: formatter.cachedPromptTokens
-                        ),
+                        )
                     ],
                     connection: connection
                 )
             }
             try await connection.sendFinal(data: Data("data: [DONE]\n\n".utf8))
         } catch {
-            try await sendSSE(
-                [
-                    "id": id,
-                    "object": "error",
-                    "created": created,
-                    "error": openAIErrorObject(message: String(describing: error), status: 500),
-                ],
-                connection: connection
-            )
-            try await connection.sendFinal(data: Data("data: [DONE]\n\n".utf8))
+            try await sendStreamingError(error, id: id, created: created, connection: connection)
         }
     }
 
-    private func collectCompletion(stream: OpenAIChatStream, stopSequences: [String]) async throws -> CompletionBufferedResult {
+    private func sendStreamingError(
+        _ error: Error,
+        id: String,
+        created: Int,
+        connection: NWConnection
+    ) async throws {
+        try await sendSSE(
+            [
+                "id": id,
+                "object": "error",
+                "created": created,
+                "error": openAIErrorObject(message: String(describing: error), status: 500)
+            ],
+            connection: connection
+        )
+        try await connection.sendFinal(data: Data("data: [DONE]\n\n".utf8))
+    }
+
+    private func collectCompletion(
+        stream: OpenAIChatStream,
+        stopSequences: [String]
+    ) async throws -> CompletionBufferedResult {
         var text = ""
         var completionTokens = 0
         var cachedPromptTokens = 0
@@ -174,7 +193,8 @@ struct CompletionsHandler {
 
     private func sendSSE(_ object: [String: Any], connection: NWConnection) async throws {
         let data = try JSONSerialization.data(withJSONObject: object, options: [])
-        let line = "data: \(String(decoding: data, as: UTF8.self))\n\n"
+        guard let json = String(data: data, encoding: .utf8) else { throw OpenAIServerError.invalidJSON }
+        let line = "data: \(json)\n\n"
         try await connection.send(data: Data(line.utf8))
     }
 
@@ -281,7 +301,7 @@ public struct CompletionStreamFormatter: Sendable {
                     text: text,
                     finishReason: finishReason
                 )
-            ],
+            ]
         ]
     }
 }
@@ -291,30 +311,39 @@ public func buildCompletionChoice(index: Int, text: String, finishReason: String
         "index": index,
         "text": text,
         "finish_reason": finishReason ?? NSNull(),
-        "logprobs": NSNull(),
+        "logprobs": NSNull()
     ]
+}
+
+public struct CompletionResponseMetadata: Sendable {
+    public let id: String
+    public let created: Int
+
+    public init(id: String, created: Int) {
+        self.id = id
+        self.created = created
+    }
 }
 
 public func buildCompletionResponse(
     request: OpenAICompletionRequest,
-    id: String,
-    created: Int,
+    metadata: CompletionResponseMetadata,
     choices: [[String: Any]],
     promptTokens: Int,
     completionTokens: Int,
     cachedPromptTokens: Int = 0
 ) -> [String: Any] {
     [
-        "id": id,
+        "id": metadata.id,
         "object": "text_completion",
-        "created": created,
+        "created": metadata.created,
         "model": request.model,
         "choices": choices,
         "usage": completionUsage(
             promptTokens: promptTokens,
             completionTokens: completionTokens,
             cachedPromptTokens: cachedPromptTokens
-        ),
+        )
     ]
 }
 
@@ -329,7 +358,7 @@ public func completionUsage(
         "total_tokens": promptTokens + completionTokens,
         "input_tokens": promptTokens,
         "output_tokens": completionTokens,
-        "prompt_tokens_details": ["cached_tokens": cachedPromptTokens],
+        "prompt_tokens_details": ["cached_tokens": cachedPromptTokens]
     ]
 }
 

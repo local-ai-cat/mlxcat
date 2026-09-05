@@ -1,8 +1,7 @@
 import MLXLMCommon
 
 public final class MLXCatEngine: @unchecked Sendable {
-    private let scheduler: Scheduler
-    private let streamDemux: EngineStreamDemux
+    private let resident: AsyncResourceOwner<EngineResident>
 
     public init(
         model: any LanguageModel,
@@ -34,65 +33,79 @@ public final class MLXCatEngine: @unchecked Sendable {
             kvQuantization: kvQuantization,
             speculativeDecoding: speculativeDecoding
         )
-        self.scheduler = scheduler
-        self.streamDemux = EngineStreamDemux(scheduler: scheduler)
+        self.resident = AsyncResourceOwner(EngineResident(
+            scheduler: scheduler, streamDemux: EngineStreamDemux(scheduler: scheduler)
+        ))
     }
 
     public func submit(_ request: Request) async throws {
-        try await scheduler.submit(request)
+        try await resident.withValue { try await $0.scheduler.submit(request) }
     }
 
     public func cancel(uid: String) async {
-        await scheduler.cancel(uid: uid)
+        try? await resident.withValue { await $0.scheduler.cancel(uid: uid) }
     }
 
     @discardableResult
     public func step() async throws -> [Response] {
-        try await scheduler.step()
+        try await resident.withValue { try await $0.scheduler.step() }
     }
 
     public func generate(_ requests: [Request]) async throws -> [String: [Int]] {
-        for request in requests {
-            try await scheduler.submit(request)
+        try await resident.withValue { state in
+            for request in requests { try await state.scheduler.submit(request) }
+            while await !state.scheduler.isIdle { _ = try await state.scheduler.step() }
+            var result: [String: [Int]] = [:]
+            for request in requests { result[request.uid] = await state.scheduler.consumeTokens(for: request.uid) }
+            return result
         }
+    }
 
-        while await !scheduler.isIdle {
-            _ = try await scheduler.step()
-        }
-
-        var result: [String: [Int]] = [:]
-        for request in requests {
-            result[request.uid] = await scheduler.consumeTokens(for: request.uid)
-        }
-        return result
+    public struct StreamSession: Sendable {
+        public let responses: AsyncThrowingStream<Response, Error>
+        public let cancelAndWait: @Sendable () async -> Void
     }
 
     public func stream(_ request: Request) -> AsyncThrowingStream<Response, Error> {
-        AsyncThrowingStream { continuation in
-            continuation.onTermination = { [streamDemux] _ in
-                Task {
-                    await streamDemux.cancel(uid: request.uid)
-                }
-            }
-            Task { [streamDemux] in
-                await streamDemux.add(request, continuation: continuation)
-            }
+        streamSession(request).responses
+    }
+
+    public func streamSession(_ request: Request) -> StreamSession {
+        let (responses, continuation) = AsyncThrowingStream<Response, Error>.makeStream()
+        let registration = Task { [resident] in
+            do {
+                try await resident.withValue { await $0.streamDemux.add(request, continuation: continuation) }
+            } catch { continuation.finish(throwing: error) }
         }
+        let uid = request.uid
+        let cancelAndWait: @Sendable () async -> Void = { [resident] in
+            await registration.value
+            await resident.withValueOrAwaitInvalidation { await $0.streamDemux.cancelAndWait(uid: uid) }
+        }
+        continuation.onTermination = { _ in Task { await cancelAndWait() } }
+        return StreamSession(responses: responses, cancelAndWait: cancelAndWait)
     }
 
     public func responses(for uid: String) async -> [Response] {
-        await scheduler.responses(for: uid)
+        (try? await resident.withValue { await $0.scheduler.responses(for: uid) }) ?? []
     }
 
     public func tokens(for uid: String) async -> [Int] {
-        await scheduler.tokens(for: uid)
+        (try? await resident.withValue { await $0.scheduler.tokens(for: uid) }) ?? []
     }
 
     public var isIdle: Bool {
-        get async {
-            await scheduler.isIdle
-        }
+        get async { (try? await resident.withValue { await $0.scheduler.isIdle }) ?? true }
     }
+
+    public func shutdown() async {
+        await resident.invalidate { await $0.streamDemux.shutdown() }
+    }
+}
+
+private struct EngineResident: Sendable {
+    let scheduler: Scheduler
+    let streamDemux: EngineStreamDemux
 }
 
 private actor EngineStreamDemux {
@@ -100,6 +113,7 @@ private actor EngineStreamDemux {
     private var continuations: [String: AsyncThrowingStream<Response, Error>.Continuation] = [:]
     private var registeringUIDs: Set<String> = []
     private var pumpTask: Task<Void, Never>?
+    private var closing = false
 
     init(scheduler: Scheduler) {
         self.scheduler = scheduler
@@ -109,6 +123,7 @@ private actor EngineStreamDemux {
         _ request: Request,
         continuation: AsyncThrowingStream<Response, Error>.Continuation
     ) async {
+        guard !closing else { continuation.finish(throwing: ResourceOwnerError.unloaded); return }
         registeringUIDs.insert(request.uid)
         do {
             try await scheduler.submit(request)
@@ -121,14 +136,24 @@ private actor EngineStreamDemux {
         }
     }
 
-    func cancel(uid: String) async {
-        continuations.removeValue(forKey: uid)
-        registeringUIDs.remove(uid)
-        await scheduler.cancel(uid: uid)
+    func cancelAndWait(uid: String) async {
+        let continuation = continuations.removeValue(forKey: uid)
+        await scheduler.cancelAndWait(uid: uid)
+        await scheduler.discardResponses(for: uid)
+        continuation?.finish()
+    }
+
+    func shutdown() async {
+        closing = true
+        let ids = Array(continuations.keys)
+        for id in ids { await cancelAndWait(uid: id) }
+        let pump = pumpTask
+        pump?.cancel()
+        await pump?.value
     }
 
     private func startPumpIfNeeded() {
-        guard pumpTask == nil else { return }
+        guard !closing, pumpTask == nil else { return }
         pumpTask = Task { [weak self] in
             await self?.pump()
         }
@@ -136,7 +161,7 @@ private actor EngineStreamDemux {
 
     private func pump() async {
         do {
-            while true {
+            while !closing {
                 let responses = try await scheduler.step()
                 for response in responses {
                     await deliver(response)

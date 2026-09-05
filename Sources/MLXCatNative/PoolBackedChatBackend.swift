@@ -2,7 +2,9 @@ import Foundation
 import MLXCat
 import MLXCatHTTP
 
-public final class PoolBackedChatBackend<Loader: EnginePoolModelLoader>: OpenAIModelLifecycleBackend, OpenAICompletionBackend, OpenAIEmbeddingsBackend, OpenAIRerankBackend, AudioTranscriptionBackend, AnthropicTokenCountingBackend, OpenAIHealthProviding, @unchecked Sendable
+public final class PoolBackedChatBackend<Loader: EnginePoolModelLoader>: OpenAIModelLifecycleBackend,
+    OpenAICompletionBackend, OpenAIEmbeddingsBackend, OpenAIRerankBackend, AudioTranscriptionBackend,
+    AnthropicTokenCountingBackend, OpenAIHealthProviding, @unchecked Sendable
 where Loader.Engine == NativeModelEngine {
     public let models: [OpenAIModelInfo]
     public var embeddingModels: [OpenAIModelInfo] { embeddingsBackend?.embeddingModels ?? [] }
@@ -67,21 +69,26 @@ where Loader.Engine == NativeModelEngine {
         do {
             let lease = try await pool.acquire(request.model)
             let stream: OpenAIChatStream
+            var reservation: UUID?
             do {
                 let prepared = try await lease.engine.prepareChatCompletion(request)
-                try await admitOrThrow(
+                let admitted = try await prepared.admitAndStart(
+                    pool: pool,
                     additionalBytes: lease.engine.estimatedKVCacheBytes(
                         promptTokens: prepared.promptTokens,
                         maxGeneratedTokens: request.maxTokens
-                    )
+                    ),
+                    checkPressure: { [self] in try await admitOrThrow(additionalBytes: $0) }
                 )
-                stream = prepared.stream
+                reservation = admitted.reservation
+                stream = admitted.stream
             } catch {
+                if let reservation { await pool.releaseRequest(reservation) }
                 await pool.release(lease)
                 await pool.finishWaitingRequest(ticket)
                 throw error
             }
-            return leasedStream(stream, lease: lease, ticket: ticket)
+            return leasedStream(stream, lease: lease, ticket: ticket, reservation: reservation)
         } catch {
             await pool.finishWaitingRequest(ticket)
             throw openAIError(from: error)
@@ -98,21 +105,26 @@ where Loader.Engine == NativeModelEngine {
         do {
             let lease = try await pool.acquire(request.model)
             let stream: OpenAIChatStream
+            var reservation: UUID?
             do {
                 let prepared = try await lease.engine.prepareCompletion(request)
-                try await admitOrThrow(
+                let admitted = try await prepared.admitAndStart(
+                    pool: pool,
                     additionalBytes: lease.engine.estimatedKVCacheBytes(
                         promptTokens: prepared.promptTokens,
                         maxGeneratedTokens: request.maxTokens
-                    )
+                    ),
+                    checkPressure: { [self] in try await admitOrThrow(additionalBytes: $0) }
                 )
-                stream = prepared.stream
+                reservation = admitted.reservation
+                stream = admitted.stream
             } catch {
+                if let reservation { await pool.releaseRequest(reservation) }
                 await pool.release(lease)
                 await pool.finishWaitingRequest(ticket)
                 throw error
             }
-            return leasedStream(stream, lease: lease, ticket: ticket)
+            return leasedStream(stream, lease: lease, ticket: ticket, reservation: reservation)
         } catch {
             await pool.finishWaitingRequest(ticket)
             throw openAIError(from: error)
@@ -167,8 +179,14 @@ where Loader.Engine == NativeModelEngine {
             total + loaded.engine.prefixCacheStats().currentBytes
         }
         var status = OpenAIModelPoolStatus(await pool.status()).addingPrefixCacheMemory(prefixMemory)
+        let resources = await pool.resourceStatuses()
+        let resourceModels = resources.map(OpenAIModelRuntimeStatus.init)
+        status = status.appendingSpeechModels(resourceModels, speechMemory: 0)
         if let speechBackend = speechBackend as? SpeechModelLifecycleRouting {
-            let speechModels = await speechBackend.speechModelStatuses()
+            let accountedPaths = Set(resourceModels.map(\.modelPath))
+            let speechModels = await speechBackend.speechModelStatuses().filter {
+                !accountedPaths.contains($0.modelPath)
+            }
             let speechMemory = speechModels.compactMap(\.actualSize).reduce(Int64(0), +)
             status = status.appendingSpeechModels(speechModels, speechMemory: speechMemory)
         }
@@ -176,9 +194,11 @@ where Loader.Engine == NativeModelEngine {
     }
 
     public func loadModel(_ id: String) async throws -> OpenAIModelLifecycleResult {
+        if let result = try await PoolResourceModelLifecycle(pool: pool).load(
+            id, allowBareModelID: await allowBareResourceModelID(id)
+        ) { return result }
         if let registrySpeechBackend = speechBackend as? SpeechModelLifecycleRouting,
-            await shouldRouteSpeechLifecycle(id, speechBackend: registrySpeechBackend)
-        {
+           await shouldRouteSpeechLifecycle(id, speechBackend: registrySpeechBackend) {
             return try await registrySpeechBackend.loadModel(id)
         }
         try await admitOrThrow()
@@ -192,9 +212,11 @@ where Loader.Engine == NativeModelEngine {
     }
 
     public func unloadModel(_ id: String) async throws -> OpenAIModelLifecycleResult {
+        if let result = try await PoolResourceModelLifecycle(pool: pool).unload(
+            id, allowBareModelID: await allowBareResourceModelID(id)
+        ) { return result }
         if let registrySpeechBackend = speechBackend as? SpeechModelLifecycleRouting,
-            await shouldRouteSpeechLifecycle(id, speechBackend: registrySpeechBackend)
-        {
+           await shouldRouteSpeechLifecycle(id, speechBackend: registrySpeechBackend) {
             return try await registrySpeechBackend.unloadModel(id)
         }
         do {
@@ -222,36 +244,19 @@ where Loader.Engine == NativeModelEngine {
     private func leasedStream(
         _ stream: OpenAIChatStream,
         lease: EnginePoolLease<NativeModelEngine>,
-        ticket: EnginePoolQueueTicket
+        ticket: EnginePoolQueueTicket,
+        reservation: UUID?
     ) -> OpenAIChatStream {
-        let releaseState = PoolLeaseReleaseState(pool: pool, lease: lease, ticket: ticket)
-        let chunks = AsyncThrowingStream<OpenAIChatChunk, Error> { continuation in
-            let task = Task {
-                defer {
-                    Task {
-                        await releaseState.release()
-                    }
-                }
-                do {
-                    for try await chunk in stream.chunks {
-                        continuation.yield(chunk)
-                    }
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
-            }
-            continuation.onTermination = { _ in
-                task.cancel()
-                Task {
-                    await releaseState.release()
-                }
-            }
-        }
-        return OpenAIChatStream(promptTokens: stream.promptTokens, chunks: chunks)
+        PoolLeasedChatStream.make(stream, pool: pool, lease: lease, ticket: ticket, reservation: reservation)
     }
 
     private func openAIError(from error: Error) -> OpenAIHTTPError {
+        if case let MemoryWatchdogError.admissionDenied(required, current, ceiling) = error {
+            return OpenAIHTTPError(status: 507,
+                                   message: "Insufficient memory: \(required) requested bytes, "
+                                    + "\(current) used, \(ceiling) ceiling.",
+                                   retryAfterSeconds: 1)
+        }
         guard let poolError = error as? EnginePoolError else {
             if let httpError = error as? OpenAIHTTPError {
                 return httpError
@@ -267,35 +272,19 @@ where Loader.Engine == NativeModelEngine {
     }
 }
 
+private extension PoolBackedChatBackend {
+    func allowBareResourceModelID(_ id: String) async -> Bool {
+        guard !isLLMModel(id) else { return false }
+        if let speech = speechBackend as? SpeechModelLifecycleRouting,
+           await speech.canResolveModelReference(id) { return false }
+        return true
+    }
+}
+
 private extension EnginePoolError {
     var modelNotFoundCode: String? {
         if case .modelNotFound = self { return "model_not_found" }
         return nil
-    }
-}
-
-private actor PoolLeaseReleaseState<Loader: EnginePoolModelLoader>
-where Loader.Engine == NativeModelEngine {
-    private let pool: EnginePool<Loader>
-    private let lease: EnginePoolLease<NativeModelEngine>
-    private let ticket: EnginePoolQueueTicket
-    private var released = false
-
-    init(
-        pool: EnginePool<Loader>,
-        lease: EnginePoolLease<NativeModelEngine>,
-        ticket: EnginePoolQueueTicket
-    ) {
-        self.pool = pool
-        self.lease = lease
-        self.ticket = ticket
-    }
-
-    func release() async {
-        guard !released else { return }
-        released = true
-        await pool.release(lease)
-        await pool.finishWaitingRequest(ticket)
     }
 }
 
@@ -338,6 +327,17 @@ private extension OpenAIModelPoolStatus {
 }
 
 private extension OpenAIModelRuntimeStatus {
+    init(_ state: EnginePoolResourceStatus) {
+        self.init(
+            id: state.resource.modelID, modelType: state.resource.modelType, modelPath: state.resource.id,
+            loaded: state.loaded, isLoading: state.isLoading || state.isUnloading,
+            estimatedSize: state.resource.footprint.bytes ?? 0, actualSize: nil, pinned: false,
+            lastAccess: state.lastAccess?.timeIntervalSince1970, inUse: state.inUse,
+            footprintSource: state.resource.footprint.source.rawValue,
+            accountedBytes: (state.loaded || state.isLoading) ? state.resource.footprint.bytes : 0
+        )
+    }
+
     init(_ status: EnginePoolModelStatus) {
         self.init(
             id: status.id,

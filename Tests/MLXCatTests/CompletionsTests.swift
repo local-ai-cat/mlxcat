@@ -85,8 +85,7 @@ final class CompletionsTests: XCTestCase {
         )
         let response = buildCompletionResponse(
             request: request,
-            id: "cmpl_test",
-            created: 123,
+            metadata: CompletionResponseMetadata(id: "cmpl_test", created: 123),
             choices: [
                 buildCompletionChoice(index: 0, text: "answer", finishReason: "stop")
             ],

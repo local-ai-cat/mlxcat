@@ -17,7 +17,8 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
         let id: UUID
         let sessionKey: String?
         var tokens: [Int]
-        var layers: [SerializedKVLayer]
+        let payload: RetainedCachePayload<[SerializedKVLayer]>
+        var layers: [SerializedKVLayer] { payload.value ?? [] }
         var byteCount: Int64
         var lastAccess: UInt64
         var leaseCount: Int
@@ -27,13 +28,14 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
             sessionKey: String?,
             tokens: [Int],
             layers: [SerializedKVLayer],
+            allocation: RetainedAllocation?,
             byteCount: Int64,
             lastAccess: UInt64
-        ) {
+        ) throws {
             self.id = id
             self.sessionKey = sessionKey
             self.tokens = tokens
-            self.layers = layers
+            self.payload = try RetainedCachePayload(layers, allocation: allocation, bytes: byteCount)
             self.byteCount = byteCount
             self.lastAccess = lastAccess
             self.leaseCount = 0
@@ -43,6 +45,7 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
     private struct HitStorage {
         let slotID: UUID
         let trimCount: Int
+        let allocationLease: RetainedAllocationLease?
     }
 
     private let lock = NSRecursiveLock()
@@ -101,7 +104,8 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
                 blockCount: 1,
                 storage: HitStorage(
                     slotID: best.slot.id,
-                    trimCount: max(0, best.slot.tokens.count - best.matched)
+                    trimCount: max(0, best.slot.tokens.count - best.matched),
+                    allocationLease: try? best.slot.payload.allocation?.retainCache()
                 )
             )
         }
@@ -135,6 +139,11 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
     }
 
     public func store(tokens: [Int], sessionKey: String?, cache: [SerializedKVLayer]) throws {
+        try store(tokens: tokens, sessionKey: sessionKey, cache: cache, allocation: nil)
+    }
+
+    public func store(tokens: [Int], sessionKey: String?, cache: [SerializedKVLayer],
+                      allocation: RetainedAllocation?) throws {
         try withLock {
             guard tokens.count > 1, !cache.isEmpty else { return }
             let copied = try cache.map { layer -> SerializedKVLayer in
@@ -148,10 +157,11 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
             let byteCount = copied.reduce(Int64(0)) { total, layer in
                 total + layer.state.reduce(Int64(0)) { $0 + estimatedBytes($1) }
             }
-            let slot = Slot(
+            let slot = try Slot(
                 sessionKey: sessionKey,
                 tokens: tokens,
                 layers: copied,
+                allocation: allocation,
                 byteCount: byteCount,
                 lastAccess: nextSequence()
             )
@@ -161,6 +171,7 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
                         return
                     }
                     currentBytes -= old.byteCount
+                    old.payload.discard()
                 }
                 sessionSlots[sessionKey] = slot
             } else {
@@ -174,11 +185,9 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
 
     public func release(_ hit: PrefixKVStoreHit) {
         withLock {
-            guard let storage = hit.storage as? HitStorage,
-                let slot = slot(id: storage.slotID)
-            else {
-                return
-            }
+            guard let storage = hit.storage as? HitStorage else { return }
+            storage.allocationLease?.releaseAfterTeardown()
+            guard let slot = slot(id: storage.slotID) else { return }
             slot.leaseCount = max(0, slot.leaseCount - 1)
             slot.lastAccess = nextSequence()
             _releaseCount += 1
@@ -209,15 +218,29 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
 
     private func removeSlot(id: UUID) {
         if let key = sessionSlots.first(where: { $0.value.id == id })?.key,
-            let slot = sessionSlots.removeValue(forKey: key)
-        {
+            let slot = sessionSlots.removeValue(forKey: key) {
             currentBytes -= slot.byteCount
+            slot.payload.discard()
             return
         }
         if let index = anonymousSlots.firstIndex(where: { $0.id == id }) {
             let slot = anonymousSlots.remove(at: index)
             currentBytes -= slot.byteCount
+            slot.payload.discard()
         }
+    }
+
+    public func clearAndWait() async {
+        let allocations = withLock {
+            let slots = Array(sessionSlots.values) + anonymousSlots
+            let allocations = slots.compactMap { $0.payload.allocation }
+            for slot in slots { slot.payload.discard() }
+            sessionSlots.removeAll()
+            anonymousSlots.removeAll()
+            currentBytes = 0
+            return allocations
+        }
+        for allocation in allocations { await allocation.waitForReleaseIfUnused() }
     }
 
     private func evictIfNeeded() {
@@ -249,6 +272,9 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
         return true
     }
 
+}
+
+extension SessionPrefixKVStore {
     private func commonPrefixLength(_ lhs: [Int], _ rhs: [Int]) -> Int {
         var count = 0
         while count < lhs.count, count < rhs.count, lhs[count] == rhs[count] {

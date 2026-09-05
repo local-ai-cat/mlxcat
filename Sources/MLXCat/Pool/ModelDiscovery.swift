@@ -49,7 +49,8 @@ public enum ModelDiscovery {
             }
 
             let grandchildren = directoryChildren(child)
-            for grandchild in grandchildren where isDirectory(grandchild) && !grandchild.lastPathComponent.hasPrefix(".") {
+            for grandchild in grandchildren
+                where isDirectory(grandchild) && !grandchild.lastPathComponent.hasPrefix(".") {
                 guard isModelDirectory(grandchild) else { continue }
                 if let model = try discoveredModel(at: grandchild, id: grandchild.lastPathComponent) {
                     models[model.id] = model
@@ -58,6 +59,16 @@ public enum ModelDiscovery {
         }
 
         return models
+    }
+
+    /// A separately configured auxiliary directory must not also become a chat model.
+    /// Discovery intentionally does not infer model capabilities from architectures.
+    public static func excludingModelDirectory(
+        _ models: [String: DiscoveredModel], directory: URL?
+    ) -> [String: DiscoveredModel] {
+        guard let directory else { return models }
+        let excluded = directory.standardizedFileURL.resolvingSymlinksInPath()
+        return models.filter { $0.value.modelURL.standardizedFileURL.resolvingSymlinksInPath() != excluded }
     }
 
     public static func estimateModelSize(at modelURL: URL) throws -> Int64 {

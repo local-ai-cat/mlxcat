@@ -11,6 +11,9 @@ public struct OpenAIModelRuntimeStatus: Sendable, Equatable {
     public let pinned: Bool
     public let lastAccess: TimeInterval?
     public let inUse: Int
+    /// Byte accounting provenance; unknown is distinct from a known zero.
+    public let footprintSource: String?
+    public let accountedBytes: Int64?
 
     public init(
         id: String,
@@ -22,7 +25,9 @@ public struct OpenAIModelRuntimeStatus: Sendable, Equatable {
         actualSize: Int64?,
         pinned: Bool,
         lastAccess: TimeInterval?,
-        inUse: Int
+        inUse: Int,
+        footprintSource: String? = nil,
+        accountedBytes: Int64? = nil
     ) {
         self.id = id
         self.modelType = modelType
@@ -34,6 +39,8 @@ public struct OpenAIModelRuntimeStatus: Sendable, Equatable {
         self.pinned = pinned
         self.lastAccess = lastAccess
         self.inUse = inUse
+        self.footprintSource = footprintSource
+        self.accountedBytes = accountedBytes
     }
 }
 

@@ -161,7 +161,10 @@ final class RerankTests: XCTestCase {
                 )
             )
         ) { error in
-            XCTAssertEqual(error as? OpenAIHTTPError, OpenAIHTTPError(status: 400, message: "Documents cannot be empty"))
+            XCTAssertEqual(
+                error as? OpenAIHTTPError,
+                OpenAIHTTPError(status: 400, message: "Documents cannot be empty")
+            )
         }
     }
 
@@ -170,7 +173,7 @@ final class RerankTests: XCTestCase {
             name: "Qwen3-Reranker-0.6B",
             config: [
                 "model_type": "qwen3",
-                "architectures": ["Qwen3ForCausalLM"],
+                "architectures": ["Qwen3ForCausalLM"]
             ]
         )
 
@@ -191,36 +194,6 @@ final class RerankTests: XCTestCase {
         XCTAssertTrue(NativeRerankBackend.isRerankModelDirectory(sequenceClassifier))
     }
 
-    func testNativeRerankCacheStateEvictsPreviousModelBeforeDifferentLoad() throws {
-        var state = NativeRerankCacheState()
-
-        XCTAssertNil(try state.prepareLoad(id: "rerank-a", estimatedSize: 100, memoryCeilingBytes: 200))
-        state.finishLoad(id: "rerank-a")
-
-        let evicted = try state.prepareLoad(id: "rerank-b", estimatedSize: 100, memoryCeilingBytes: 200)
-
-        XCTAssertEqual(evicted, "rerank-a")
-        XCTAssertNil(state.loadedModelID)
-        state.finishLoad(id: "rerank-b")
-        XCTAssertEqual(state.loadedModelID, "rerank-b")
-    }
-
-    func testNativeRerankCacheStateRejectsModelAboveMemoryCeilingWith507() {
-        var state = NativeRerankCacheState()
-
-        XCTAssertThrowsError(
-            try state.prepareLoad(id: "rerank-huge", estimatedSize: 300, memoryCeilingBytes: 200)
-        ) { error in
-            XCTAssertEqual(
-                error as? OpenAIHTTPError,
-                OpenAIHTTPError(
-                    status: 507,
-                    message: "Model 'rerank-huge' is too large: 300.00B exceeds memory ceiling 200.00B"
-                )
-            )
-        }
-    }
-
     func testNativeRerankSmokeWhenModelGateIsSet() async throws {
         guard let modelPath = ProcessInfo.processInfo.environment["MLXSERVE_RERANK_TEST_MODEL"] else {
             throw XCTSkip("Set MLXSERVE_RERANK_TEST_MODEL to run the rerank scoring smoke test.")
@@ -233,7 +206,8 @@ final class RerankTests: XCTestCase {
             modelURL: modelURL,
             estimatedSize: 0
         )
-        let backend = NativeRerankBackend(models: [model.id: model])
+        let pool = EnginePool(models: [:], loader: RerankSmokePoolLoader())
+        let backend = await NativeRerankBackend(models: [model.id: model], pool: pool, cache: NativeRerankModelCache())
         let request = OpenAIRerankRequest(
             model: model.id,
             query: .string("capital of France"),
@@ -274,4 +248,9 @@ private struct FakeRerankBackend: OpenAIRerankBackend {
         let indices = applyRerankTopN(sortedIndices, topN: request.topN)
         return OpenAIRerankResult(scores: scores, indices: indices, totalTokens: 42)
     }
+}
+
+private struct RerankSmokePoolLoader: EnginePoolModelLoader {
+    func loadModel(id: String, modelURL: URL) async throws -> String { id }
+    func unloadModel(_ engine: String, id: String) async {}
 }

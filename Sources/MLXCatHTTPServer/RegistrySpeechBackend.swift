@@ -1,4 +1,5 @@
 import Foundation
+import MLXCat
 import MLXCatHTTP
 import MLXCatSpeech
 
@@ -49,6 +50,7 @@ final class RegistrySpeechBackend: AudioTranscriptionBackend, SpeechModelLifecyc
                         temperature: request.temperature
                     )
                 )
+                markLoaded(engineID: adapter.engineID, modelID: modelID)
                 return AudioTranscriptionResult(
                     text: result.text,
                     language: result.language,
@@ -56,6 +58,9 @@ final class RegistrySpeechBackend: AudioTranscriptionBackend, SpeechModelLifecyc
                     segments: segments(from: result)
                 )
             } catch {
+                if let poolError = error as? EnginePoolError {
+                    throw OpenAIHTTPError(status: poolError.httpStatus, message: poolError.description)
+                }
                 lastError = error
             }
         }
@@ -84,6 +89,21 @@ final class RegistrySpeechBackend: AudioTranscriptionBackend, SpeechModelLifecyc
         let adapters = await registry.allAdapters()
         var statuses: [OpenAIModelRuntimeStatus] = []
         for adapter in adapters {
+            if let pooled = adapter as? PoolBackedSpeechAdapter {
+                let states = await pooled.pool.resourceStatuses()
+                for model in await adapter.availableModels() {
+                    let state = states.first { $0.resource.id == pooled.key(model.id) }
+                    statuses.append(OpenAIModelRuntimeStatus(
+                        id: model.id, modelType: "audio_stt", modelPath: pooled.key(model.id),
+                        loaded: state?.loaded ?? false, isLoading: state?.isLoading ?? false,
+                        estimatedSize: model.footprint ?? 0, actualSize: nil, pinned: false,
+                        lastAccess: state?.lastAccess?.timeIntervalSince1970, inUse: state?.inUse ?? 0,
+                        footprintSource: model.footprintSource.rawValue,
+                        accountedBytes: state.map { ($0.loaded || $0.isLoading) ? $0.resource.footprint.bytes : 0 } ?? 0
+                    ))
+                }
+                continue
+            }
             let footprint = await adapter.loadedFootprint()
             var reportedAdapterFootprint = false
             for model in await adapter.availableModels().sorted(by: { $0.id < $1.id }) {
@@ -153,6 +173,9 @@ final class RegistrySpeechBackend: AudioTranscriptionBackend, SpeechModelLifecyc
                 markLoaded(engineID: adapter.engineID, modelID: modelID)
                 return OpenAIModelLifecycleResult(modelID: id, message: "Loaded: \(id)")
             } catch {
+                if let poolError = error as? EnginePoolError {
+                    throw OpenAIHTTPError(status: poolError.httpStatus, message: poolError.description)
+                }
                 lastError = error
             }
         }
@@ -172,7 +195,13 @@ final class RegistrySpeechBackend: AudioTranscriptionBackend, SpeechModelLifecyc
         }
 
         for adapter in candidates {
-            await adapter.unloadModel(modelID)
+            if let pooled = adapter as? PoolBackedSpeechAdapter {
+                do { try await pooled.unloadModelChecked(modelID) } catch let error as EnginePoolError {
+                    throw OpenAIHTTPError(status: error.httpStatus, message: error.description)
+                }
+            } else {
+                await adapter.unloadModel(modelID)
+            }
             markUnloaded(engineID: adapter.engineID, modelID: modelID)
         }
         return OpenAIModelLifecycleResult(modelID: id)

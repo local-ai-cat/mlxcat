@@ -31,11 +31,21 @@ public protocol PrefixKVStore: AnyObject, Sendable {
     func preload(_ hit: PrefixKVStoreHit) throws
     func reconstructCache(from hit: PrefixKVStoreHit) throws -> [SerializedKVLayer]
     func store(tokens: [Int], sessionKey: String?, cache: [SerializedKVLayer]) throws
+    func store(tokens: [Int], sessionKey: String?, cache: [SerializedKVLayer],
+               allocation: RetainedAllocation?) throws
     func release(_ hit: PrefixKVStoreHit)
     func clearEntry(_ hit: PrefixKVStoreHit)
 }
 
 public extension PrefixKVStore {
+    func store(tokens: [Int], sessionKey: String?, cache: [SerializedKVLayer],
+               allocation: RetainedAllocation?) throws {
+        // Standalone stores remain usable without parent hooks. A store must
+        // explicitly support retained ownership before caching parent-backed work.
+        guard allocation == nil else { throw PrefixKVStoreError.unsupportedRetainedOwnership }
+        try store(tokens: tokens, sessionKey: sessionKey, cache: cache)
+    }
+
     func fetch(tokens: [Int]) -> PrefixKVStoreHit? {
         fetch(tokens: tokens, sessionKey: nil)
     }
@@ -172,6 +182,7 @@ public final class BlockAwarePrefixKVStore: PrefixKVStore, @unchecked Sendable {
 }
 
 public enum PrefixKVStoreError: Error, Equatable {
+    case unsupportedRetainedOwnership
     case invalidHit
     case unsupportedLayerState
     case unsupportedCacheClass(String)

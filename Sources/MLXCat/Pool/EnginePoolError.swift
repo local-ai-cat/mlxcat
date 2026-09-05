@@ -8,6 +8,7 @@ public enum EnginePoolError: Error, CustomStringConvertible, Equatable, Sendable
     case insufficientMemory(id: String, required: Int64, current: Int64, ceiling: Int64)
     case schedulerQueueFull(current: Int, max: Int)
     case modelNotLoaded(id: String)
+    case unknownFootprint(id: String)
 
     public var httpStatus: Int {
         switch self {
@@ -15,7 +16,7 @@ public enum EnginePoolError: Error, CustomStringConvertible, Equatable, Sendable
             return 404
         case .modelLoading, .modelBusy:
             return 409
-        case .modelTooLarge, .insufficientMemory:
+        case .modelTooLarge, .insufficientMemory, .unknownFootprint:
             return 507
         case .schedulerQueueFull:
             return 503
@@ -43,12 +44,18 @@ public enum EnginePoolError: Error, CustomStringConvertible, Equatable, Sendable
         case .modelBusy(let id, let operation):
             return "Model '\(id)' is busy and cannot \(operation)"
         case .modelTooLarge(let id, let size, let ceiling):
-            return "Model '\(id)' is too large: \(ModelDiscovery.formatSize(size)) exceeds memory ceiling \(ModelDiscovery.formatSize(ceiling))"
+            return "Model '\(id)' is too large: \(ModelDiscovery.formatSize(size)) exceeds "
+                + "memory ceiling \(ModelDiscovery.formatSize(ceiling))"
         case .insufficientMemory(let id, let required, let current, let ceiling):
             let projected = current + required
-            return "Cannot load \(id): projected memory \(ModelDiscovery.formatSize(projected)) would exceed the memory ceiling \(ModelDiscovery.formatSize(ceiling)) (current: \(ModelDiscovery.formatSize(current)), model: \(ModelDiscovery.formatSize(required))). Free system memory or lower memory_guard_tier."
+            return "Cannot load \(id): projected memory \(ModelDiscovery.formatSize(projected)) would exceed "
+                + "the memory ceiling \(ModelDiscovery.formatSize(ceiling)) "
+                + "(current: \(ModelDiscovery.formatSize(current)), model: \(ModelDiscovery.formatSize(required))). "
+                + "Free system memory or lower memory_guard_tier."
         case .schedulerQueueFull(let current, let max):
             return "Scheduler waiting queue full (\(current)/\(max)). Try again shortly."
+        case .unknownFootprint(let id):
+            return "Model '\(id)' has no byte estimate; loading is unavailable with a finite memory ceiling."
         case .modelNotLoaded(let id):
             return "Model not loaded: \(id)"
         }

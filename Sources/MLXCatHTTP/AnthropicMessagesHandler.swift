@@ -10,35 +10,44 @@ struct AnthropicMessagesHandler {
         self.mcpManager = mcpManager
     }
 
-    func handleMessages(_ request: HTTPRequest, connection: NWConnection) async throws {
+    func handleMessages(_ request: HTTPRequest, connection: any HTTPResponseWriting) async throws {
         let messagesRequest: AnthropicMessagesRequest
         do {
             messagesRequest = try AnthropicMessagesRequest.parse(request.body)
         } catch {
             let status = (error as? OpenAIServerError)?.httpStatus ?? 422
-            try await sendJSON(openAIErrorBody(message: String(describing: error), status: status), status: status, connection: connection)
+            try await sendJSON(
+                openAIErrorBody(message: String(describing: error), status: status),
+                status: status,
+                connection: connection
+            )
             return
         }
 
         let effectiveRequest = await anthropicMessagesRequestByMergingMCPTools(messagesRequest, manager: mcpManager)
         let stream = try await backend.startChatCompletion(effectiveRequest.openAIRequest())
-        if effectiveRequest.stream {
-            try await sendStreaming(request: effectiveRequest, stream: stream, connection: connection)
-        } else {
-            let completion = try await collectBufferedCompletion(stream: stream, stopSequences: effectiveRequest.stopSequences)
-            try await sendJSON(
-                buildAnthropicMessageResponse(
-                    request: effectiveRequest,
-                    completion: completion,
-                    promptTokens: stream.promptTokens
-                ),
-                status: 200,
-                connection: connection
-            )
+        try await stream.withLifetime { stream in
+            if effectiveRequest.stream {
+                try await sendStreaming(request: effectiveRequest, stream: stream, connection: connection)
+            } else {
+                let completion = try await collectBufferedCompletion(
+                    stream: stream,
+                    stopSequences: effectiveRequest.stopSequences
+                )
+                try await sendJSON(
+                    buildAnthropicMessageResponse(
+                        request: effectiveRequest,
+                        completion: completion,
+                        promptTokens: stream.promptTokens
+                    ),
+                    status: 200,
+                    connection: connection
+                )
+            }
         }
     }
 
-    func handleCountTokens(_ request: HTTPRequest, connection: NWConnection) async throws {
+    func handleCountTokens(_ request: HTTPRequest, connection: any HTTPResponseWriting) async throws {
         let response = try await countTokensResponse(for: request)
         try await sendJSON(response.body, status: response.status, connection: connection)
     }
@@ -83,7 +92,7 @@ struct AnthropicMessagesHandler {
     private func sendStreaming(
         request: AnthropicMessagesRequest,
         stream: OpenAIChatStream,
-        connection: NWConnection
+        connection: any HTTPResponseWriting
     ) async throws {
         try await connection.send(data: Data(streamingHeader.utf8))
 
@@ -112,7 +121,10 @@ struct AnthropicMessagesHandler {
             try await sendSSE(
                 AnthropicSSEEvent(
                     name: "error",
-                    payload: ["type": "error", "error": openAIErrorObject(message: String(describing: error), status: 500)]
+                    payload: [
+                        "type": "error",
+                        "error": openAIErrorObject(message: String(describing: error), status: 500)
+                    ]
                 ),
                 connection: connection
             )
@@ -165,13 +177,14 @@ struct AnthropicMessagesHandler {
         )
     }
 
-    private func sendSSE(_ event: AnthropicSSEEvent, connection: NWConnection) async throws {
+    private func sendSSE(_ event: AnthropicSSEEvent, connection: any HTTPResponseWriting) async throws {
         let data = try JSONSerialization.data(withJSONObject: event.payload, options: [])
-        let payload = "event: \(event.name)\ndata: \(String(decoding: data, as: UTF8.self))\n\n"
+        guard let json = String(data: data, encoding: .utf8) else { throw OpenAIServerError.invalidJSON }
+        let payload = "event: \(event.name)\ndata: \(json)\n\n"
         try await connection.send(data: Data(payload.utf8))
     }
 
-    private func sendJSON(_ object: [String: Any], status: Int, connection: NWConnection) async throws {
+    private func sendJSON(_ object: [String: Any], status: Int, connection: any HTTPResponseWriting) async throws {
         let body = try JSONSerialization.data(withJSONObject: object, options: [])
         let header = "HTTP/1.1 \(status) \(anthropicReasonPhrase(status))\r\n"
             + "Content-Type: application/json\r\n"
