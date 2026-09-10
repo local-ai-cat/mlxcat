@@ -1,0 +1,11 @@
+schemaVersion: 1
+id: mlxcat
+name: mlxcat
+kind: package
+summary: "the native-swift mlx serving engine inside the cat — continuous batching, tiered prefix kv cache and openai/anthropic-dialect apis — usable as a package or as the mlxcat-http binary."
+capabilities: []
+platforms: []
+repository:
+  canonicalRemotes: []
+integrations:
+  copy: []
