@@ -860,18 +860,19 @@ public final class OpenAIServer: @unchecked Sendable {
         var stopMatcher = StreamingStopSequenceMatcher(stopSequences: request.stop)
         var stoppedByTextStop = false
 
-        try await connection.send(
-            data: Data(
-                (
-                    "HTTP/1.1 200 OK\r\n"
-                        + "Content-Type: text/event-stream\r\n"
-                        + "Cache-Control: no-cache\r\n"
-                        + "Connection: close\r\n"
-                        + "X-Accel-Buffering: no\r\n"
-                        + "\r\n"
-                ).utf8
-            )
-        )
+        // One literal, not a `+` chain: Swift 6.4 (Xcode 27) gives up on the
+        // six-term concatenation with "unable to type-check this expression in
+        // reasonable time", which blocked every host build. Same bytes.
+        let sseResponseHeader = [
+            "HTTP/1.1 200 OK",
+            "Content-Type: text/event-stream",
+            "Cache-Control: no-cache",
+            "Connection: close",
+            "X-Accel-Buffering: no",
+            "",
+            "",
+        ].joined(separator: "\r\n")
+        try await connection.send(data: Data(sseResponseHeader.utf8))
         for chunk in chatStreamOpeningChunks(id: id, created: created, model: request.model) {
             try await sendSSE(chunk, connection: connection)
         }
