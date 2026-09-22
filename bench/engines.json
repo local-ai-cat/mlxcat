@@ -23,7 +23,8 @@
         "port_base": 11700,
         "ready_timeout_s": 120
       },
-      "notes": "Build with: swift build -c release --product mlxcat-http"
+      "notes": "Build with: swift build -c release --product mlxcat-http",
+      "version": "mlxcat-http @ 93dcbc1 (shipping pin; bench/ commits on top do not touch Sources/)"
     },
     "mlxcat-defaults": {
       "description": "mlxcat with NO memory ceiling — the fair-fight arm. Every competitor on this board runs with MLX's own defaults (memoryLimit 1.5x the recommended working set, cacheLimit equal to it: roughly 54 GiB on a 48 GiB Mac). The `mlxcat` entry passes --memory-ceiling-bytes, which since 7f6cbb6 also clamps the MLX buffer cache to 4 GiB, so the two are not comparable measurements of the same engine. Run both: `mlxcat` is what the product ships, `mlxcat-defaults` is what the comparison is entitled to.",
@@ -45,7 +46,8 @@
         "port_base": 11760,
         "ready_timeout_s": 120
       },
-      "notes": "Same binary as `mlxcat`; the only difference is the absent ceiling, which leaves MemoryGuard.applyAllocatorLimits a no-op and MLX at its defaults. Read the pair as an A/B of what the memory guard costs, never as two engines."
+      "notes": "Same binary as `mlxcat`; the only difference is the absent ceiling, which leaves MemoryGuard.applyAllocatorLimits a no-op and MLX at its defaults. Read the pair as an A/B of what the memory guard costs, never as two engines.",
+      "version": "mlxcat-http @ 93dcbc1 (shipping pin; bench/ commits on top do not touch Sources/)"
     },
     "mlxcat-batched": {
       "description": "mlxcat with the batched-decode serialization exclusions LIFTED for gemma4 and qwen3_5 (MLXCAT_UNSERIALIZE_MODEL_TYPES). NativeModelLoader.usesSerializedDecode switches batched decode off for five of the six leaderboard models, which is why mlxcat's TTFT scales 15-86x from c1 to c8 while every competitor scales 4-9x. Neither exclusion list has been re-earned: the logit-level gate that would justify them was pinned to Qwen3-0.6B-4bit, a model on neither list. Run across families on 2026-08-22, gemma-4-E2B and Qwen3.5-4B both pass under the 1.25 tolerance and under Qwen3-0.6B's own 1.19. This arm measures what lifting them buys.",
