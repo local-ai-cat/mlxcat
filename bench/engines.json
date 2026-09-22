@@ -169,13 +169,16 @@
           "--port",
           "{port}",
           "--log-level",
-          "warning"
+          "warning",
+          "--base-path",
+          "/Users/timapple/.cache/lac-bench/omlx-home"
         ],
         "port_base": 11800,
         "ready_timeout_s": 180
       },
       "extra_request_fields": {},
-      "notes": "NOT on PyPI. Routes: `brew tap jundot/omlx https://github.com/jundot/omlx && brew install omlx` (the repo IS the tap — the URL is required, `brew tap jundot/omlx` alone looks for a nonexistent homebrew-omlx repo), the .dmg app, or from source: `pipx install git+https://github.com/jundot/omlx.git`. Same mlx-community weights; default config."
+      "notes": "NOT on PyPI. Routes: `brew tap jundot/omlx https://github.com/jundot/omlx && brew install omlx` (the repo IS the tap — the URL is required, `brew tap jundot/omlx` alone looks for a nonexistent homebrew-omlx repo), the .dmg app, or from source: `pipx install git+https://github.com/jundot/omlx.git`. Same mlx-community weights; default config. 2026-09-23: installed with `PIPX_HOME=~/.cache/lac-bench/pipx pipx install --python python3.13 'omlx @ git+https://github.com/jundot/omlx.git@v0.6.3rc3'` (Python 3.14 is refused by its <3.14 pin); --base-path isolates its state under ~/.cache/lac-bench/omlx-home. v0.6.4 is newer; the brief pinned rc3.",
+      "version": "omlx 0.6.3rc3 (pipx, git tag v0.6.3rc3, Python 3.13)"
     },
     "mlx-lm": {
       "description": "Apple's mlx-lm reference server (python -m mlx_lm server).",
@@ -197,7 +200,8 @@
         "ready_timeout_s": 180
       },
       "extra_request_fields": {},
-      "notes": "pipx install mlx-lm (provides the mlx_lm.server binary; `python3 -m mlx_lm` will NOT work from a pipx venv). Single-sequence; no continuous batching."
+      "notes": "pipx install mlx-lm (provides the mlx_lm.server binary; `python3 -m mlx_lm` will NOT work from a pipx venv). Single-sequence; no continuous batching.",
+      "version": "mlx-lm 0.31.3 (mlx 0.32.2)"
     },
     "mlx-serve": {
       "description": "ddalcu/mlx-serve — Zig core + mlx-c; the other NON-Python native MLX server, and mlxcat's closest architectural rival.",
@@ -251,12 +255,32 @@
       }
     },
     "rapid-mlx": {
-      "description": "Rapid-MLX (raullenchai) — 'Ollama replacement' MLX engine with prompt caching.",
+      "description": "Rapid-MLX (raullenchai) 0.15.0 — 'Ollama replacement' MLX engine with prompt caching; a fork of vllm-mlx (it installs vllm-mlx binaries alongside its own).",
       "platforms": [
         "macos"
       ],
-      "url": "http://127.0.0.1:8000",
-      "notes": "Attach-only until its CLI is pinned; start it yourself pointing at the same weights."
+      "launch": {
+        "bin": "rapid-mlx",
+        "bin_env": "RAPID_MLX_BIN",
+        "args": [
+          "--no-telemetry",
+          "serve",
+          "{model_dir}",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "{port}"
+        ],
+        "env": {
+          "RAPID_MLX_TELEMETRY": "0",
+          "DO_NOT_TRACK": "1"
+        },
+        "port_base": 12300,
+        "ready_timeout_s": 300
+      },
+      "version": "rapid-mlx 0.15.0",
+      "extra_request_fields": {},
+      "notes": "pipx install rapid-mlx into ~/.cache/lac-bench. Telemetry (PostHog) is ON by default upstream — the launch passes --no-telemetry AND RAPID_MLX_TELEMETRY=0/DO_NOT_TRACK=1. Lineage risk: vllm-mlx is quarantined here for a GPU-driver panic; run Rapid-MLX last and alone."
     },
     "swama": {
       "description": "swama (Trans-N-ai) — native Swift MLX engine; the closest sibling to mlxcat.",
@@ -282,7 +306,12 @@
         "macos"
       ],
       "url": "http://127.0.0.1:1234",
-      "notes": "lms server start && lms load <model>. Must point LM Studio at the same mlx-community weights (or record the quant it used)."
+      "notes": "lms server start && lms load <model>. Must point LM Studio at the same mlx-community weights (or record the quant it used).",
+      "model_aliases": {
+        "Qwen3.8-27B-4bit": "qwen3.8-27b",
+        "Qwen3-Coder-30B-A3B-Instruct-4bit": "qwen3-coder-30b-a3b-instruct"
+      },
+      "weights": "mlx-community 4bit safetensors (LM Studio's own copy of the same repo; verified via `lms ls --json`)"
     },
     "ollama": {
       "description": "Ollama — MLX backend by default on Apple Silicon since v0.30 (2026-05); llama.cpp before that.",
@@ -291,7 +320,10 @@
       ],
       "url": "http://127.0.0.1:11435",
       "weights": "ollama library (its own artifacts — NOT the same files; compare with care)",
-      "notes": "Port 11434 is Local AI Cat's Local API on our Macs — run Ollama with OLLAMA_HOST=127.0.0.1:11435. Different weight artifacts; rows are labelled as such."
+      "notes": "Port 11434 is Local AI Cat's Local API on our Macs — run Ollama with OLLAMA_HOST=127.0.0.1:11435. Different weight artifacts; rows are labelled as such. 2026-09-23: Homebrew ollama 0.34.3, OLLAMA_MODELS isolated under ~/.cache/lac-bench/ollama-models; `ollama --version` WITHOUT OLLAMA_HOST reports 'version is 0.5.7' because it is talking to the Cat's :11434 compat endpoint, not to an Ollama server.",
+      "model_aliases": {
+        "Qwen3.8-27B-4bit": "qwen3.8:27b-mlx"
+      }
     },
     "llama-cpp": {
       "description": "llama.cpp llama-server (Metal) — the GGUF baseline.",
@@ -300,8 +332,12 @@
         "ios"
       ],
       "url": "http://127.0.0.1:8081",
-      "weights": "GGUF (different quantization family — compare quality class, not bits)",
-      "notes": "Attach-only. Use a Q4_K_M GGUF of the same base model; record it in --tag."
+      "weights": "GGUF: unsloth/Qwen3.8-27B-GGUF UD-Q4_K_M (no plain Q4_K_M published there) / unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF Q4_K_M",
+      "notes": "Attach-only. Use a Q4_K_M GGUF of the same base model; record it in --tag.",
+      "model_aliases": {
+        "Qwen3.8-27B-4bit": "qwen3.8-27b-ud-q4_k_m",
+        "Qwen3-Coder-30B-A3B-Instruct-4bit": "qwen3-coder-30b-a3b-q4_k_m"
+      }
     },
     "localaicat-legacy": {
       "description": "Local AI Cat's legacy in-app LLMEvaluator (mlx-swift-lm TokenIterator) through the app's Local API.",
@@ -367,6 +403,30 @@
         "ready_timeout_s": 120
       },
       "notes": "Same binary, same ceiling, same everything as `mlxcat`; one env override. This arm is the discriminator the parity-gate regression needs, not a proposal."
+    },
+    "mtplx": {
+      "description": "MTPLX (pip mtplx) — native MTP speculative decoding on MLX. Runs its OWN MTP-bearing checkpoint, not the mlx-community file: a different quant, so a faster row is a caveat, not a win.",
+      "platforms": [
+        "macos"
+      ],
+      "url": "http://127.0.0.1:12200",
+      "model_aliases": {
+        "Qwen3.8-27B-4bit": "Qwen3.8-27B-MTPLX-Optimized-Speed"
+      },
+      "weights": "Youssofal/Qwen3.8-27B-MTPLX-Optimized-Speed (MTPLX's own MTP checkpoint — different quant from mlx-community 4bit)",
+      "notes": "Attach-only: started by hand with `mtplx serve --model <snapshot> --host 127.0.0.1 --port 12200 --no-auth --yes --no-stats-footer --model-id Qwen3.8-27B-MTPLX-Optimized-Speed` so the served id is stable. Install: PIPX_HOME=~/.cache/lac-bench/pipx pipx install mtplx. --no-stats-footer matters: without it the server appends a stats footer to content."
+    },
+    "localai-app-a218": {
+      "description": "The running Local AI Cat alpha a218 on :11434, engine mlxserve (mlxcat embedded) — what Phil's coding sessions actually hit. Attach-only, read-only, single c1 pass.",
+      "platforms": [
+        "macos"
+      ],
+      "url": "http://127.0.0.1:11434",
+      "token_env": "LOCALAI_API_TOKEN",
+      "model_aliases": {
+        "Qwen3.8-27B-4bit": "mlx-community/Qwen3.8-27B-4bit"
+      },
+      "notes": "Never change its engine default, never install-latest, never use this port for load. c1 only."
     }
   }
 }
