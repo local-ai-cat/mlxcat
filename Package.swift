@@ -1,6 +1,12 @@
 // swift-tools-version: 6.1
 
+import Foundation
 import PackageDescription
+
+// Prototype iteration only (MTP probe, 2026-09-23): MLXCAT_MLX_SWIFT_LM_PATH points the graph at
+// a local mlx-swift-lm checkout whose directory is named `mlx-swift-lm` (SwiftPM derives the
+// package identity from it). Unset — every release and CI build — resolves the pinned revision.
+let localMLXSwiftLM = ProcessInfo.processInfo.environment["MLXCAT_MLX_SWIFT_LM_PATH"]
 
 let package = Package(
     name: "mlxcat",
@@ -109,6 +115,16 @@ let package = Package(
             ]
         ),
         .executableTarget(
+            name: "MLXCatMTPProbe",
+            dependencies: [
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXHuggingFace", package: "mlx-swift-lm"),
+                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
+                .product(name: "MLXLLM", package: "mlx-swift-lm"),
+                .product(name: "Tokenizers", package: "swift-transformers"),
+            ]
+        ),
+        .executableTarget(
             name: "MLXCatBench",
             dependencies: [
                 "MLXCat",
@@ -205,3 +221,18 @@ let package = Package(
         ),
     ]
 )
+
+if let localMLXSwiftLM {
+    package.dependencies = package.dependencies.map { dependency in
+        dependency.isMLXSwiftLM ? .package(path: localMLXSwiftLM) : dependency
+    }
+}
+
+extension Package.Dependency {
+    fileprivate var isMLXSwiftLM: Bool {
+        if case .sourceControl(_, let location, _) = kind {
+            return "\(location)".contains("mlx-swift-lm")
+        }
+        return false
+    }
+}
