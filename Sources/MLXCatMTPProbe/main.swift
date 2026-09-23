@@ -28,6 +28,9 @@ struct ProbeConfig {
     var maxTokens = 128
     var outPath: String?
     var repeatCount = 1
+    /// Plain decode with the MTP path's single-forward prefill, to separate prefill-chunking
+    /// numerics from verify-path numerics when the exactness gate reports a mismatch.
+    var unchunkedPrefill = false
 
     static func parse(_ args: [String]) throws -> ProbeConfig {
         var config = ProbeConfig()
@@ -46,6 +49,7 @@ struct ProbeConfig {
             case "--max-tokens": config.maxTokens = Int(try value()) ?? config.maxTokens
             case "--out": config.outPath = try value()
             case "--repeat": config.repeatCount = Int(try value()) ?? 1
+            case "--unchunked-prefill": config.unchunkedPrefill = true
             default: throw ProbeError.usage("unknown argument \(args[index])")
             }
             index += 1
@@ -63,6 +67,7 @@ struct ProbeRow: Encodable {
     let id: String
     let rep: Int
     let mode: String
+    let unchunkedPrefill: Bool
     let fallback: String?
     let promptTokens: Int
     let generatedTokens: Int
@@ -150,7 +155,11 @@ struct MLXCatMTPProbe {
                 let promptTokens = try context.tokenizer.applyChatTemplate(
                     messages: [["role": "user", "content": prompt]])
                 let input = LMInput(tokens: MLXArray(promptTokens.map { Int32($0) }))
-                let parameters = GenerateParameters(maxTokens: config.maxTokens, temperature: 0)
+                var parameters = GenerateParameters(maxTokens: config.maxTokens, temperature: 0)
+                if config.unchunkedPrefill {
+                    parameters.prefill.stepSize = Int.max
+                    parameters.prefill.chunking = .unchunked
+                }
 
                 let start = Date.timeIntervalSinceReferenceDate
                 let tokens: [Int]
@@ -179,7 +188,8 @@ struct MLXCatMTPProbe {
                 let rate = tokens.count > 1 && decodeSeconds > 0
                     ? Double(tokens.count - 1) / decodeSeconds : 0
                 let row = ProbeRow(
-                    id: id, rep: rep, mode: config.mode, fallback: fallback,
+                    id: id, rep: rep, mode: config.mode, unchunkedPrefill: config.unchunkedPrefill,
+                    fallback: fallback,
                     promptTokens: promptTokens.count, generatedTokens: tokens.count,
                     prefillSeconds: prefill, decodeSeconds: decodeSeconds,
                     decodeTokensPerSecond: rate, proposed: proposed, accepted: accepted,
