@@ -44,7 +44,7 @@ public actor Scheduler {
     private let schedulerManagedTextPrefill: Bool
     private let chunkIdlePrefill: Bool
     private let prefillsLastTokenAlone: Bool
-    /// `MLXCAT_HYBRID_PREFIX_REUSE=1`: capture recurrent-state checkpoints during
+    /// Hybrid prefix reuse (default on; `MLXCAT_HYBRID_PREFIX_REUSE=0` disables): capture recurrent-state checkpoints during
     /// prefill so hybrid models can resume a follow-up turn from the prefix cache.
     private let capturesRecurrentCheckpoints: Bool
     private let pressurePolicy: PressurePolicy
@@ -143,13 +143,16 @@ public actor Scheduler {
     /// `MLXCAT_PREFILL_LAST_TOKEN_ALONE=always|never` forces it either way, so
     /// the trade-off can be measured on a windowed model rather than argued —
     /// `always` is how you reproduce the divergence above.
-    /// Off by default until the before/after numbers are in (packet P1, 2026-09-23).
+    /// On by default since the before/after numbers came in (packet P1, 2026-09-23:
+    /// the 9K cached-prefix follow-up went from 46 s to 3 s with `grid` placement,
+    /// token-identical to a cold run). `MLXCAT_HYBRID_PREFIX_REUSE=0|false|off`
+    /// turns it off; that is the A/B lever, not a safety switch.
     public static func hybridPrefixReuseEnabled(
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> Bool {
         switch environment["MLXCAT_HYBRID_PREFIX_REUSE"]?.lowercased() {
-        case "1", "true", "on": return true
-        default: return false
+        case "0", "false", "off": return false
+        default: return true
         }
     }
 

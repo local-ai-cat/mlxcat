@@ -103,7 +103,9 @@ final class HybridPrefixCheckpointTests: XCTestCase {
     }
 
     func testFlagIsOffByDefault() {
-        XCTAssertFalse(Scheduler.hybridPrefixReuseEnabled(environment: [:]))
+        XCTAssertTrue(Scheduler.hybridPrefixReuseEnabled(environment: [:]))
         XCTAssertTrue(Scheduler.hybridPrefixReuseEnabled(environment: ["MLXCAT_HYBRID_PREFIX_REUSE": "1"]))
+        XCTAssertFalse(Scheduler.hybridPrefixReuseEnabled(environment: ["MLXCAT_HYBRID_PREFIX_REUSE": "0"]))
+        XCTAssertFalse(Scheduler.hybridPrefixReuseEnabled(environment: ["MLXCAT_HYBRID_PREFIX_REUSE": "off"]))
     }
 }
