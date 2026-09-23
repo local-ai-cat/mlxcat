@@ -153,6 +153,23 @@ public actor Scheduler {
         }
     }
 
+    /// Where prefill leaves recurrent checkpoints.
+    ///
+    /// `grid` (default, `MLXCAT_HYBRID_PREFIX_CHECKPOINTS=grid`): the last prefill
+    /// chunk boundary below the prompt end. Token-identical to a cold run, because a
+    /// resume re-creates the cold run's chunk boundaries; costs up to one chunk (511
+    /// tokens at the idle step) of re-prefill per follow-up turn.
+    ///
+    /// `last` (`MLXCAT_HYBRID_PREFIX_CHECKPOINTS=last`): `promptCount - 1` plus the
+    /// last 2048 boundary. Re-prefills almost nothing, but the resume's chunk
+    /// boundaries differ from a cold run's, so greedy output can flip on a near-tie
+    /// (measured 3/20 turns on 2026-09-23, P1.md).
+    enum CheckpointPlacement { case grid, lastToken }
+
+    static let checkpointPlacement: CheckpointPlacement =
+        ProcessInfo.processInfo.environment["MLXCAT_HYBRID_PREFIX_CHECKPOINTS"]?.lowercased() == "last"
+        ? .lastToken : .grid
+
     /// A recurrent checkpoint lands on the last multiple of this below the prompt
     /// end, besides the one at `promptCount - 1`: the fallback for a follow-up
     /// whose template diverges from the previous prompt earlier than its final
@@ -661,7 +678,7 @@ public actor Scheduler {
             prefillsLastTokenAlone
             ? admission.prefillRange.upperBound - 1
             : admission.prefillRange.upperBound
-        let checkpointTargets = recurrentCheckpointTargets(for: admission)
+        let checkpointTargets = recurrentCheckpointTargets(for: admission, prefillStep: prefillStep)
         while admission.nextPrefillIndex < admission.prefillRange.upperBound, remainingBudget > 0 {
             var end: Int
             if admission.nextPrefillIndex == logitsBoundary {
@@ -915,15 +932,29 @@ public actor Scheduler {
 
     /// Positions inside this admission's prefill where recurrent state is worth
     /// keeping. Empty unless the flag is on and the cache has a layer that cannot trim.
-    private func recurrentCheckpointTargets(for admission: AdmissionInProgress) -> [Int] {
+    private func recurrentCheckpointTargets(
+        for admission: AdmissionInProgress,
+        prefillStep: Int
+    ) -> [Int] {
         guard capturesRecurrentCheckpoints,
             !admission.storedPromptTokens.isEmpty,
             admission.cache.contains(where: { !$0.isTrimmable })
         else { return [] }
         let promptEnd = admission.prefillRange.upperBound
         let lastToken = promptEnd - 1
-        let block = (lastToken / Self.recurrentCheckpointBlock) * Self.recurrentCheckpointBlock
-        return Set([block, lastToken])
+        let candidates: [Int]
+        switch Self.checkpointPlacement {
+        case .grid:
+            // Only on the prefill chunk grid, which a cold admission (starting at
+            // 0) crosses anyway: the checkpoint adds no boundary, and a resume from
+            // it replays exactly the chunks a cold run of the follow-up would.
+            let grid = max(1, prefillStep)
+            candidates = [(lastToken / grid) * grid]
+        case .lastToken:
+            let block = (lastToken / Self.recurrentCheckpointBlock) * Self.recurrentCheckpointBlock
+            candidates = [block, lastToken]
+        }
+        return Set(candidates)
             .filter { $0 > admission.nextPrefillIndex && $0 < promptEnd }
             .sorted()
     }
