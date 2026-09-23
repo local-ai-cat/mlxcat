@@ -48,6 +48,10 @@ def load_records(results_dir: Path) -> List[Dict[str, Any]]:
                 raise SystemExit(f"{path}:{line_no}: invalid JSON ({error})")
             if record.get("schema") != "mlxcat-bench/1":
                 raise SystemExit(f"{path}:{line_no}: unknown schema {record.get('schema')!r}")
+            # bench/coding rows (workload.kind cached_prefix | file_rewrite) are a different
+            # workload with a per-turn series, not a tier cell; GAP-TABLE renders them.
+            if (record.get("workload") or {}).get("kind") not in (None, "synthetic_filler"):
+                continue
             record["_source"] = f"{path.name}:{line_no}"
             records.append(record)
     return records
