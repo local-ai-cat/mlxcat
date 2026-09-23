@@ -162,6 +162,10 @@ public final class NativeModelEngine: @unchecked Sendable {
         let chunks = AsyncThrowingStream<OpenAIChatChunk, Error> { continuation in
             let task = Task {
                 do {
+                    // One detokenizer for the whole stream: a token can be a
+                    // fragment of a character, and `decode([token])` made every
+                    // fragment a U+FFFD (see StreamingTokenText).
+                    var streamText = StreamingTokenText(tokenizer: self.context.tokenizer)
                     for try await response in responseStream {
                         if case .failed(let message)? = response.finishReason {
                             throw NativeModelEngineError.generationFailed(message)
@@ -172,11 +176,11 @@ public final class NativeModelEngine: @unchecked Sendable {
                             }
                             continue
                         }
-                        let text = self.context.tokenizer.decode(
-                            tokenIds: [response.token],
-                            skipSpecialTokens: response.finishReason != nil
-                                && self.eosTokenIds.contains(response.token)
-                        )
+                        // The terminal EOS decodes to nothing, as it always did
+                        // (it was the one token decoded with specials skipped).
+                        let isTerminalEOS = response.finishReason != nil
+                            && self.eosTokenIds.contains(response.token)
+                        let text = isTerminalEOS ? "" : streamText.text(for: response.token)
                         continuation.yield(
                             OpenAIChatChunk(
                                 text: text,
@@ -890,7 +894,9 @@ public struct NativeModelLoader: EnginePoolModelLoader {
                 maxConcurrentRequests: maxConcurrentRequests,
                 cacheCapabilities: Self.cacheCapabilities(for: modelConfiguration),
                 serializationPolicy: Self.serializationPolicy(modelType: modelType, isVLM: isVLM),
-                schedulerManagedTextPrefill: !isVLM,
+                // Text-only requests on a VLM take the scheduler path (and so the prefix
+                // cache) when hybrid prefix reuse is on; images still go through `prepare`.
+                schedulerManagedTextPrefill: !isVLM || Scheduler.hybridPrefixReuseEnabled(),
                 chunkIdlePrefill: Self.chunksIdlePrefill(modelType: modelType),
                 // Resolved per model, not per process: `gpt_oss` is excluded
                 // because its quantized attention route drops attention sinks.

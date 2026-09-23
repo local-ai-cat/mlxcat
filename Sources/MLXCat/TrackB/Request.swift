@@ -106,6 +106,9 @@ final class RunningRequest {
     var generatedTokens: [Int]
     let generatedTokensIncludedInPrompt: Int
     var cachedTokenCount: Int
+    /// Recurrent-state checkpoints taken during this request's prefill; every
+    /// prefix publish carries them so hybrid follow-ups can resume.
+    var checkpoints: [PrefixRecurrentCheckpoint] = []
 
     init(
         request: Request,

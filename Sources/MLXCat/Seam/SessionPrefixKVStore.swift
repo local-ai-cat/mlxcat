@@ -21,6 +21,11 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
         var byteCount: Int64
         var lastAccess: UInt64
         var leaseCount: Int
+        /// Recurrent-state checkpoints strictly inside `tokens`, keyed by position.
+        var checkpoints: [Int: [SerializedKVLayer?]] = [:]
+        /// Whether any layer cannot trim (a hybrid model's recurrent state). Such a
+        /// slot is exact only at `tokens.count` and at its checkpoints.
+        var hasRecurrentLayers = false
 
         init(
             id: UUID = UUID(),
@@ -43,6 +48,9 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
     private struct HitStorage {
         let slotID: UUID
         let trimCount: Int
+        /// Set when the hit resumes at a recurrent checkpoint rather than at a
+        /// trim of the slot's own end state.
+        let checkpointPosition: Int?
     }
 
     private let lock = NSRecursiveLock()
@@ -82,9 +90,23 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
             guard tokens.count > 1 else { return nil }
             let candidates = candidateSlots(sessionKey: sessionKey)
                 .filter { $0.leaseCount == 0 }
-                .compactMap { slot -> (slot: Slot, matched: Int)? in
+                .compactMap { slot -> (slot: Slot, matched: Int, checkpoint: Int?)? in
                     let matched = commonPrefixLength(slot.tokens, tokens)
-                    return matched > 0 ? (slot, matched) : nil
+                    guard matched > 0 else { return nil }
+                    Scheduler.prefixDebug(
+                        "fetch slot tokens=\(slot.tokens.count) matched=\(matched) recurrent=\(slot.hasRecurrentLayers) "
+                            + "checkpoints=\(slot.checkpoints.keys.sorted()) classes=\(Set(slot.layers.map(\.className)))")
+                    // A hybrid slot's end state is exact only at `tokens.count`, so
+                    // a shorter match resumes at the deepest checkpoint it covers,
+                    // or is not a candidate at all: handing it out would only fail
+                    // the recurrent trim later AND shadow a slot that could serve.
+                    if matched < slot.tokens.count, slot.hasRecurrentLayers {
+                        guard let position = slot.checkpoints.keys.filter({ $0 <= matched }).max(),
+                            position > 0
+                        else { return nil }
+                        return (slot, position, position)
+                    }
+                    return (slot, matched, nil)
                 }
                 .sorted { lhs, rhs in
                     if lhs.matched == rhs.matched {
@@ -101,7 +123,8 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
                 blockCount: 1,
                 storage: HitStorage(
                     slotID: best.slot.id,
-                    trimCount: max(0, best.slot.tokens.count - best.matched)
+                    trimCount: max(0, best.slot.tokens.count - best.matched),
+                    checkpointPosition: best.checkpoint
                 )
             )
         }
@@ -118,7 +141,14 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
             else {
                 throw PrefixKVStoreError.invalidHit
             }
-            return try slot.layers.map { layer in
+            let checkpoint = storage.checkpointPosition.flatMap { slot.checkpoints[$0] }
+            if storage.checkpointPosition != nil, checkpoint == nil {
+                throw PrefixKVStoreError.invalidHit
+            }
+            return try slot.layers.enumerated().map { index, layer in
+                if let recurrent = checkpoint?[index] ?? nil {
+                    return recurrent
+                }
                 let cache = try BlockAwarePrefixKVStore.cache(from: layer)
                 if storage.trimCount > 0 {
                     guard cache.trim(storage.trimCount) == storage.trimCount else {
@@ -135,6 +165,15 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
     }
 
     public func store(tokens: [Int], sessionKey: String?, cache: [SerializedKVLayer]) throws {
+        try store(tokens: tokens, sessionKey: sessionKey, cache: cache, checkpoints: [])
+    }
+
+    public func store(
+        tokens: [Int],
+        sessionKey: String?,
+        cache: [SerializedKVLayer],
+        checkpoints: [PrefixRecurrentCheckpoint]
+    ) throws {
         try withLock {
             guard tokens.count > 1, !cache.isEmpty else { return }
             let copied = try cache.map { layer -> SerializedKVLayer in
@@ -155,18 +194,50 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
                 byteCount: byteCount,
                 lastAccess: nextSequence()
             )
+            slot.hasRecurrentLayers = Self.recurrentLayers(of: copied).contains { $0 != nil }
+            Scheduler.prefixDebug(
+                "store tokens=\(tokens.count) layers=\(copied.count) recurrent=\(slot.hasRecurrentLayers) "
+                    + "offered=\(checkpoints.map { "\($0.position)/\($0.layers.count)" })")
+            for checkpoint in checkpoints
+            where checkpoint.position > 0 && checkpoint.position < tokens.count
+                && checkpoint.layers.count == copied.count
+            {
+                slot.checkpoints[checkpoint.position] = checkpoint.layers
+            }
             if let sessionKey, !sessionKey.isEmpty {
                 if let old = sessionSlots[sessionKey] {
                     guard old.leaseCount == 0 else {
                         return
                     }
                     currentBytes -= old.byteCount
+                    // A session slot is replaced by its own continuation (prompt
+                    // → prompt+reply → next turn). When the new slot extends the
+                    // old one, the old one's checkpoints and its exact end state
+                    // stay valid positions of the new slot; keep them, or the
+                    // next turn — which re-renders the reply and diverges inside
+                    // it — has nothing to resume from.
+                    if !old.checkpoints.isEmpty || !slot.checkpoints.isEmpty,
+                        old.tokens.count < tokens.count,
+                        commonPrefixLength(old.tokens, tokens) == old.tokens.count
+                    {
+                        for (position, layers) in old.checkpoints where slot.checkpoints[position] == nil {
+                            slot.checkpoints[position] = layers
+                        }
+                        if slot.checkpoints[old.tokens.count] == nil {
+                            slot.checkpoints[old.tokens.count] = Self.recurrentLayers(of: old.layers)
+                        }
+                    }
                 }
                 sessionSlots[sessionKey] = slot
             } else {
                 anonymousSlots.append(slot)
             }
-            currentBytes += byteCount
+            slot.byteCount += slot.checkpoints.values.reduce(Int64(0)) { total, layers in
+                total + layers.compactMap { $0 }.reduce(Int64(0)) { sum, layer in
+                    sum + layer.state.reduce(Int64(0)) { $0 + estimatedBytes($1) }
+                }
+            }
+            currentBytes += slot.byteCount
             _storeCount += 1
             evictIfNeeded()
         }
@@ -247,6 +318,15 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
         removeSlot(id: victim.id)
         _evictionCount += 1
         return true
+    }
+
+    /// The layers that cannot trim (recurrent state), index-aligned, `nil` elsewhere.
+    static func recurrentLayers(of layers: [SerializedKVLayer]) -> [SerializedKVLayer?] {
+        layers.map { layer in
+            guard let cache = try? BlockAwarePrefixKVStore.cache(from: layer), !cache.isTrimmable
+            else { return nil }
+            return layer
+        }
     }
 
     private func commonPrefixLength(_ lhs: [Int], _ rhs: [Int]) -> Int {

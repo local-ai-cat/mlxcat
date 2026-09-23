@@ -44,6 +44,9 @@ public actor Scheduler {
     private let schedulerManagedTextPrefill: Bool
     private let chunkIdlePrefill: Bool
     private let prefillsLastTokenAlone: Bool
+    /// `MLXCAT_HYBRID_PREFIX_REUSE=1`: capture recurrent-state checkpoints during
+    /// prefill so hybrid models can resume a follow-up turn from the prefix cache.
+    private let capturesRecurrentCheckpoints: Bool
     private let pressurePolicy: PressurePolicy
     private var waiting: [Request] = []
     private var running: [String: RunningRequest] = [:]
@@ -109,6 +112,7 @@ public actor Scheduler {
         }
         self.schedulerManagedTextPrefill = schedulerManagedTextPrefill
         self.chunkIdlePrefill = chunkIdlePrefill
+        self.capturesRecurrentCheckpoints = Self.hybridPrefixReuseEnabled()
         self.prefillsLastTokenAlone = Self.prefillsLastTokenAlone(
             usesWindowedKVCache: cacheCapabilities.usesWindowedKVCache
         )
@@ -139,6 +143,45 @@ public actor Scheduler {
     /// `MLXCAT_PREFILL_LAST_TOKEN_ALONE=always|never` forces it either way, so
     /// the trade-off can be measured on a windowed model rather than argued —
     /// `always` is how you reproduce the divergence above.
+    /// Off by default until the before/after numbers are in (packet P1, 2026-09-23).
+    public static func hybridPrefixReuseEnabled(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Bool {
+        switch environment["MLXCAT_HYBRID_PREFIX_REUSE"]?.lowercased() {
+        case "1", "true", "on": return true
+        default: return false
+        }
+    }
+
+    /// Where prefill leaves recurrent checkpoints.
+    ///
+    /// `grid` (default, `MLXCAT_HYBRID_PREFIX_CHECKPOINTS=grid`): the last prefill
+    /// chunk boundary below the prompt end. Token-identical to a cold run, because a
+    /// resume re-creates the cold run's chunk boundaries; costs up to one chunk (511
+    /// tokens at the idle step) of re-prefill per follow-up turn.
+    ///
+    /// `last` (`MLXCAT_HYBRID_PREFIX_CHECKPOINTS=last`): `promptCount - 1` plus the
+    /// last 2048 boundary. Re-prefills almost nothing, but the resume's chunk
+    /// boundaries differ from a cold run's, so greedy output can flip on a near-tie
+    /// (measured 3/20 turns on 2026-09-23, P1.md).
+    enum CheckpointPlacement { case grid, lastToken }
+
+    static let checkpointPlacement: CheckpointPlacement =
+        ProcessInfo.processInfo.environment["MLXCAT_HYBRID_PREFIX_CHECKPOINTS"]?.lowercased() == "last"
+        ? .lastToken : .grid
+
+    /// A recurrent checkpoint lands on the last multiple of this below the prompt
+    /// end, besides the one at `promptCount - 1`: the fallback for a follow-up
+    /// whose template diverges from the previous prompt earlier than its final
+    /// token (oMLX checkpoints on fixed blocks the same way).
+    static let recurrentCheckpointBlock = 2048
+
+    /// Test hook: `MLXCAT_HYBRID_PREFIX_SABOTAGE=1` records every checkpoint one
+    /// position EARLIER than the state it holds, so a resume feeds a token twice. An
+    /// exactness check that cannot see that is not a check.
+    private static let checkpointSabotage =
+        ProcessInfo.processInfo.environment["MLXCAT_HYBRID_PREFIX_SABOTAGE"] == "1"
+
     static func prefillsLastTokenAlone(
         usesWindowedKVCache: Bool,
         environment: [String: String] = ProcessInfo.processInfo.environment
@@ -549,6 +592,7 @@ public actor Scheduler {
                 generatedTokensIncludedInPrompt: seededGeneratedTokens.count,
                 cachedTokenCount: 0
             )
+            running[request.uid]?.checkpoints = row.checkpoints
         } else {
             storeCompletedAdmissionPrefix(row, request: request)
         }
@@ -634,8 +678,9 @@ public actor Scheduler {
             prefillsLastTokenAlone
             ? admission.prefillRange.upperBound - 1
             : admission.prefillRange.upperBound
+        let checkpointTargets = recurrentCheckpointTargets(for: admission, prefillStep: prefillStep)
         while admission.nextPrefillIndex < admission.prefillRange.upperBound, remainingBudget > 0 {
-            let end: Int
+            var end: Int
             if admission.nextPrefillIndex == logitsBoundary {
                 // The final token, alone. This is the forward we sample from.
                 end = admission.prefillRange.upperBound
@@ -647,11 +692,20 @@ public actor Scheduler {
             } else {
                 end = logitsBoundary
             }
+            if let target = checkpointTargets.first(where: { $0 > admission.nextPrefillIndex }),
+                target < end
+            {
+                end = target
+            }
             let input = LMInput.Text(
                 tokens: admission.promptTokensArray[admission.nextPrefillIndex ..< end]
             )
             let output = model(input[text: .newAxis], cache: admission.cache, state: admission.state)
             admission.state = output.state
+            if checkpointTargets.contains(end) {
+                admission.checkpoints.append(recurrentCheckpoint(of: admission.cache, at: end))
+                Self.prefixDebug("checkpoint uid=\(admission.request.uid) at=\(end)")
+            }
             if end == admission.prefillRange.upperBound {
                 admission.initialGeneratedToken = sampledToken(
                     from: output.logits,
@@ -701,7 +755,8 @@ public actor Scheduler {
             promptTokens: admission.storedPromptTokens,
             prefixHit: admission.prefixHit,
             initialGeneratedToken: initialGeneratedToken,
-            modelState: admission.state
+            modelState: admission.state,
+            checkpoints: admission.checkpoints
         )
     }
 
@@ -710,13 +765,29 @@ public actor Scheduler {
     {
         let rowCache = try model.newCache(parameters: parameters)
         let prefixCacheEligible = isPrefixCacheEligible(request.input)
+        // A VLM processor hands text-only prompts over as a batch of one
+        // (`[1, L]`); that is the same prompt as `[L]`, and flattening it is what
+        // lets a text-only turn on a VLM (the Qwen3.8-27B checkpoint ships with a
+        // vision tower) reach scheduler-managed prefill and the prefix cache.
+        let requestText: LMInput.Text
+        if request.input.text.tokens.ndim == 2, request.input.text.tokens.dim(0) == 1,
+            request.input.text.mask == nil
+        {
+            requestText = LMInput.Text(tokens: request.input.text.tokens.reshaped([-1]))
+        } else {
+            requestText = request.input.text
+        }
         let canUseRawTextTokens = schedulerManagedTextPrefill
             && prefixCacheEligible
-            && request.input.text.tokens.ndim == 1
-            && request.input.text.mask == nil
+            && requestText.tokens.ndim == 1
+            && requestText.mask == nil
+        Self.prefixDebug(
+            "admission uid=\(request.uid) rawText=\(canUseRawTextTokens) managed=\(schedulerManagedTextPrefill) "
+                + "eligible=\(prefixCacheEligible) enabled=\(prefixCacheEnabled) ndim=\(request.input.text.tokens.ndim) "
+                + "mask=\(request.input.text.mask != nil)")
         let promptText: LMInput.Text
         if canUseRawTextTokens {
-            promptText = request.input.text
+            promptText = requestText
         } else {
             // state: nil — `rowCache` was just created above, so there is no
             // prior model state to carry into the prefill.
@@ -764,6 +835,7 @@ public actor Scheduler {
             let prefixStore,
             let hit = prefixStore.fetch(tokens: promptTokens, sessionKey: request.cacheSession)
         {
+            Self.prefixDebug("hit uid=\(request.uid) matched=\(hit.matchedTokenCount) of \(promptTokens.count)")
             if hit.matchedTokenCount == promptTokens.count {
                 prefixStore.release(hit)
                 return prefillMissRow(
@@ -858,6 +930,51 @@ public actor Scheduler {
         ))
     }
 
+    /// Positions inside this admission's prefill where recurrent state is worth
+    /// keeping. Empty unless the flag is on and the cache has a layer that cannot trim.
+    private func recurrentCheckpointTargets(
+        for admission: AdmissionInProgress,
+        prefillStep: Int
+    ) -> [Int] {
+        guard capturesRecurrentCheckpoints,
+            !admission.storedPromptTokens.isEmpty,
+            admission.cache.contains(where: { !$0.isTrimmable })
+        else { return [] }
+        let promptEnd = admission.prefillRange.upperBound
+        let lastToken = promptEnd - 1
+        let candidates: [Int]
+        switch Self.checkpointPlacement {
+        case .grid:
+            // Only on the prefill chunk grid, which a cold admission (starting at
+            // 0) crosses anyway: the checkpoint adds no boundary, and a resume from
+            // it replays exactly the chunks a cold run of the follow-up would.
+            let grid = max(1, prefillStep)
+            candidates = [(lastToken / grid) * grid]
+        case .lastToken:
+            let block = (lastToken / Self.recurrentCheckpointBlock) * Self.recurrentCheckpointBlock
+            candidates = [block, lastToken]
+        }
+        return Set(candidates)
+            .filter { $0 > admission.nextPrefillIndex && $0 < promptEnd }
+            .sorted()
+    }
+
+    private func recurrentCheckpoint(of cache: [any KVCache], at position: Int)
+        -> PrefixRecurrentCheckpoint
+    {
+        PrefixRecurrentCheckpoint(
+            position: Self.checkpointSabotage ? position - 1 : position,
+            layers: cache.map { layer in
+                guard !layer.isTrimmable else { return nil }
+                return SerializedKVLayer(
+                    state: layer.state,
+                    metaState: layer.metaState,
+                    className: String(describing: type(of: layer))
+                )
+            }
+        )
+    }
+
     private func cacheSnapshot(uid: String) -> [SerializedKVLayer]? {
         guard let cache = generator.extractCache(uid: uid) else {
             return nil
@@ -890,7 +1007,8 @@ public actor Scheduler {
             try prefixStore.store(
                 tokens: row.promptTokens,
                 sessionKey: request.cacheSession,
-                cache: snapshot
+                cache: snapshot,
+                checkpoints: row.checkpoints
             )
         } catch {
             logCacheFailure("completed admission prefix cache store failed", error)
@@ -936,7 +1054,8 @@ public actor Scheduler {
             try prefixStore.store(
                 tokens: availableTokens,
                 sessionKey: runningRequest.request.cacheSession,
-                cache: snapshot
+                cache: snapshot,
+                checkpoints: runningRequest.checkpoints
             )
             runningRequest.cachedTokenCount = availableTokens.count
         } catch {
@@ -997,6 +1116,14 @@ public actor Scheduler {
             waitingCount: waiting.count,
             admissionInProgressUID: admissionInProgress?.request.uid
         )
+    }
+
+    private static let prefixDebugEnabled =
+        ProcessInfo.processInfo.environment["MLXCAT_PREFIX_DEBUG"] == "1"
+
+    static func prefixDebug(_ message: @autoclosure () -> String) {
+        guard prefixDebugEnabled else { return }
+        FileHandle.standardError.write(Data("MLXCat prefix: \(message())\n".utf8))
     }
 
     private func logCacheFailure(_ message: String, _ error: Error) {
@@ -1091,6 +1218,7 @@ private struct AdmissionInProgress {
     var nextPrefillIndex: Int
     var state: LMOutput.State?
     var initialGeneratedToken: PreparedGeneratedToken?
+    var checkpoints: [PrefixRecurrentCheckpoint] = []
 }
 
 private struct PreparedBatchRow {
@@ -1102,6 +1230,7 @@ private struct PreparedBatchRow {
     /// Model state produced by the prefill (e.g. Qwen3.5/Qwen-VL M-RoPE
     /// ropeDeltas). Stateful models refuse to decode a warm cache without it.
     let modelState: LMOutput.State?
+    var checkpoints: [PrefixRecurrentCheckpoint] = []
 }
 
 private struct PreparedGeneratedToken {

@@ -68,7 +68,7 @@ let package = Package(
             // dispatch grid, carried in atlas-open-sources/mlx. `GemmaRoPEOffsetProbeTests`
             // gates both. Return to upstream if it takes the change.
             url: "https://github.com/atlas-open-sources/mlx-swift-lm.git",
-            revision: "b653679fa1e40fcba1a038d53c12a3675ce60aa1"
+            revision: "dcfa3aa157b7a7972bde0048eaa3ab5ab834ed37"
         ),
         // atlas-open-sources/mlx-swift = 0.31.6 with its vendored mlx submodule
         // moved to our three-line backport of ml-explore/mlx 76a977ca (#3498).
@@ -85,7 +85,7 @@ let package = Package(
         // moment a release vendors a post-76a977ca mlx.
         .package(
             url: "https://github.com/atlas-open-sources/mlx-swift",
-            revision: "934264e56a75799f5784f5900e7bf1c60a3635a9"
+            revision: "ea227ae6323128b1b68310bb9424002b0bb0ee64"
         ),
         // Same URL+version as the Local AI Chat app pins — one URL per package
         // identity across the combined graph (SwiftPM escalates the mismatch to
