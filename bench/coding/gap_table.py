@@ -34,7 +34,7 @@ PERF_CELLS = [
     ("longgen c4 aggregate", "longgen", 4, "cold", "aggregate_tps", True),
     ("short c4 TTFT p95", "short", 4, "cold", "ttft_p95_ms", False),
 ]
-MTP_ENGINES = {"mtplx", "ollama", "omlx-mtp"}
+MTP_ENGINES = {"mtplx", "ollama", "omlx-oq4e-mtp"}
 SPEC_LEVER = "native MTP speculative decoding"
 
 
