@@ -37,12 +37,10 @@ final class SessionPrefixKVStoreTests: XCTestCase {
                 )
             ]
         )
-        let hit = try XCTUnwrap(store.fetch(tokens: [1, 2, 9], sessionKey: "mamba"))
-
-        XCTAssertThrowsError(try store.reconstructCache(from: hit)) { error in
-            XCTAssertEqual(error as? PrefixKVStoreError, .unsupportedCacheTrim("MambaCache"))
-        }
-        store.release(hit)
+        // A recurrent slot cannot rewind, so a shorter match is a miss at fetch
+        // (it used to be handed out and fail at reconstruction, shadowing any
+        // slot that could have served — HybridPrefixCheckpointTests).
+        XCTAssertNil(store.fetch(tokens: [1, 2, 9], sessionKey: "mamba"))
     }
 
     func testSessionPlannerExtendsTrimsAndResetsBySession() throws {

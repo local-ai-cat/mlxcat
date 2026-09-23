@@ -894,7 +894,9 @@ public struct NativeModelLoader: EnginePoolModelLoader {
                 maxConcurrentRequests: maxConcurrentRequests,
                 cacheCapabilities: Self.cacheCapabilities(for: modelConfiguration),
                 serializationPolicy: Self.serializationPolicy(modelType: modelType, isVLM: isVLM),
-                schedulerManagedTextPrefill: !isVLM,
+                // Text-only requests on a VLM take the scheduler path (and so the prefix
+                // cache) when hybrid prefix reuse is on; images still go through `prepare`.
+                schedulerManagedTextPrefill: !isVLM || Scheduler.hybridPrefixReuseEnabled(),
                 chunkIdlePrefill: Self.chunksIdlePrefill(modelType: modelType),
                 // Resolved per model, not per process: `gpt_oss` is excluded
                 // because its quantized attention route drops attention sinks.

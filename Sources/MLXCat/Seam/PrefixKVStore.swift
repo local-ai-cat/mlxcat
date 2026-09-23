@@ -31,11 +31,48 @@ public protocol PrefixKVStore: AnyObject, Sendable {
     func preload(_ hit: PrefixKVStoreHit) throws
     func reconstructCache(from hit: PrefixKVStoreHit) throws -> [SerializedKVLayer]
     func store(tokens: [Int], sessionKey: String?, cache: [SerializedKVLayer]) throws
+    /// A requirement, not only an extension method: the scheduler holds the
+    /// store as `any PrefixKVStore`, and an extension-only method would dispatch
+    /// statically to the default and silently drop the checkpoints.
+    func store(
+        tokens: [Int],
+        sessionKey: String?,
+        cache: [SerializedKVLayer],
+        checkpoints: [PrefixRecurrentCheckpoint]
+    ) throws
     func release(_ hit: PrefixKVStoreHit)
     func clearEntry(_ hit: PrefixKVStoreHit)
 }
 
+/// Recurrent-layer state captured at one prompt position during prefill.
+///
+/// A hybrid model (Qwen3.5/3.8: gated-delta-net layers beside attention) cannot
+/// rewind its recurrent layers the way attention KV trims, so a stored slot is
+/// only reusable at the exact position its recurrent state describes. A
+/// checkpoint adds another such position: `layers` is index-aligned with the
+/// slot's cache and holds the recurrent layers' state at `position` (attention
+/// layers are `nil` — they trim from the slot's KV).
+public struct PrefixRecurrentCheckpoint: @unchecked Sendable {
+    public let position: Int
+    public let layers: [SerializedKVLayer?]
+
+    public init(position: Int, layers: [SerializedKVLayer?]) {
+        self.position = position
+        self.layers = layers
+    }
+}
+
 public extension PrefixKVStore {
+    /// Stores that cannot use recurrent checkpoints ignore them.
+    func store(
+        tokens: [Int],
+        sessionKey: String?,
+        cache: [SerializedKVLayer],
+        checkpoints: [PrefixRecurrentCheckpoint]
+    ) throws {
+        try store(tokens: tokens, sessionKey: sessionKey, cache: cache)
+    }
+
     func fetch(tokens: [Int]) -> PrefixKVStoreHit? {
         fetch(tokens: tokens, sessionKey: nil)
     }
