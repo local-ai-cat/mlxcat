@@ -313,7 +313,8 @@
         "Qwen3.8-27B-4bit": "qwen3.8-27b",
         "Qwen3-Coder-30B-A3B-Instruct-4bit": "qwen3-coder-30b-a3b-instruct"
       },
-      "weights": "mlx-community 4bit safetensors (LM Studio's own copy of the same repo; verified via `lms ls --json`)"
+      "weights": "mlx-community 4bit safetensors (LM Studio's own copy of the same repo; verified via `lms ls --json`)",
+      "version": "LM Studio 0.4.16+2, mlx-llm engine mlx-llm-mac-arm64-apple-metal-nax-advsimd@1.11.0, llama.cpp engine 2.43.0"
     },
     "ollama": {
       "description": "Ollama — MLX backend by default on Apple Silicon since v0.30 (2026-05); llama.cpp before that.",
@@ -325,7 +326,8 @@
       "notes": "Port 11434 is Local AI Cat's Local API on our Macs — run Ollama with OLLAMA_HOST=127.0.0.1:11436 — NOT 11435: the running alpha embeds mlxcat-http on *:11435 (IPv6 wildcard), and an Ollama bound to 127.0.0.1:11435 (IPv4) silently shadows it for every IPv4 loopback client (seen 2026-09-23 01:20-02:05, no alpha traffic reached Ollama). Different weight artifacts; rows are labelled as such. 2026-09-23: Homebrew ollama 0.34.3, OLLAMA_MODELS isolated under ~/.cache/lac-bench/ollama-models; `ollama --version` WITHOUT OLLAMA_HOST reports 'version is 0.5.7' because it is talking to the Cat's :11434 compat endpoint, not to an Ollama server.",
       "model_aliases": {
         "Qwen3.8-27B-4bit": "qwen3.8:27b-mlx"
-      }
+      },
+      "version": "ollama 0.34.3 (Homebrew), model qwen3.8:27b-mlx digest 5642e97495e1"
     },
     "llama-cpp": {
       "description": "llama.cpp llama-server (Metal) — the GGUF baseline.",
@@ -339,7 +341,8 @@
       "model_aliases": {
         "Qwen3.8-27B-4bit": "qwen3.8-27b-ud-q4_k_m",
         "Qwen3-Coder-30B-A3B-Instruct-4bit": "qwen3-coder-30b-a3b-q4_k_m"
-      }
+      },
+      "version": "llama.cpp b9850 (4f31eedb0, Homebrew)"
     },
     "localaicat-legacy": {
       "description": "Local AI Cat's legacy in-app LLMEvaluator (mlx-swift-lm TokenIterator) through the app's Local API.",
@@ -415,8 +418,9 @@
       "model_aliases": {
         "Qwen3.8-27B-4bit": "Qwen3.8-27B-MTPLX-Optimized-Speed"
       },
-      "weights": "Youssofal/Qwen3.8-27B-MTPLX-Optimized-Speed (MTPLX's own MTP checkpoint — different quant from mlx-community 4bit)",
-      "notes": "Attach-only: started by hand with `mtplx serve --model <snapshot> --host 127.0.0.1 --port 12200 --no-auth --yes --no-stats-footer --model-id Qwen3.8-27B-MTPLX-Optimized-Speed` so the served id is stable. Install: PIPX_HOME=~/.cache/lac-bench/pipx pipx install mtplx. --no-stats-footer matters: without it the server appends a stats footer to content."
+      "weights": "Youssofal/Qwen3.8-27B-MTPLX-Optimized-Speed @ dea0534a (MTPLX's own MTP checkpoint — different quant from mlx-community 4bit)",
+      "notes": "Attach-only: started by hand with `mtplx serve --model <snapshot> --host 127.0.0.1 --port 12200 --no-auth --yes --no-stats-footer --model-id Qwen3.8-27B-MTPLX-Optimized-Speed` so the served id is stable. Install: PIPX_HOME=~/.cache/lac-bench/pipx pipx install mtplx. --no-stats-footer matters: without it the server appends a stats footer to content.",
+      "version": "mtplx 2.11.3"
     },
     "localai-app-a218": {
       "description": "The running Local AI Cat alpha a218 on :11434, engine mlxserve (mlxcat embedded) — what Phil's coding sessions actually hit. Attach-only, read-only, single c1 pass.",
@@ -429,6 +433,36 @@
         "Qwen3.8-27B-4bit": "mlx-community/Qwen3.8-27B-4bit"
       },
       "notes": "Never change its engine default, never install-latest, never use this port for load. c1 only."
+    },
+    "omlx-oq4e-mtp": {
+      "description": "oMLX 0.6.3rc3 serving Jundot's MTP-bearing oQ4e checkpoint (Jundot/Qwen3.8-27B-oQ4e-mtp @ 04dc550) — a DIFFERENT quant (oQ 4-bit, imatrix) from mlx-community 4bit; a faster row is a caveat, not a win.",
+      "platforms": [
+        "macos"
+      ],
+      "launch": {
+        "bin": "omlx",
+        "bin_env": "OMLX_BIN",
+        "args": [
+          "serve",
+          "--model-dir",
+          "/Users/timapple/.cache/lac-bench/omlx-mtp-root",
+          "--port",
+          "{port}",
+          "--log-level",
+          "warning",
+          "--base-path",
+          "/Users/timapple/.cache/lac-bench/omlx-home"
+        ],
+        "port_base": 11840,
+        "ready_timeout_s": 180
+      },
+      "extra_request_fields": {},
+      "notes": "omlx serve exposes no MTP flag; whether it engages the checkpoint's MTP head is read from its log, not assumed.",
+      "version": "omlx 0.6.3rc3 (pipx, git tag v0.6.3rc3, Python 3.13)",
+      "model_aliases": {
+        "Qwen3.8-27B-4bit": "Qwen3.8-27B-oQ4e-mtp"
+      },
+      "weights": "Jundot/Qwen3.8-27B-oQ4e-mtp @ 04dc5509 (oQ4e + MTP head; symlinked as ~/.cache/lac-bench/omlx-mtp-root/Qwen3.8-27B-oQ4e-mtp)"
     }
   }
 }
