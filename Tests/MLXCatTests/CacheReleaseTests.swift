@@ -53,6 +53,23 @@ final class CacheReleasePolicyTests: XCTestCase {
             ).decodeStepInterval, 512)
     }
 
+    func testAdmissionClearIsOffByDefaultAndSwitchable() {
+        // A lever ships off: the default path must not change.
+        XCTAssertFalse(Scheduler.CacheReleasePolicy.default.releasesAfterAdmission)
+        XCTAssertFalse(Scheduler.CacheReleasePolicy.never.releasesAfterAdmission)
+        for raw in ["1", "true", "ALWAYS"] {
+            let policy = Scheduler.CacheReleasePolicy.fromEnvironment(["MLXCAT_ADMISSION_CLEAR_CACHE": raw])
+            XCTAssertTrue(policy.releasesAfterAdmission, raw)
+            XCTAssertEqual(policy.decodeStepInterval, 512, "the admission knob must not move the interval")
+            XCTAssertTrue(policy.releasesWhenIdle, "the admission knob must not move the idle knob")
+        }
+        for raw in ["0", "false", "", "yes-please"] {
+            XCTAssertFalse(
+                Scheduler.CacheReleasePolicy.fromEnvironment(["MLXCAT_ADMISSION_CLEAR_CACHE": raw])
+                    .releasesAfterAdmission, raw)
+        }
+    }
+
     func testEmptyEnvironmentIsTheDefault() {
         XCTAssertEqual(Scheduler.CacheReleasePolicy.fromEnvironment([:]), .default)
         XCTAssertEqual(
@@ -127,5 +144,41 @@ final class CacheReleaseIntegrationTests: XCTestCase {
         XCTAssertLessThan(
             released, held / 2,
             "draining to idle did not hand the buffer cache back")
+    }
+}
+
+/// The admission clear's own A/B. Both arms disable the interval and idle
+/// clears, so the only release in the treatment arm is the one at admission.
+/// Eight decode steps after a 4096-token prefill: what the control arm still
+/// holds is mostly prefill scratch that decode never reuses.
+final class AdmissionCacheReleaseIntegrationTests: XCTestCase {
+
+    func testAdmissionClearReturnsPrefillScratchBeforeDecode() async throws {
+        try MLXMetalRuntime.requireAvailable()
+        guard let resolution = TestModelResolver.resolve() else {
+            throw XCTSkip("Set MLXSERVE_TEST_MODEL to run the admission cache-release A/B.")
+        }
+        let container = try await LLMModelFactory.shared.loadContainer(
+            from: resolution.url, using: #huggingFaceTokenizerLoader())
+
+        let (held, released) = try await container.perform { context in
+            let held = try await CacheReleaseProbe.cacheBytesAfterRun(
+                policy: .never, model: context.model)
+            let released = try await CacheReleaseProbe.cacheBytesAfterRun(
+                policy: Scheduler.CacheReleasePolicy(
+                    decodeStepInterval: 0, releasesWhenIdle: false, releasesAfterAdmission: true),
+                model: context.model)
+            return (held, released)
+        }
+
+        print(
+            "ADMISSIONRELEASE held=\(held / 1_048_576) MiB released=\(released / 1_048_576) MiB")
+
+        XCTAssertGreaterThan(
+            held, 16 * 1_048_576,
+            "the `.never` arm freed the cache anyway — this A/B has no control")
+        XCTAssertLessThan(
+            released, held / 2,
+            "clearing at admission did not hand the prefill scratch back")
     }
 }

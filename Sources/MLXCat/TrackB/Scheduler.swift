@@ -221,15 +221,31 @@ public actor Scheduler {
     /// `MLXCAT_DECODE_CLEAR_CACHE_STEPS=0` disables the periodic clear (any other
     /// non-negative integer sets the interval); `MLXCAT_IDLE_CLEAR_CACHE=0`
     /// disables the drain-to-idle clear.
+    ///
+    /// `MLXCAT_ADMISSION_CLEAR_CACHE=1` (off by default) also clears once each
+    /// time a prefilled row joins the decode batch. mlx-swift-lm does the
+    /// single-stream version of this, clearing on the first generated token
+    /// (ml-explore/mlx-swift-lm#620): a request shorter than the decode interval
+    /// otherwise never clears. Our idle release already covers back-to-back
+    /// requests; the case it does not cover is a server that never drains, where
+    /// each admission's prefill scratch (shaped `[1, chunk, ...]`, never reused
+    /// by `[B, 1, ...]` decode) sits on the free list until the next interval.
     public struct CacheReleasePolicy: Sendable, Equatable {
         /// Clear every N decode steps. Zero never clears.
         public var decodeStepInterval: Int
         /// Clear once each time the scheduler drains to fully idle.
         public var releasesWhenIdle: Bool
+        /// Clear once each time an admitted row finishes prefill.
+        public var releasesAfterAdmission: Bool
 
-        public init(decodeStepInterval: Int = 512, releasesWhenIdle: Bool = true) {
+        public init(
+            decodeStepInterval: Int = 512,
+            releasesWhenIdle: Bool = true,
+            releasesAfterAdmission: Bool = false
+        ) {
             self.decodeStepInterval = max(0, decodeStepInterval)
             self.releasesWhenIdle = releasesWhenIdle
+            self.releasesAfterAdmission = releasesAfterAdmission
         }
 
         /// mlx-lm's interval, plus the idle release it has no need for (its
@@ -249,6 +265,11 @@ public actor Scheduler {
             switch environment["MLXCAT_IDLE_CLEAR_CACHE"]?.lowercased() {
             case "0", "false", "never": policy.releasesWhenIdle = false
             case "1", "true", "always": policy.releasesWhenIdle = true
+            default: break
+            }
+            switch environment["MLXCAT_ADMISSION_CLEAR_CACHE"]?.lowercased() {
+            case "1", "true", "always": policy.releasesAfterAdmission = true
+            case "0", "false", "never": policy.releasesAfterAdmission = false
             default: break
             }
             return policy
@@ -557,6 +578,11 @@ public actor Scheduler {
         request: Request,
         sampling: SamplingParameters
     ) throws -> Response? {
+        if cacheReleasePolicy.releasesAfterAdmission {
+            // Only buffers already on MLX's free list go back; the row's cache
+            // and any pending graph keep theirs.
+            Memory.clearCache()
+        }
         let seededGeneratedTokens = resumeGeneratedTokens.removeValue(forKey: request.uid) ?? []
         let initialTokenID = row.initialGeneratedToken?.tokenID
         let newlyGeneratedTokens = initialTokenID.map { [$0] } ?? []
