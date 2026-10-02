@@ -30,13 +30,16 @@ to code where the PR body was not enough. Depth per repo is recorded in
 `cursors.json`: llama.cpp, vllm, LiteRT-LM and mlx core were skimmed, the rest
 read.
 
-**Ported as levers this pass** (both off by default; see `docs/LEVERS.md`):
+**Ported as levers this pass** (all off by default; see `docs/LEVERS.md`):
 
 1. `MLXCAT_ADMISSION_CLEAR_CACHE`: clear MLX's buffer cache when a prefilled row
    joins the decode batch (from mlx-swift-lm#620).
 2. `MLXCAT_WATCHDOG_TRIM_AFTER_EVICT`: clear the cache again after the memory
    watchdog evicts a model, before it re-measures (from mlx-serve#637,
    Rapid-MLX#3798).
+3. `MLXCAT_PREFIX_FULL_MATCH_REUSE`: reuse N-1 tokens when a stored prefix covers
+   the whole prompt, instead of prefilling it cold (the rule in swama#123). It was
+   found while checking vllm-mlx#714 against our own server.
 
 **Measured, not ported:** moving off our mlx-swift fork to upstream 0.32.3
 (see the first dependency entry).
@@ -233,10 +236,16 @@ read.
   [vllm-mlx#714](https://github.com/waybarrios/vllm-mlx/pull/714), 2026-08-22
   The eligibility probe matched raw messages, so after a tool-call message the
   ~20k-token system and tool prompt was re-prefilled every turn, with no error.
-  *mlxcat:* our store matches tokens after templating, so the probe itself does
-  not apply. A chat template that renders earlier turns differently once a tool
-  call exists would still cause misses. **Verdict: measure first** — a
-  system + tool call + follow-up test against `mlxcat-http` with prefix debug on.
+  *mlxcat:* checked against `mlxcat-http` with a ~2.8k-token system and tool
+  prompt, then an assistant tool call, a tool result and a follow-up. There is no
+  silent miss. Llama-3.2-3B reuses the whole previous prompt on each turn (3032,
+  then 3069 tokens). Qwen3.5-4B resumes from its 2560-token grid checkpoint and
+  re-prefills about 200–300 tokens, as designed. The check did expose a
+  different gap: an *exact* repeat of a prompt reused nothing (`cached_tokens` 0),
+  because a full match was released and prefilled cold (`Scheduler.swift`,
+  `matchedTokenCount == promptTokens.count`).
+  **Verdict: skip** for the tool-turn bug. The exact-repeat gap is ported as
+  `MLXCAT_PREFIX_FULL_MATCH_REUSE` (swama#123 below).
 - **A metadata graph never evaluated leaked Metal handles until a crash after 19 h** —
   [vllm-mlx#708](https://github.com/waybarrios/vllm-mlx/pull/708), 2026-09-30
   `filter`/`extend` rebuilt offsets and padding as lazy ops that were never
@@ -349,8 +358,17 @@ read.
 
 **Trans-N-ai/swama** (MIT, v2.4.0)
 
-- **Log a cache diagnostic on every request, including the miss reason** —
+- **Reuse at most N-1 tokens of a cached prompt** —
   [swama#123](https://github.com/Trans-N-ai/swama/pull/123)
+  A longest-common-prefix match is trimmed to `min(match, N-1)`, so even an
+  identical prompt keeps its cache and only the last token is recomputed.
+  *mlxcat:* no. A full match was released and the prompt prefilled cold.
+  **Verdict: port now** — done as `MLXCAT_PREFIX_FULL_MATCH_REUSE`. An exact
+  replay of a ~950-token prompt takes 794 → 22 ms on Llama-3.2-3B and
+  1154 → 550 ms on Qwen3.5-4B. Greedy output equals the cold run. These are
+  provisional numbers taken under load.
+- **Log a cache diagnostic on every request, including the miss reason** —
+  same PR
   *mlxcat:* prefix debug logs hits and checkpoints behind a flag
   (`Sources/MLXCat/TrackB/Scheduler.swift:1153`); misses carry no reason.
   **Verdict: measure first** — cheap, and it is what would catch a vllm-mlx#714-style miss.

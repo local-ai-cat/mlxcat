@@ -27,7 +27,7 @@ cache serialization) follows, and is re-implemented from, MIT-licensed sources:
   * mlx-engine (disk-chunked KV + continuous batching, PR #326)
     https://github.com/lmstudio-ai/mlx-engine  (MIT)
 
-Two off-by-default memory levers re-implement mechanisms described in other
+Three off-by-default levers re-implement mechanisms described in other
 projects' pull requests (ideas only; no code was copied):
 
   * MLXCAT_ADMISSION_CLEAR_CACHE — clearing the buffer cache once prefill ends,
@@ -35,6 +35,8 @@ projects' pull requests (ideas only; no code was copied):
   * MLXCAT_WATCHDOG_TRIM_AFTER_EVICT — releasing MLX's allocator cache after an
     eviction before re-measuring, after ddalcu/mlx-serve#637 (MIT, per its
     LICENSE file) and raullenchai/Rapid-MLX#3798 (Apache-2.0)
+  * MLXCAT_PREFIX_FULL_MATCH_REUSE — reusing at most N-1 tokens of a prompt
+    that is fully cached, as described in Trans-N-ai/swama#123  (MIT)
 
 Built on:
 
