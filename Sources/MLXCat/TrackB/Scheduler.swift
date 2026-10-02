@@ -47,6 +47,8 @@ public actor Scheduler {
     /// Hybrid prefix reuse (default on; `MLXCAT_HYBRID_PREFIX_REUSE=0` disables): capture recurrent-state checkpoints during
     /// prefill so hybrid models can resume a follow-up turn from the prefix cache.
     private let capturesRecurrentCheckpoints: Bool
+    /// See ``fullPromptMatchReuseEnabled(environment:)``.
+    private let reusesFullPromptMatch: Bool
     private let pressurePolicy: PressurePolicy
     private var waiting: [Request] = []
     private var running: [String: RunningRequest] = [:]
@@ -113,6 +115,7 @@ public actor Scheduler {
         self.schedulerManagedTextPrefill = schedulerManagedTextPrefill
         self.chunkIdlePrefill = chunkIdlePrefill
         self.capturesRecurrentCheckpoints = Self.hybridPrefixReuseEnabled()
+        self.reusesFullPromptMatch = Self.fullPromptMatchReuseEnabled()
         self.prefillsLastTokenAlone = Self.prefillsLastTokenAlone(
             usesWindowedKVCache: cacheCapabilities.usesWindowedKVCache
         )
@@ -153,6 +156,26 @@ public actor Scheduler {
         switch environment["MLXCAT_HYBRID_PREFIX_REUSE"]?.lowercased() {
         case "0", "false", "off": return false
         default: return true
+        }
+    }
+
+    /// Whether a prefix hit covering the WHOLE prompt is reused (off by default;
+    /// `MLXCAT_PREFIX_FULL_MATCH_REUSE=1` turns it on).
+    ///
+    /// A request identical to a stored one (a retry, a regenerate, a benchmark's
+    /// warm repeat) matches every prompt token, which leaves no token to prefill
+    /// and so no logits to sample from. Today that hit is released and the whole
+    /// prompt is prefilled cold. With the lever on, the store is asked again for
+    /// the prompt minus its last token: a trimmable cache comes back one token
+    /// short and only that token is prefilled; a hybrid slot resumes from its
+    /// deepest checkpoint, as any shorter match does. The same "reuse at most
+    /// N-1" rule is what Trans-N-ai/swama#123 and mlx-lm's prompt cache use.
+    public static func fullPromptMatchReuseEnabled(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Bool {
+        switch environment["MLXCAT_PREFIX_FULL_MATCH_REUSE"]?.lowercased() {
+        case "1", "true", "on": return true
+        default: return false
         }
     }
 
@@ -862,9 +885,31 @@ public actor Scheduler {
         if prefixCacheEnabled,
             prefixCacheEligible,
             let prefixStore,
-            let hit = prefixStore.fetch(tokens: promptTokens, sessionKey: request.cacheSession)
+            var hit = prefixStore.fetch(tokens: promptTokens, sessionKey: request.cacheSession)
         {
             Self.prefixDebug("hit uid=\(request.uid) matched=\(hit.matchedTokenCount) of \(promptTokens.count)")
+            if hit.matchedTokenCount == promptTokens.count,
+                reusesFullPromptMatch,
+                promptTokens.count > 2
+            {
+                prefixStore.release(hit)
+                if let shorter = prefixStore.fetch(
+                    tokens: Array(promptTokens.dropLast()), sessionKey: request.cacheSession)
+                {
+                    Self.prefixDebug(
+                        "full-match reuse uid=\(request.uid) matched=\(shorter.matchedTokenCount) of \(promptTokens.count)")
+                    hit = shorter
+                } else {
+                    return prefillMissRow(
+                        request: request,
+                        sampling: sampling,
+                        promptTokens: promptTokens,
+                        promptTokensArray: promptTokensArray,
+                        storedPromptTokens: promptTokens,
+                        rowCache: rowCache
+                    )
+                }
+            }
             if hit.matchedTokenCount == promptTokens.count {
                 prefixStore.release(hit)
                 return prefillMissRow(
