@@ -51,6 +51,13 @@ final class EvictionFreeListProbeTests: XCTestCase {
 
         let modelBytes = loaded - baseline
         XCTAssertGreaterThan(modelBytes, 64 * mib, "the model never became resident; nothing to measure")
+        // The gap itself. If this starts failing, eviction now returns the weights
+        // before the loader's clear, and MLXCAT_WATCHDOG_TRIM_AFTER_EVICT may no
+        // longer be needed.
+        XCTAssertGreaterThan(
+            afterEvict, loaded - modelBytes / 2,
+            "eviction alone returned the model's bytes; the free-list gap is gone")
+        XCTAssertGreaterThan(cachedAfterEvict, modelBytes / 2, "the evicted bytes are not on the free list")
         XCTAssertLessThan(
             afterTrim, loaded - modelBytes / 2,
             "eviction plus a clear did not return the model's bytes")

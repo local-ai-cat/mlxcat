@@ -34,8 +34,8 @@ private enum FullPromptMatchProbe {
     }
 
     /// Cold run, then the identical prompt again on the same engine and store.
-    /// Returns (cold tokens, replay tokens, store fetch hits).
-    static func replay(model: any LanguageModel, leverOn: Bool) async throws -> ([Int], [Int], Int) {
+    /// Returns (cold tokens, replay tokens, store fetch hits, replay's cached prompt tokens).
+    static func replay(model: any LanguageModel, leverOn: Bool) async throws -> ([Int], [Int], Int, Int) {
         if leverOn {
             setenv("MLXCAT_PREFIX_FULL_MATCH_REUSE", "1", 1)
         } else {
@@ -51,8 +51,16 @@ private enum FullPromptMatchProbe {
             prefixStore: store
         )
         let cold = try await engine.generate([request("cold", prompt)])["cold", default: []]
-        let again = try await engine.generate([request("again", prompt)])["again", default: []]
-        return (cold, again, store.stats.fetchHitCount)
+        // Stepped by hand so the first response (which carries the cached
+        // prompt count) is seen before the collector is consumed.
+        try await engine.submit(request("again", prompt))
+        var againResponses: [Response] = []
+        while await !engine.isIdle {
+            againResponses += try await engine.step().filter { $0.uid == "again" }
+        }
+        let again = againResponses.map(\.token).filter { $0 >= 0 }
+        let cached = againResponses.first?.cachedPromptTokens ?? -1
+        return (cold, again, store.stats.fetchHitCount, cached)
     }
 }
 
@@ -71,7 +79,7 @@ final class FullPromptMatchReuseIntegrationTests: XCTestCase {
             let hybrid = try context.model.newCache(parameters: nil).contains { $0 is MambaCache }
             return (off, on, hybrid)
         }
-        print("FULLMATCH hybrid=\(hybrid) off hits=\(off.2) on hits=\(on.2)")
+        print("FULLMATCH hybrid=\(hybrid) off hits=\(off.2) cached=\(off.3) on hits=\(on.2) cached=\(on.3)")
 
         XCTAssertEqual(off.0, off.1, "default replay must equal the cold run")
         XCTAssertEqual(off.2, 1)
@@ -82,6 +90,13 @@ final class FullPromptMatchReuseIntegrationTests: XCTestCase {
         // (When a hybrid slot ends exactly at the prompt, e.g. max_tokens 1, the
         // lever does engage and resumes from the checkpoint.)
         XCTAssertEqual(on.2, hybrid ? 1 : 2, "unexpected number of prefix fetches with the lever on")
+        if !hybrid {
+            // The reuse itself, not just the lookup: the replay starts from N-1.
+            XCTAssertEqual(off.3, 0, "default: a full match is prefilled cold")
+            XCTAssertEqual(on.3, 1199, "the lever's N-1 hit was not used")
+        } else {
+            XCTAssertEqual(on.3, off.3, "a hybrid replay resumes from the same checkpoint either way")
+        }
         XCTAssertFalse(on.0.isEmpty)
         XCTAssertEqual(on.0, on.1, "reusing N-1 tokens changed greedy output")
         XCTAssertEqual(on.0, off.0, "the lever changed the cold run itself")
