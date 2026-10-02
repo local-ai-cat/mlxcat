@@ -87,3 +87,64 @@ final class FullPromptMatchReuseIntegrationTests: XCTestCase {
         XCTAssertEqual(on.0, off.0, "the lever changed the cold run itself")
     }
 }
+
+/// Every prefix lease taken during admission must be released, including for a
+/// row that finishes at its first token and so never joins the decode batch.
+final class PrefixLeaseBalanceIntegrationTests: XCTestCase {
+    private static func run(
+        model: any LanguageModel, prompts: [[Int]], maxTokens: Int, leverOn: Bool
+    ) async throws -> SessionPrefixKVStoreStats {
+        if leverOn {
+            setenv("MLXCAT_PREFIX_FULL_MATCH_REUSE", "1", 1)
+        } else {
+            unsetenv("MLXCAT_PREFIX_FULL_MATCH_REUSE")
+        }
+        defer { unsetenv("MLXCAT_PREFIX_FULL_MATCH_REUSE") }
+        let store = SessionPrefixKVStore()
+        let engine = MLXCatEngine(
+            model: model,
+            parameters: GenerateParameters(maxTokens: maxTokens, temperature: 0),
+            maxConcurrentRequests: 1,
+            prefixStore: store
+        )
+        for (index, prompt) in prompts.enumerated() {
+            _ = try await engine.generate([
+                Request(
+                    uid: "r\(index)",
+                    input: LMInput(text: LMInput.Text(tokens: MLXArray(prompt.map(Int32.init)))),
+                    maxTokens: maxTokens,
+                    sampling: SamplingParameters(temperature: 0)
+                )
+            ])
+        }
+        return store.stats
+    }
+
+    func testRowsFinishingAtAdmissionReleaseTheirPrefixLease() async throws {
+        try MLXMetalRuntime.requireAvailable()
+        guard let resolution = TestModelResolver.resolve() else {
+            throw XCTSkip("Set MLXSERVE_TEST_MODEL to run the prefix lease balance check.")
+        }
+        let container = try await LLMModelFactory.shared.loadContainer(
+            from: resolution.url, using: #huggingFaceTokenizerLoader())
+        let base = (0 ..< 900).map { 1000 + ($0 * 7 % 4096) }
+
+        let (partial, exact) = try await container.perform { context in
+            // Default path: a partial hit (base, then base + suffix), one token each.
+            let partial = try await Self.run(
+                model: context.model, prompts: [base, base + [1500, 1501, 1502]], maxTokens: 1,
+                leverOn: false)
+            // Lever path: the same prompt twice, one token each.
+            let exact = try await Self.run(
+                model: context.model, prompts: [base, base, base], maxTokens: 1, leverOn: true)
+            return (partial, exact)
+        }
+        print("LEASES partial hits=\(partial.fetchHitCount) releases=\(partial.releaseCount) "
+            + "exact hits=\(exact.fetchHitCount) releases=\(exact.releaseCount)")
+
+        XCTAssertGreaterThan(partial.fetchHitCount, 0, "no prefix hit; the check proves nothing")
+        XCTAssertEqual(partial.fetchHitCount, partial.releaseCount, "a lease leaked on the default path")
+        XCTAssertGreaterThan(exact.fetchHitCount, 0)
+        XCTAssertEqual(exact.fetchHitCount, exact.releaseCount, "a lease leaked on the full-match path")
+    }
+}

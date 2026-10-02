@@ -647,6 +647,13 @@ public actor Scheduler {
             running[request.uid]?.checkpoints = row.checkpoints
         } else {
             storeCompletedAdmissionPrefix(row, request: request)
+            // A row that finishes at admission (max_tokens 1, or EOS first) never
+            // reaches `running`, so the finish path below never releases its
+            // prefix lease. Without this the slot stays leased for good: no
+            // later fetch can see it and eviction skips it.
+            if let hit = row.prefixHit {
+                prefixStore?.release(hit)
+            }
         }
 
         guard let initialTokenID else { return nil }
