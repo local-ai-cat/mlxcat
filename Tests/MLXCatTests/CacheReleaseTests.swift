@@ -112,6 +112,37 @@ enum CacheReleaseProbe {
     }
 }
 
+extension CacheReleaseProbe {
+    /// Two staggered rows with different prompt lengths, greedy, so a second
+    /// admission lands while the first row is decoding: the case the admission
+    /// clear runs in. Returns each row's tokens.
+    static func staggeredTokens(policy: Scheduler.CacheReleasePolicy, model: any LanguageModel)
+        async throws -> [String: [Int]]
+    {
+        Memory.clearCache()
+        let engine = MLXCatEngine(
+            model: model,
+            parameters: GenerateParameters(maxTokens: 24, temperature: 0),
+            maxConcurrentRequests: 2,
+            cacheReleasePolicy: policy
+        )
+        return try await engine.generate([
+            Request(
+                uid: "long",
+                input: LMInput(text: LMInput.Text(tokens: promptTokens(count: 1536))),
+                maxTokens: 24,
+                sampling: SamplingParameters(temperature: 0)
+            ),
+            Request(
+                uid: "short",
+                input: LMInput(text: LMInput.Text(tokens: promptTokens(count: 300))),
+                maxTokens: 24,
+                sampling: SamplingParameters(temperature: 0)
+            ),
+        ])
+    }
+}
+
 /// The A/B the policy exists for: same work, both arms, and the cache is
 /// actually measured rather than assumed.
 final class CacheReleaseIntegrationTests: XCTestCase {
@@ -149,8 +180,11 @@ final class CacheReleaseIntegrationTests: XCTestCase {
 
 /// The admission clear's own A/B. Both arms disable the interval and idle
 /// clears, so the only release in the treatment arm is the one at admission.
-/// Eight decode steps after a 4096-token prefill: what the control arm still
-/// holds is mostly prefill scratch that decode never reuses.
+/// Measured after the run, so both arms also hold the finished row's own KV
+/// cache (freed when the request ends, after admission): only the idle and
+/// interval releases return that. The difference between the arms is the
+/// prefill scratch. Llama-3.2-3B-4bit, 2026-10-02: 1805 MiB held, 947 MiB
+/// with the admission clear.
 final class AdmissionCacheReleaseIntegrationTests: XCTestCase {
 
     func testAdmissionClearReturnsPrefillScratchBeforeDecode() async throws {
@@ -178,7 +212,30 @@ final class AdmissionCacheReleaseIntegrationTests: XCTestCase {
             held, 16 * 1_048_576,
             "the `.never` arm freed the cache anyway — this A/B has no control")
         XCTAssertLessThan(
-            released, held / 2,
+            released, held - 64 * 1_048_576,
             "clearing at admission did not hand the prefill scratch back")
+    }
+
+    /// Clearing frees only unreferenced buffers, so greedy output must be
+    /// token-identical with the lever on and off.
+    func testAdmissionClearIsTokenIdenticalUnderGreedy() async throws {
+        try MLXMetalRuntime.requireAvailable()
+        guard let resolution = TestModelResolver.resolve() else {
+            throw XCTSkip("Set MLXSERVE_TEST_MODEL to run the admission cache-release token check.")
+        }
+        let container = try await LLMModelFactory.shared.loadContainer(
+            from: resolution.url, using: #huggingFaceTokenizerLoader())
+
+        let (off, on) = try await container.perform { context in
+            let off = try await CacheReleaseProbe.staggeredTokens(policy: .default, model: context.model)
+            var lever = Scheduler.CacheReleasePolicy.default
+            lever.releasesAfterAdmission = true
+            let on = try await CacheReleaseProbe.staggeredTokens(policy: lever, model: context.model)
+            return (off, on)
+        }
+
+        XCTAssertEqual(off.keys.sorted(), ["long", "short"])
+        XCTAssertFalse(off["long"]?.isEmpty ?? true)
+        XCTAssertEqual(off, on, "the admission clear changed greedy output")
     }
 }
