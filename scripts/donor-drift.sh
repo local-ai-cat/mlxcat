@@ -150,8 +150,12 @@ def commits_since(repo, since_iso, branch, stop_sha=None):
     if stop_sha:
         # Newest first: everything from the cursor commit down was already read.
         shas = [i.get("sha", "") for i in items]
-        if stop_sha in shas:
-            items = items[: shas.index(stop_sha)]
+        if stop_sha not in shas:
+            # Rewritten history, a wrong branch or a bad cursor. Unknown, never a
+            # silent "0 new".
+            API_ERRORS.append(f"{repo}: cursor {stop_sha[:8]} not on {branch} since {since_iso}")
+            return None
+        items = items[: shas.index(stop_sha)]
     subjects = [((i.get("commit") or {}).get("message") or "").split("\n")[0] for i in items]
     return subjects
 
@@ -202,7 +206,8 @@ for repo, why in WATCH:
         subjects = commits_since(repo, since, h["branch"])
         from_label = f"last {SINCE_DAYS} days"
     report["watch"].append({"repo": repo, "why": why, "head": h, "latest_release": latest_release(repo),
-                            "from": from_label, "cursor_release": (cursor or {}).get("release"),
+                            "from": from_label, "has_cursor": cursor is not None,
+                            "cursor_release": (cursor or {}).get("release"),
                             "commits_in_window": len(subjects) if subjects is not None else None,
                             "keyword_hits": keyword_hits(subjects or [])})
 
@@ -236,7 +241,7 @@ for w in report["watch"]:
     if "error" in w:
         print(f"| {w['repo']} | {w['why']} | {w['error']} | | | | |"); continue
     h = w["head"]; rel = w.get("latest_release") or {}
-    new_release = " (new)" if w.get("cursor_release") and rel.get("tag") and rel.get("tag") != w["cursor_release"] else ""
+    new_release = " (new)" if w.get("has_cursor") and rel.get("tag") and rel.get("tag") != w.get("cursor_release") else ""
     print(f"| {w['repo']} | {w['why']} | `{h['sha']}` {h['date']} | {rel.get('tag') or '—'} {rel.get('date','')}{new_release} | {w['from']} | {show_count(w['commits_in_window'])} | {len(w['keyword_hits'])} |")
 print("\n<details><summary>Keyword hits on the watchlist</summary>\n")
 for w in report["watch"]:
