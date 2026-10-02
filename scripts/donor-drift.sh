@@ -96,20 +96,18 @@ def gh(path):
         return None
 
 def gh_paginate(path):
-    out = subprocess.run(["gh", "api", "--paginate", path], capture_output=True, text=True)
+    # --slurp wraps the pages in one outer array. Splitting the raw stream on
+    # "][" broke whenever a commit message itself contained "] [".
+    out = subprocess.run(["gh", "api", "--paginate", "--slurp", path], capture_output=True, text=True)
     if out.returncode != 0:
         API_ERRORS.append(path)
         return None
-    items = []
-    # --paginate concatenates JSON arrays; split defensively
-    for chunk in re.split(r"\]\s*\[", out.stdout.strip()):
-        chunk = chunk if chunk.startswith("[") else "[" + chunk
-        chunk = chunk if chunk.endswith("]") else chunk + "]"
-        try:
-            items.extend(json.loads(chunk))
-        except json.JSONDecodeError:
-            pass
-    return items
+    try:
+        pages = json.loads(out.stdout)
+    except json.JSONDecodeError:
+        API_ERRORS.append(path)
+        return None
+    return [item for page in pages for item in page if isinstance(item, dict)]
 
 def head(repo):
     info = gh(f"repos/{repo}")
