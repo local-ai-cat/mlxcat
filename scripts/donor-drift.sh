@@ -9,6 +9,12 @@
 #   scripts/donor-drift.sh                 # markdown to stdout
 #   scripts/donor-drift.sh --json          # machine-readable
 #   DRIFT_SINCE_DAYS=14 scripts/donor-drift.sh
+#   DRIFT_IGNORE_CURSORS=1 scripts/donor-drift.sh   # window only, ignore cursors
+#
+# Watchlist repos with an entry in docs/watch/cursors.json are reported from
+# that cursor (the last commit a watch pass actually read) instead of the
+# window, so a pass neither re-reads nor skips anything. Repos named only in the
+# cursor file (added by a watch pass) are watched too.
 #
 # Needs: gh (authenticated) or GITHUB_TOKEN, python3. No builds, no clones.
 # Footprint rule: this script only READS public repos; it never opens issues or
@@ -23,6 +29,7 @@ FORMAT="md"
 export DRIFT_FORMAT="$FORMAT"
 export DRIFT_REPO_ROOT="$REPO_ROOT"
 export DRIFT_SINCE_DAYS="${DRIFT_SINCE_DAYS:-30}"
+export DRIFT_IGNORE_CURSORS="${DRIFT_IGNORE_CURSORS:-0}"
 
 exec python3 - <<'PY'
 import json, os, re, subprocess, sys, datetime as dt
@@ -82,6 +89,13 @@ WATCH = [
     ("john-rocky/apple-silicon-llm-bench", "neutral Mac+iPhone benchmark methodology"),
 ]
 
+CURSORS = {}
+cursor_file = ROOT / "docs" / "watch" / "cursors.json"
+if os.environ.get("DRIFT_IGNORE_CURSORS", "0") != "1" and cursor_file.exists():
+    CURSORS = json.loads(cursor_file.read_text()).get("repos", {})
+    watched = {r.lower() for r, _ in WATCH}
+    WATCH += [(r, "added by a watch pass (docs/watch/cursors.json)") for r in CURSORS if r.lower() not in watched]
+
 API_ERRORS = []
 
 def gh(path):
@@ -129,10 +143,15 @@ def commit_date(repo, sha):
     c = gh(f"repos/{repo}/commits/{sha}")
     return (((c or {}).get("commit") or {}).get("committer") or {}).get("date", "")[:10] or None
 
-def commits_since(repo, since_iso, branch):
+def commits_since(repo, since_iso, branch, stop_sha=None):
     items = gh_paginate(f"repos/{repo}/commits?sha={branch}&since={since_iso}T00:00:00Z&per_page=100")
     if items is None:
         return None  # API failure ≠ zero commits — the report must show "?", never a false 0
+    if stop_sha:
+        # Newest first: everything from the cursor commit down was already read.
+        shas = [i.get("sha", "") for i in items]
+        if stop_sha in shas:
+            items = items[: shas.index(stop_sha)]
     subjects = [((i.get("commit") or {}).get("message") or "").split("\n")[0] for i in items]
     return subjects
 
@@ -175,8 +194,15 @@ for repo, why in WATCH:
     if not h:
         report["watch"].append({"repo": repo, "why": why, "error": "unreachable"})
         continue
-    subjects = commits_since(repo, since, h["branch"])
+    cursor = CURSORS.get(repo)
+    if cursor:
+        subjects = commits_since(repo, cursor["commit_date"], h["branch"], stop_sha=cursor["commit"])
+        from_label = f"cursor {cursor['commit'][:8]} ({cursor['commit_date']})"
+    else:
+        subjects = commits_since(repo, since, h["branch"])
+        from_label = f"last {SINCE_DAYS} days"
     report["watch"].append({"repo": repo, "why": why, "head": h, "latest_release": latest_release(repo),
+                            "from": from_label, "cursor_release": (cursor or {}).get("release"),
                             "commits_in_window": len(subjects) if subjects is not None else None,
                             "keyword_hits": keyword_hits(subjects or [])})
 
@@ -203,14 +229,15 @@ for p in report["pins"]:
             print(f"- {s}  _({', '.join(kws)})_")
         print()
 print("</details>\n")
-print(f"## Watchlist (activity in the last {SINCE_DAYS} days)\n")
-print("| repo | why | HEAD | newest release | commits | keyword hits |")
-print("|---|---|---|---|---:|---|")
+print(f"## Watchlist (new since each repo's cursor, else the last {SINCE_DAYS} days)\n")
+print("| repo | why | HEAD | newest release | read from | commits | keyword hits |")
+print("|---|---|---|---|---|---:|---|")
 for w in report["watch"]:
     if "error" in w:
-        print(f"| {w['repo']} | {w['why']} | {w['error']} | | | |"); continue
+        print(f"| {w['repo']} | {w['why']} | {w['error']} | | | | |"); continue
     h = w["head"]; rel = w.get("latest_release") or {}
-    print(f"| {w['repo']} | {w['why']} | `{h['sha']}` {h['date']} | {rel.get('tag') or '—'} {rel.get('date','')} | {show_count(w['commits_in_window'])} | {len(w['keyword_hits'])} |")
+    new_release = " (new)" if w.get("cursor_release") and rel.get("tag") and rel.get("tag") != w["cursor_release"] else ""
+    print(f"| {w['repo']} | {w['why']} | `{h['sha']}` {h['date']} | {rel.get('tag') or '—'} {rel.get('date','')}{new_release} | {w['from']} | {show_count(w['commits_in_window'])} | {len(w['keyword_hits'])} |")
 print("\n<details><summary>Keyword hits on the watchlist</summary>\n")
 for w in report["watch"]:
     if w.get("keyword_hits"):
