@@ -198,3 +198,109 @@ final class MemoryWatchdogTests: XCTestCase {
         XCTAssertFalse(blocked)
     }
 }
+
+/// MLX's accounting as the live sampler sees it: active + free-list cache.
+/// Evicting a model moves its bytes from active to the cache (the weights are
+/// released after the loader's own clear); only a trim returns cache bytes.
+private actor FreeListMemoryWorld: MemoryWatchdogReclaimer {
+    private var active: Int64
+    private var cache: Int64
+    private let evictableModelBytes: Int64
+    private(set) var events: [String] = []
+
+    init(active: Int64, cache: Int64, evictableModelBytes: Int64) {
+        self.active = active
+        self.cache = cache
+        self.evictableModelBytes = evictableModelBytes
+    }
+
+    func sample() -> Int64 { active + cache }
+
+    func trimReclaimableCaches(targetBytes: Int64) async -> Int64 {
+        events.append("trim")
+        let freed = cache
+        cache = 0
+        return freed
+    }
+
+    func evictIdleModels(targetBytes: Int64) async -> Int64 {
+        events.append("evict")
+        let moved = min(evictableModelBytes, active)
+        active -= moved
+        cache += moved
+        return moved
+    }
+
+    func recordedEvents() -> [String] { events }
+}
+
+final class MemoryWatchdogTrimAfterEvictionTests: XCTestCase {
+    // 100-byte ceiling => hard 92. 70 active (40 of it an idle model) + 10 cache;
+    // a 30-byte load needs the idle model gone AND its bytes off the free list.
+    private func world() -> FreeListMemoryWorld {
+        FreeListMemoryWorld(active: 70, cache: 10, evictableModelBytes: 40)
+    }
+
+    private func watchdog(_ world: FreeListMemoryWorld, trimsAfterEviction: Bool) -> MemoryWatchdog {
+        MemoryWatchdog(
+            configuration: MemoryWatchdogConfiguration(
+                ceilingBytes: 100, trimsAfterEviction: trimsAfterEviction),
+            sampler: { await world.sample() },
+            reclaimer: world
+        )
+    }
+
+    func testOffByDefault() {
+        XCTAssertFalse(MemoryWatchdogConfiguration(ceilingBytes: 100).trimsAfterEviction)
+        XCTAssertFalse(MemoryWatchdogConfiguration.trimsAfterEvictionFromEnvironment([:]))
+        XCTAssertFalse(
+            MemoryWatchdogConfiguration.trimsAfterEvictionFromEnvironment(
+                ["MLXCAT_WATCHDOG_TRIM_AFTER_EVICT": "0"]))
+        XCTAssertTrue(
+            MemoryWatchdogConfiguration.trimsAfterEvictionFromEnvironment(
+                ["MLXCAT_WATCHDOG_TRIM_AFTER_EVICT": "1"]))
+    }
+
+    /// Today's behaviour, pinned: the evicted bytes are still counted (as cache)
+    /// when the ladder re-samples, so a load that would now fit is denied.
+    func testDefaultLadderDeniesALoadThatFitsAfterEviction() async {
+        let world = world()
+        let guardActor = watchdog(world, trimsAfterEviction: false)
+        do {
+            try await guardActor.checkAdmission(additionalBytes: 30)
+            XCTFail("expected the default ladder to deny: evicted bytes still sit in the cache")
+        } catch let error as MemoryWatchdogError {
+            guard case .admissionDenied(_, let current, _) = error else {
+                return XCTFail("unexpected \(error)")
+            }
+            XCTAssertEqual(current, 70, "30 resident + 40 evicted bytes still on the free list")
+        } catch {
+            XCTFail("unexpected \(error)")
+        }
+        let events = await world.recordedEvents()
+        XCTAssertEqual(events, ["trim", "evict"])
+    }
+
+    func testLeverAdmitsOnceTheEvictedBytesLeaveTheFreeList() async throws {
+        let world = world()
+        let guardActor = watchdog(world, trimsAfterEviction: true)
+        try await guardActor.checkAdmission(additionalBytes: 30)
+        let events = await world.recordedEvents()
+        XCTAssertEqual(events, ["trim", "evict", "trim"])
+        let usage = await world.sample()
+        XCTAssertEqual(usage, 30)
+    }
+
+    func testLeverAlsoAppliesToThePollLadder() async {
+        // 80 active (40 evictable) + 10 cache: over soft (80) even after the first trim.
+        let world = FreeListMemoryWorld(active: 80, cache: 10, evictableModelBytes: 40)
+        let off = await watchdog(world, trimsAfterEviction: false).poll()
+        XCTAssertEqual(off, .soft, "default: 40 resident + 40 evicted-but-cached")
+
+        let world2 = FreeListMemoryWorld(active: 80, cache: 10, evictableModelBytes: 40)
+        let on = await watchdog(world2, trimsAfterEviction: true).poll()
+        XCTAssertEqual(on, .ok)
+        let events = await world2.recordedEvents()
+        XCTAssertEqual(events, ["trim", "evict", "trim"])
+    }
+}

@@ -22,6 +22,19 @@ public struct MemoryWatchdogConfiguration: Sendable, Equatable {
     public let ceilingBytes: Int64
     public let softFraction: Double
     public let hardFraction: Double
+    /// Clear the MLX cache once more after evicting, before re-sampling. Off by
+    /// default (`MLXCAT_WATCHDOG_TRIM_AFTER_EVICT=1` turns it on).
+    ///
+    /// The sampler counts active memory plus MLX's free-list cache. An evicted
+    /// model's weights do not leave that sum when the pool drops it: they move
+    /// from active to the free list when the last reference goes, which is after
+    /// the loader's own clear has run. So the re-sample that follows eviction can
+    /// read nearly the same number, and `checkAdmission` denies a load that would
+    /// now fit. ddalcu/mlx-serve#637 found the same accounting gap (eviction
+    /// zeroed the registry, about 3.2 GB stayed in MLX's allocator cache, and
+    /// requests failed until restart) and fixed it by releasing the cache after
+    /// eviction.
+    public let trimsAfterEviction: Bool
 
     /// Conservative defaults: start trimming/evicting at 80% and deny at 92% of
     /// the ceiling, leaving headroom under the hard jetsam limit for the
@@ -33,14 +46,26 @@ public struct MemoryWatchdogConfiguration: Sendable, Equatable {
     public init(
         ceilingBytes: Int64,
         softFraction: Double = defaultSoftFraction,
-        hardFraction: Double = defaultHardFraction
+        hardFraction: Double = defaultHardFraction,
+        trimsAfterEviction: Bool = false
     ) {
+        self.trimsAfterEviction = trimsAfterEviction
         self.ceilingBytes = max(0, ceilingBytes)
         // Clamp into a sane band and keep soft <= hard so watermark math never inverts.
         let clampedSoft = min(max(softFraction, 0.1), 0.99)
         let clampedHard = min(max(hardFraction, clampedSoft), 0.99)
         self.softFraction = clampedSoft
         self.hardFraction = clampedHard
+    }
+
+    /// `MLXCAT_WATCHDOG_TRIM_AFTER_EVICT`: `1`/`true`/`always` on, anything else off.
+    public static func trimsAfterEvictionFromEnvironment(
+        _ environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Bool {
+        switch environment["MLXCAT_WATCHDOG_TRIM_AFTER_EVICT"]?.lowercased() {
+        case "1", "true", "always": return true
+        default: return false
+        }
     }
 
     public var softBytes: Int64 { fraction(softFraction) }
@@ -160,6 +185,7 @@ public actor MemoryWatchdog {
         // Step 2: evict idle models if trimming was not enough.
         if usage >= soft {
             _ = await reclaimer.evictIdleModels(targetBytes: usage - soft)
+            await trimAfterEvictionIfEnabled(targetBytes: usage - soft)
             usage = await sampler()
         }
 
@@ -192,6 +218,7 @@ public actor MemoryWatchdog {
         usage = await sampler()
         if usage + additionalBytes > hard {
             _ = await reclaimer.evictIdleModels(targetBytes: (usage + additionalBytes) - hard)
+            await trimAfterEvictionIfEnabled(targetBytes: (usage + additionalBytes) - hard)
             usage = await sampler()
         }
 
@@ -203,6 +230,11 @@ public actor MemoryWatchdog {
                 ceilingBytes: hard
             )
         }
+    }
+
+    private func trimAfterEvictionIfEnabled(targetBytes: Int64) async {
+        guard configuration.trimsAfterEviction else { return }
+        _ = await reclaimer.trimReclaimableCaches(targetBytes: targetBytes)
     }
 
     private func classify(_ usage: Int64) -> MemoryPressureLevel {
