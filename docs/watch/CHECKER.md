@@ -23,6 +23,9 @@ You are keeping [`docs/ENGINES.md`](../ENGINES.md) and
 1. **Drift.** Run `scripts/donor-drift.sh > /tmp/drift.md`. Each watched repo is
    reported from its cursor in [`cursors.json`](cursors.json): commits newer than
    the last one a pass read, plus `(new)` next to a release that appeared since.
+   A `?` count means the API failed or the cursor commit was not found (the
+   footer says which). Read that repo from its cursor date and reset its cursor
+   to the HEAD you read.
 2. **Pick what to read.** Every repo with commits or a new release, in this order:
    pinned dependencies (the top table), then repos whose "why" says
    *competitor*, then the rest. Read at most **12 repos**. Carry the remainder
