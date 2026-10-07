@@ -1,14 +1,36 @@
 import Foundation
 import Metal
+import MLX
 import XCTest
 
+/// Gives MLX a Metal library under `swift test`, without touching the test bundle.
+///
+/// SwiftPM cannot compile MLX's Metal shaders, so the tests build a small
+/// metallib themselves. It used to be copied into the xctest bundle's
+/// `Contents/MacOS`, where MLX looks first, but that invalidates the bundle's
+/// signature: under Xcode 27's build backend the next incremental `swift test`
+/// then fails to re-sign `MLXCatTests.xctest`.
+///
+/// MLX's last fallback is `default.metallib` resolved against the current
+/// directory, so the library now lives in `.build/mlxcat-metal-runtime/`, and
+/// the current directory points there only while the first MLX evaluation
+/// constructs the Metal device (which loads the library once per process).
 enum MLXMetalRuntime {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var deviceReady = false
+
     static func requireAvailable(file: StaticString = #filePath, line: UInt = #line) throws {
         guard MTLCreateSystemDefaultDevice() != nil else {
             throw XCTSkip("MLX probe skipped because no Metal device is visible to this process.")
         }
 
+        lock.lock()
+        defer { lock.unlock() }
+        if deviceReady {
+            return
+        }
         try prepareDefaultMetallib(file: file, line: line)
+        deviceReady = true
     }
 
     private static func prepareDefaultMetallib(file: StaticString, line: UInt) throws {
@@ -18,6 +40,7 @@ enum MLXMetalRuntime {
             file: file,
             line: line
         )
+        // A metallib colocated with the binary wins MLX's search; nothing to do.
         let colocatedLibrary = executableDirectory.appendingPathComponent("mlx.metallib")
         if FileManager.default.fileExists(atPath: colocatedLibrary.path) {
             return
@@ -30,22 +53,22 @@ enum MLXMetalRuntime {
             throw XCTSkip("MLX Metal sources are not available in .build/checkouts.")
         }
 
-        let outputDirectory = root.appendingPathComponent(".build/arm64-apple-macosx/debug")
+        let runtimeDirectory = root.appendingPathComponent(".build/mlxcat-metal-runtime")
         let airDirectory = root.appendingPathComponent(".build/mlxcat-metal-air")
         try FileManager.default.createDirectory(
             at: airDirectory,
             withIntermediateDirectories: true
         )
         try FileManager.default.createDirectory(
-            at: outputDirectory,
+            at: runtimeDirectory,
             withIntermediateDirectories: true
         )
 
+        let metallib = runtimeDirectory.appendingPathComponent("default.metallib")
         let airFiles = try compileAirFiles(
             metalSourceDirectory: metalSourceDirectory,
             airDirectory: airDirectory
         )
-        let metallib = outputDirectory.appendingPathComponent("mlx.metallib")
         try run(
             "/usr/bin/xcrun",
             arguments: ["-sdk", "macosx", "metallib"] + airFiles.map(\.path) + [
@@ -53,7 +76,22 @@ enum MLXMetalRuntime {
             ]
         )
 
-        try install(metallib: metallib, executableDirectory: executableDirectory)
+        try loadDevice(from: runtimeDirectory)
+    }
+
+    /// Constructs MLX's Metal device with `directory` as the current directory,
+    /// so MLX's relative `default.metallib` fallback resolves to it, then
+    /// restores the previous current directory.
+    private static func loadDevice(from directory: URL) throws {
+        let fileManager = FileManager.default
+        let previousDirectory = fileManager.currentDirectoryPath
+        guard fileManager.changeCurrentDirectoryPath(directory.path) else {
+            throw RuntimeError.changeDirectoryFailed(directory.path)
+        }
+        defer { fileManager.changeCurrentDirectoryPath(previousDirectory) }
+
+        let probe = MLXArray([1, 2, 3] as [Float]) * 2
+        eval(probe)
     }
 
     private static func compileAirFiles(
@@ -98,25 +136,6 @@ enum MLXMetalRuntime {
         }
     }
 
-    private static func install(metallib: URL, executableDirectory: URL) throws {
-        let resourceDirectory = executableDirectory.appendingPathComponent("Resources")
-        try FileManager.default.createDirectory(
-            at: resourceDirectory,
-            withIntermediateDirectories: true
-        )
-
-        for destination in [
-            executableDirectory.appendingPathComponent("mlx.metallib"),
-            resourceDirectory.appendingPathComponent("mlx.metallib"),
-            resourceDirectory.appendingPathComponent("default.metallib"),
-        ] {
-            if FileManager.default.fileExists(atPath: destination.path) {
-                try FileManager.default.removeItem(at: destination)
-            }
-            try FileManager.default.copyItem(at: metallib, to: destination)
-        }
-    }
-
     private static func run(_ executable: String, arguments: [String]) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
@@ -149,11 +168,14 @@ enum MLXMetalRuntime {
 
 private enum RuntimeError: Error, CustomStringConvertible {
     case commandFailed(String, [String], String)
+    case changeDirectoryFailed(String)
 
     var description: String {
         switch self {
         case .commandFailed(let executable, let arguments, let output):
             return ([executable] + arguments).joined(separator: " ") + "\n" + output
+        case .changeDirectoryFailed(let path):
+            return "Could not change the current directory to \(path)"
         }
     }
 }

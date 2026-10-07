@@ -6,6 +6,10 @@ the gate was written for), `HybridBatchIntegrationTests` is **2/2 green**, and
 `TrackAPrefixCacheTests` remains red — a fixture that cannot find wide-margin
 suffixes, not an engine defect. Details below; §1b is resolved, §2 is fixed.
 
+**Update 2026-10-07.** §4 added: the session prefix-cache parity gate's 8-token
+mismatch is a near-tie flip caused by kernel choice. The gate now asserts what
+is guaranteed and is green.
+
 Measured 2026-08-22 on an M4 Pro (48 GiB) and an M5 Max, and again at `40b4cf5`
 — the commit before the `MLXServe` → `MLXCat` rename, which is the only commit on
 `feat/oss-hygiene-bench` that touches `TrackA`/`TrackB`/`Seam`.
@@ -725,3 +729,45 @@ threshold) is the first thing to check.
 The SSD tier variant is machine-dependent, which is its own smell:
 M5 Max `byteExact=true, maxLogitError=0.98, checkedTokens=1` (passes its margin
 checks), M4 Pro `maxLogitError=1.875, checkedTokens=0`.
+
+## 4. Session prefix reuse is not bit-identical to a cold prefill: near-tie flips are expected (2026-10-07)
+
+`PrefixSchedulerIntegrationTests.testSessionPrefixCacheMatchesCacheDisabledForExtendedPrompt`
+(Qwen3-0.6B-4bit) asserted that 8 greedy tokens from a session-cached request
+equal those from a cache-disabled one. It was red on `main` (`83ce70d`) and at
+`58bed88`:
+
+```
+cached [151668, 271, 151668, 271, 32313, 11, 1077, 601]
+fresh  [151668, 271, 151668, 271, 32313, 11, 1077, 594]
+```
+
+**Cause: kernel choice, not a reuse defect.** The engine prefills a prompt up to
+its last token and runs that last token through the single-token decode kernel.
+So the warm request's session slot holds position 147 (its last prompt token) as
+the decode kernel computed it, while a cold run of the longer prompt computes
+position 147 with the prefill attention kernel. Both are valid; they differ in
+the last bf16 bits, and that difference propagates. Evidence (M4 Pro, prompt
+lengths 148 → 167):
+
+| path | step 7 token | note |
+|---|---|---|
+| engine, session cache | 601 | |
+| engine, cache off | 594 | |
+| manual: prefill 0–146, decode 147 alone, prefill suffix, decode last alone | **601** | reproduces the cached engine exactly |
+| manual: prefill all but the last, decode last alone | **594** | reproduces the fresh engine exactly |
+| manual: one prefill of all 167, or split at 147/148/512 | 594 | logits bit-identical to each other (max \|Δ\| 0.000) |
+
+- **The store returns exactly what was prefilled.** The restored slot is 148 positions of `KVCacheSimple`, bf16. It equals a cold prefill bit for bit at positions 0–146 and differs only at 147.
+- **The size of the effect.** Moving tokens between the prefill and decode kernels shifts single logits by up to 1.58. The step-7 top-1/top-2 margin is 0.44, so the token flips there; steps 0–6 agree.
+
+**What the test asserts now** (what is actually guaranteed):
+
+1. the cached request is served from the slot;
+2. the slot covers the whole warm prompt, and its KV equals a cold prefill bit for bit at every position the warm request prefilled;
+3. the cached, fresh and serial runs agree token for token until their first disagreement, and at that step the serial run's top-1/top-2 margin is below 4 logits (`kernelPathMarginTolerance`).
+
+A real reuse defect (a wrong offset, stale or missing positions) fails (2), or
+diverges early at a wide margin and fails (3). Closing the gap entirely is a
+design question (which kernel computes a slot's last prompt position), not a
+test fix.

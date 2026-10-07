@@ -79,6 +79,19 @@ final class PrefixSchedulerIntegrationTests: XCTestCase {
         XCTAssertEqual(stats.clearCount, 0)
     }
 
+    /// Largest top-1/top-2 logit margin at which a cached and an uncached run may
+    /// legitimately pick different tokens. The engine runs a prompt's last token
+    /// through the single-token decode kernel, so a session slot's last prompt
+    /// position is computed by a different (equally valid) kernel than a cold
+    /// prefill computes it. Measured on Qwen3-0.6B-4bit, moving tokens between the
+    /// prefill and decode kernels shifts single logits by up to 1.58; two logits
+    /// moving in opposite directions can close a gap of twice that. Rounded up.
+    private static let kernelPathMarginTolerance: Float = 4.0
+
+    /// Session prefix reuse is exact for every position the warm request
+    /// prefilled, and the cached run agrees with a cache-disabled run token for
+    /// token until the first near-tie. It is not bit-identical end to end: see
+    /// docs/KNOWN-FAILURES.md §4 (2026-10-07).
     func testSessionPrefixCacheMatchesCacheDisabledForExtendedPrompt() async throws {
         try MLXMetalRuntime.requireAvailable()
 
@@ -97,9 +110,32 @@ final class PrefixSchedulerIntegrationTests: XCTestCase {
             try await Self.evaluateSessionCorrectnessGate(context: context)
         }
 
-        XCTAssertEqual(result.cachedTokens, result.freshTokens)
-        XCTAssertEqual(result.fetchHits, 1)
+        // Reuse: the cached request was served from the warm request's slot.
+        XCTAssertEqual(result.cachedFetchHits, 1)
         XCTAssertGreaterThanOrEqual(result.stores, 1)
+
+        // The slot covers the whole warm prompt and its bytes are the prefill's
+        // bytes everywhere the warm request prefilled (all but its last token).
+        XCTAssertEqual(result.restoredTokenCount, result.warmPromptCount)
+        XCTAssertEqual(
+            result.prefilledPositionsDiffering, [],
+            "restored KV differs from a cold prefill at positions the warm request prefilled")
+
+        // Token agreement until a near-tie. At the first step where the cached,
+        // fresh and serial runs disagree, the serial run must be at a near-tie.
+        XCTAssertEqual(result.cachedTokens.count, result.freshTokens.count)
+        let steps = min(result.cachedTokens.count, result.freshTokens.count, result.serial.count)
+        let firstDisagreement = (0 ..< steps).first { step in
+            let serialToken = result.serial[step].token
+            return result.cachedTokens[step] != serialToken || result.freshTokens[step] != serialToken
+        }
+        if let step = firstDisagreement {
+            let margin = result.serial[step].margin
+            XCTAssertLessThan(
+                margin, Self.kernelPathMarginTolerance,
+                "cached \(result.cachedTokens) and fresh \(result.freshTokens) diverge at step \(step), "
+                    + "where the serial run's top-1/top-2 margin is \(margin): not a near-tie")
+        }
     }
 
     private static func evaluateGate(context: ModelContext) async throws -> PrefixSchedulerGateResult {
@@ -236,9 +272,20 @@ final class PrefixSchedulerIntegrationTests: XCTestCase {
         return prefixStore.stats
     }
 
+    private struct SessionCorrectnessResult {
+        let cachedTokens: [Int]
+        let freshTokens: [Int]
+        let serial: [(token: Int, margin: Float)]
+        let cachedFetchHits: Int
+        let stores: Int
+        let warmPromptCount: Int
+        let restoredTokenCount: Int
+        let prefilledPositionsDiffering: [Int]
+    }
+
     private static func evaluateSessionCorrectnessGate(
         context: ModelContext
-    ) async throws -> (cachedTokens: [Int], freshTokens: [Int], fetchHits: Int, stores: Int) {
+    ) async throws -> SessionCorrectnessResult {
         let parameters = GenerateParameters(maxTokens: 8, temperature: 0)
         let prefixTokens = try await makePrefixTokens(context: context, blockSize: 128)
         let first = prefixTokens + (try await tokenIDs(
@@ -268,6 +315,17 @@ final class PrefixSchedulerIntegrationTests: XCTestCase {
                 cacheSession: "session-correctness"
             )
         ])
+
+        let restored = try restoredPrefix(
+            store: prefixStore, sessionKey: "session-correctness", prompt: second)
+        let prefilledPositionsDiffering = try positionsDiffering(
+            restored: restored.layers,
+            fromColdPrefillOf: Array(first.dropLast()),
+            context: context,
+            parameters: parameters
+        )
+
+        let hitsBeforeCachedRequest = prefixStore.stats.fetchHitCount
         let cached = try await cachedEngine.generate([
             Request(
                 uid: "cached",
@@ -277,6 +335,7 @@ final class PrefixSchedulerIntegrationTests: XCTestCase {
                 cacheSession: "session-correctness"
             )
         ])["cached", default: []]
+        let cachedFetchHits = prefixStore.stats.fetchHitCount - hitsBeforeCachedRequest
 
         let freshEngine = MLXCatEngine(
             model: context.model,
@@ -292,12 +351,67 @@ final class PrefixSchedulerIntegrationTests: XCTestCase {
             )
         ])["fresh", default: []]
 
-        return (
-            cached,
-            fresh,
-            prefixStore.stats.fetchHitCount,
-            prefixStore.stats.storeCount
+        let serial = try serialTrace(
+            model: context.model,
+            tokens: second,
+            parameters: parameters,
+            steps: parameters.maxTokens ?? 8
+        ).map { (token: $0.token, margin: topOneTopTwoMargin($0.logits)) }
+
+        return SessionCorrectnessResult(
+            cachedTokens: cached,
+            freshTokens: fresh,
+            serial: serial,
+            cachedFetchHits: cachedFetchHits,
+            stores: prefixStore.stats.storeCount,
+            warmPromptCount: first.count,
+            restoredTokenCount: restored.matchedTokenCount,
+            prefilledPositionsDiffering: prefilledPositionsDiffering
         )
+    }
+
+    /// Fetches, reconstructs and releases the slot `prompt` would be served from.
+    private static func restoredPrefix(
+        store: SessionPrefixKVStore,
+        sessionKey: String,
+        prompt: [Int]
+    ) throws -> (matchedTokenCount: Int, layers: [SerializedKVLayer]) {
+        guard let hit = store.fetch(tokens: prompt, sessionKey: sessionKey) else {
+            XCTFail("the warm request left no session slot for the extended prompt")
+            return (0, [])
+        }
+        defer { store.release(hit) }
+        return (hit.matchedTokenCount, try store.reconstructCache(from: hit))
+    }
+
+    /// Positions in `0 ..< tokens.count` where any layer's restored keys or values
+    /// differ from a cold prefill of `tokens`.
+    private static func positionsDiffering(
+        restored: [SerializedKVLayer],
+        fromColdPrefillOf tokens: [Int],
+        context: ModelContext,
+        parameters: GenerateParameters
+    ) throws -> [Int] {
+        let cold = try context.model.newCache(parameters: parameters)
+        let input = LMInput.Text(tokens: MLXArray(tokens.map(Int32.init)))
+        _ = context.model(input[text: .newAxis], cache: cold, state: nil)
+        eval(cold)
+
+        var differing = Set<Int>()
+        for (layer, coldLayer) in zip(restored, cold) {
+            for (restoredArray, coldArray) in zip(layer.state, coldLayer.state) {
+                let positions = 0 ..< tokens.count
+                let difference = abs(
+                    restoredArray[0..., 0..., positions, 0...].asType(.float32)
+                        - coldArray[0..., 0..., positions, 0...].asType(.float32)
+                )
+                let perPosition = difference.max(axes: [0, 1, 3]).asArray(Float.self)
+                for (position, value) in perPosition.enumerated() where value > 0 {
+                    differing.insert(position)
+                }
+            }
+        }
+        return differing.sorted()
     }
 
     private static func serialTrace(

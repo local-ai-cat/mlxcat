@@ -6,6 +6,37 @@ are tags on `main`.
 
 ## [Unreleased]
 
+### Fixed
+- **Incremental `swift test` under Xcode 27.** The test bootstrap
+  (`MLXMetalRuntime`) no longer copies its metallib into the signed
+  `MLXCatTests.xctest` bundle, which made the next incremental run fail to
+  re-sign. The library lives in `.build/mlxcat-metal-runtime/` and reaches MLX
+  through its relative `default.metallib` fallback. A `.build` from before
+  this change can still hold the old copies in
+  `MLXCatTests.xctest/Contents/MacOS`. Delete them once (or build clean): the
+  re-sign fails at build time, before any test code could remove them.
+
+### Changed
+- **Session prefix parity gate.**
+  `PrefixSchedulerIntegrationTests.testSessionPrefixCacheMatchesCacheDisabledForExtendedPrompt`
+  no longer demands bit-identical greedy output from cached and cold runs. A
+  near-tie flip at step 8 on Qwen3-0.6B comes from kernel choice: the slot's
+  last prompt position comes from the decode kernel. The gate now asserts:
+  - the reused KV is bit-exact at every prefilled position;
+  - the first token disagreement, if any, falls on a near-tie.
+
+  Evidence in `docs/KNOWN-FAILURES.md` §4.
+- **`MLXCAT_WATCHDOG_TRIM_AFTER_EVICT` is ready to flip, still off.** Its
+  default is one constant, `MemoryWatchdogConfiguration.defaultTrimsAfterEviction`.
+  `0`/`false`/`never` now force the lever off explicitly. `MemoryWatchdogTests`
+  runs the reclaim ladder with the lever off and on.
+
+### Added
+- **Cat inference benchmark results, all four models**, in `bench/cat/`
+  (M4 Pro, default configuration). Hybrid prefix reuse takes Qwen3.5-4B's 8k
+  replay TTFT from 15.1 s to 0.58 s. Non-hybrid exact replays get no reuse with
+  the levers off.
+
 ## 2026-10-07 — `pin/prefix-reuse-2026-10-07`
 
 Everything on `main` since `pin/streaming-detokenizer-2026-09-08`, plus the
