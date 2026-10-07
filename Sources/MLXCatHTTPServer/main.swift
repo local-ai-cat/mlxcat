@@ -369,7 +369,10 @@ private func makeMemoryWatchdog<Loader: EnginePoolModelLoader>(
 ) -> MemoryWatchdog? {
     guard ceilingBytes > 0 else { return nil }
     return MemoryWatchdog(
-        configuration: MemoryWatchdogConfiguration(ceilingBytes: ceilingBytes),
+        configuration: MemoryWatchdogConfiguration(
+            ceilingBytes: ceilingBytes,
+            trimsAfterEviction: MemoryWatchdogConfiguration.trimsAfterEvictionFromEnvironment()
+        ),
         sampler: { Int64(Memory.activeMemory + Memory.cacheMemory) },
         reclaimer: ClosureMemoryWatchdogReclaimer(
             trimReclaimableCaches: { _ in

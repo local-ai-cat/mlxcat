@@ -1,3 +1,15 @@
+---
+living:
+  cadence: weekly
+  sources:
+    - scripts/donor-drift.sh
+    - docs/watch/cursors.json
+  checker: docs/watch/CHECKER.md
+  edit: open
+  owner: mlxcat
+  last_verified: 2026-10-02
+---
+
 # Engines: what mlxcat is benchmarked against, and what we watch
 
 Two lists. **Benchmarked** engines have (or are slated for) rows on
@@ -39,7 +51,7 @@ numbers come from in-app harnesses (see `bench/README.md` § Platforms). The
 | [ml-explore/mlx-swift-lm](https://github.com/ml-explore/mlx-swift-lm) | **dependency** — model loaders, KV caches; pinned by revision in `Package.swift` | Swift | both | pinned |
 | [ml-explore/mlx-swift](https://github.com/ml-explore/mlx-swift) | **dependency** — the framework; tag cadence lags `mlx` core | Swift/C++ | both | pinned |
 | [ml-explore/mlx](https://github.com/ml-explore/mlx) | core; kernel changes land here first (e.g. M5 neural-accelerator paths) | C++ | both | tracked |
-| [argmaxinc/WhisperKit](https://github.com/argmaxinc/WhisperKit) | **dependency** — `MLXCatSpeechWhisperKit` | Swift | both | pinned |
+| [argmaxinc/WhisperKit](https://github.com/argmaxinc/argmax-oss-swift) | **dependency** — `MLXCatSpeechWhisperKit`. The repo is now `argmaxinc/argmax-oss-swift`; the old URL redirects, so the pin still resolves | Swift | both | pinned |
 | [huggingface/swift-transformers](https://github.com/huggingface/swift-transformers) | **dependency** via the `atlas-open-sources` fork — tokenizers/Jinja | Swift | both | pinned (fork) |
 | [lmstudio-ai/mlx-engine](https://github.com/lmstudio-ai/mlx-engine) | disk-chunked KV (PR #326), continuous batching; 2026-08-19 "fix high memory during gemma4 image prefill" is directly relevant to our 16k memory work | Python | macOS | reference |
 | [Blaizzy/mlx-vlm](https://github.com/Blaizzy/mlx-vlm) | checkpoint authority for our VLM weights; DFlash/EAGLE-3/MTP spec-decode reference | Python | macOS | reference |
@@ -50,11 +62,17 @@ numbers come from in-app harnesses (see `bench/README.md` § Platforms). The
 | [exo-explore/exo](https://github.com/exo-explore/exo) · [mzbac/mlx_sharding](https://github.com/mzbac/mlx_sharding) | distributed/sharded MLX inference — out of scope for a single-device leaderboard, watched for the cluster idea | Python | macOS | watch |
 | [vllm-project/vllm](https://github.com/vllm-project/vllm) | scheduler design source (token-budget scheduling, chunked prefill, per-request RNG) — `docs/planning/GOAL-mlxserve-engine-hardening.md` | Python | — | reference |
 | [ml-explore/mlx-lm](https://github.com/ml-explore/mlx-lm) (lib) | the batched-decode mechanism mlxcat's Track B follows (`BatchKVCache`, ragged mask) | Python | — | reference |
-| DFlash 2 ([inco.ai](https://inco.ai/blog/dflash2)) | parallel spec-decode with released drafters for Qwen3.8-27B / Muse-Glimmer-30B; claims 2.7–3.4× decode — **license unverified** | — | macOS | ceiling measurement pending |
+| DFlash 2 ([inco.ai](https://inco.ai/blog/dflash2)) | parallel spec-decode with released drafters for Qwen3.8-27B / Muse-Glimmer-30B; claims 2.7–3.4× decode — the drafters' licence is unverified, but two open MLX implementations are now watched below (Apache-2.0 and MIT) | — | macOS | ceiling measurement pending |
 | [google-ai-edge/LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM) | wins Gemma-4 E2B on iPhone 17 Pro in neutral benchmarks (native `.litertlm` INT4-QAT on Metal) — the iOS competitor for Gemma | C++ | iOS, macOS | iOS comparison set |
 | Apple Foundation Models | the ~3B system model; the "why not just use Apple's" baseline on iOS 26+ | Swift API | iOS, macOS | iOS comparison set |
+| Apple Core AI | iOS 27 / macOS 27 runtime, successor to Core ML; runs exported `.aimodel` LLMs on GPU or Neural Engine. The neutral benchmark reports Qwen3-8B 4-bit at 94 tok/s on an M4 Max GPU vs MLX 90 under one protocol | Swift API | iOS, macOS | iOS comparison set |
 | [pytorch/executorch](https://github.com/pytorch/executorch) · [mlc-ai/mlc-llm](https://github.com/mlc-ai/mlc-llm) · [Anemll/Anemll](https://github.com/Anemll/Anemll) (ANE) | other on-device runtimes in the neutral iPhone benchmark set | C++ | iOS | iOS comparison set |
-| [john-rocky/apple-silicon-llm-bench](https://github.com/john-rocky/apple-silicon-llm-bench) → `edge-llm-bench` | the neutral Mac + iPhone + iPad benchmark (MLX Swift, llama.cpp, CoreML, LiteRT-LM, ExecuTorch, ANEMLL, Foundation Models); MIT; JSONL → `LEADERBOARD.md` with CI consistency checks — our schema mirrors its shape so rows can be cross-submitted | Swift | both | methodology reference |
+| [john-rocky/apple-silicon-llm-bench](https://github.com/john-rocky/apple-silicon-llm-bench) | the neutral Mac + iPhone + iPad benchmark (MLX Swift, llama.cpp, CoreML, LiteRT-LM, ExecuTorch, ANEMLL, Foundation Models); MIT; JSONL → `LEADERBOARD.md` with CI consistency checks — our schema mirrors its shape so rows can be cross-submitted. Since 2026-08 it mirrors `edge-llm-bench` (next row) | Swift | both | methodology reference |
+| [john-rocky/edge-llm-bench](https://github.com/john-rocky/edge-llm-bench) | where the neutral benchmark is developed now: macOS / iOS / Android, adds Apple Core AI and Cactus arms, thermal gating and session-keyed comparisons; MIT | Swift | both | methodology reference (added 2026-10-02) |
+| [vllm-project/vllm-metal](https://github.com/vllm-project/vllm-metal) | vLLM's scheduler and paged block manager on MLX, with a paged variable-length Metal attention kernel and M5 tensor-unit prefill — the live data point for the GPU-resident paged attention we did not pursue; Apache-2.0 | Python | macOS | reference (added 2026-10-02) |
+| [bstnxbt/dflash-mlx](https://github.com/bstnxbt/dflash-mlx) | DFlash block-diffusion speculative decoding on stock MLX; tape-replay rollback for gated-delta recurrent state; reports 3.0–3.7× decode on Qwen3.5-4B; Apache-2.0 | Python | macOS | spec-decode reference (added 2026-10-02) |
+| [ARahim3/mlx-dspark](https://github.com/ARahim3/mlx-dspark) | DSpark and DFlash drafters under one lossless verify loop, measured on an M4 Pro (Gemma-4 12B, Qwen3.8-27B, Qwen3-8B; short and 16k–32k contexts); MIT | Python | macOS | spec-decode reference (added 2026-10-02) |
+| [drumih/turbo-fieldfare](https://github.com/drumih/turbo-fieldfare) | Swift + Metal runtime that runs Gemma 4 26B-A4B in ~2 GB by streaming routed experts from SSD; publishes 103 measured experiments; Apache-2.0 | Swift | macOS | memory reference (added 2026-10-02) |
 
 ### Not pursued
 
@@ -71,10 +89,17 @@ five of the six benchmark models. Read it before optimising anything.
 
 ## Keeping this honest
 
+* This file is a **living document** (the `living:` block at the top): a weekly
+  pass follows [`docs/watch/CHECKER.md`](watch/CHECKER.md), appends what the
+  watched repos learned to [`docs/watch/LEARNINGS.md`](watch/LEARNINGS.md), and
+  advances the per-repo read cursors in
+  [`docs/watch/cursors.json`](watch/cursors.json). A monthly discovery pass
+  ([`docs/watch/DISCOVERY.md`](watch/DISCOVERY.md)) adds and retires repos.
 * `scripts/donor-drift.sh` prints, for every pinned dependency and every
-  watchlist repo, the newest release and the commits since our pin (with keyword
-  hits: cache, prefill, memory, batch, rope, gemma, qwen, kv, stream). The
-  `donor-drift.yml` workflow runs it weekly and upserts an issue in this repo.
+  watchlist repo, the newest release and the commits since our pin or since the
+  repo's read cursor (with keyword hits: cache, prefill, memory, batch, rope,
+  gemma, qwen, kv, stream). The `donor-drift.yml` workflow runs it weekly and
+  upserts an issue in this repo.
 * A watchlist entry becomes a benchmarked engine by adding a block to
   `bench/engines.json` — a launch template or an attach URL — nothing else.
 * Local clones of the reference engines live in `guest/` (gitignored), so the
@@ -84,6 +109,8 @@ Sources for the 2026-08 survey: [Ollama MLX blog](https://ollama.com/blog/mlx),
 [Ollama v0.30 stable MLX](https://runaihome.com/blog/ollama-v030-mlx-stable-upgrade-2026/),
 [MLX vs llama.cpp on Apple Silicon](https://yage.ai/share/mlx-apple-silicon-en-20260331.html),
 [Local LLM on iPhone: which runtime is fastest](https://rockyshikoku.medium.com/local-llm-on-iphone-which-runtime-is-actually-fastest-58096685481e),
-[awesome-mlx](https://github.com/raullenchai/awesome-mlx),
+[awesome-mlx](https://github.com/raullenchai/awesome-mlx) (a fork, quiet since
+2026-04; its maintained upstream is
+[antranapp/awesome-mlx](https://github.com/antranapp/awesome-mlx)),
 [vllm-mlx](https://github.com/waybarrios/vllm-mlx),
 [apple-silicon-llm-bench](https://github.com/john-rocky/apple-silicon-llm-bench).
