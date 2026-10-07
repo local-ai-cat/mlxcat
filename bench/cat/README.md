@@ -18,7 +18,7 @@ and the default configuration (no `MLXCAT_*` levers set). The harness stops
 the run if swap grows by more than 1 GiB, free disk drops under 40 GiB,
 battery drops under 30 % or memory pressure warns.
 
-The harness lives with the host app's tooling, not in this repo. Each results
+The harness is in [`harness/`](harness/) (since 2026-10-07; see `harness/HARNESS.md`). The coding suite has 16 tasks and runs on any model via `--coding-models`. Each results
 directory records the binary's SHA-256 and the mlxcat revision it was built
 from. Results are not leaderboard rows (`bench/results/` is for `bench/run.py`).
 
