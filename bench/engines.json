@@ -409,6 +409,58 @@
       },
       "notes": "Same binary, same ceiling, same everything as `mlxcat`; one env override. This arm is the discriminator the parity-gate regression needs, not a proposal."
     },
+    "mlxcat-admission-clear": {
+      "description": "mlxcat with the admission cache clear ON (MLXCAT_ADMISSION_CLEAR_CACHE=1): MLX's buffer cache is cleared once each time a prefilled row joins the decode batch, so prefill scratch that decode never reuses goes back before the 512-step interval. Idea from ml-explore/mlx-swift-lm#620. Read the pair `mlxcat` vs `mlxcat-admission-clear` as: what does the extra clear cost in TTFT and decode, against what it saves in peak footprint under concurrency. Off by default; see docs/LEVERS.md.",
+      "platforms": [
+        "macos",
+        "ios"
+      ],
+      "launch": {
+        "bin": "{repo}/.build/release/mlxcat-http",
+        "bin_env": "MLXCAT_HTTP_BIN",
+        "args": [
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "{port}",
+          "--model-dir",
+          "{model_root}",
+          "--memory-ceiling-bytes",
+          "{memory_ceiling_bytes}"
+        ],
+        "env": {
+          "MLXCAT_ADMISSION_CLEAR_CACHE": "1"
+        },
+        "port_base": 12400,
+        "ready_timeout_s": 120
+      }
+    },
+    "mlxcat-full-match": {
+      "description": "mlxcat with full-match prefix reuse ON (MLXCAT_PREFIX_FULL_MATCH_REUSE=1): a request whose whole prompt is already in the prefix cache reuses N-1 tokens and prefills only the last one, instead of being prefilled cold. The rule from Trans-N-ai/swama#123. Read the pair `mlxcat` vs `mlxcat-full-match` under --cache-modes warm, the exact replay this lever exists for; under cold the two arms should match. Off by default; see docs/LEVERS.md.",
+      "platforms": [
+        "macos",
+        "ios"
+      ],
+      "launch": {
+        "bin": "{repo}/.build/release/mlxcat-http",
+        "bin_env": "MLXCAT_HTTP_BIN",
+        "args": [
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "{port}",
+          "--model-dir",
+          "{model_root}",
+          "--memory-ceiling-bytes",
+          "{memory_ceiling_bytes}"
+        ],
+        "env": {
+          "MLXCAT_PREFIX_FULL_MATCH_REUSE": "1"
+        },
+        "port_base": 12440,
+        "ready_timeout_s": 120
+      }
+    },
     "mtplx": {
       "description": "MTPLX (pip mtplx) — native MTP speculative decoding on MLX. Runs its OWN MTP-bearing checkpoint, not the mlx-community file: a different quant, so a faster row is a caveat, not a win.",
       "platforms": [

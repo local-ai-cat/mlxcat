@@ -835,14 +835,26 @@ public enum TokenSampler {
             && parameters.xtcProbability == 0
     }
 
-    private static func applyTopP(_ logprobs: MLXArray, topP: Float) -> MLXArray {
-        let topP = MLXArray(topP)
-        let negInf = MLXArray(-Float.infinity)
-        let sortedIndices = argSort(logprobs, axis: -1)
-        let sortedLogprobs = takeAlong(logprobs, sortedIndices, axis: -1)
-        let cumulativeProbs = cumsum(exp(sortedLogprobs), axis: -1)
-        let filtered = MLX.where(cumulativeProbs .> (1 - topP), sortedLogprobs, negInf)
-        return putAlong(logprobs, sortedIndices, values: filtered, axis: -1)
+    /// Keep the smallest set of most likely tokens whose mass reaches `topP`.
+    ///
+    /// The old form kept tokens whose ascending cumulative probability exceeded
+    /// `1 - topP`. With a tiny `topP` that threshold rounds to 1.0, and the
+    /// cumulative sum of half-precision probabilities can end just below it, so
+    /// every token went to -inf and sampling returned an arbitrary token. Counting
+    /// the mass strictly above each token, in float32 and relative to the row's
+    /// own total, always leaves the most likely token (nothing is above it).
+    /// Ported from ml-explore/mlx-lm#1912.
+    static func applyTopP(_ logprobs: MLXArray, topP: Float) -> MLXArray {
+        let sortedLogprobs = sorted(logprobs, axis: -1)
+        let sortedProbs = exp(sortedLogprobs.asType(.float32))
+        let massAbove = cumsum(sortedProbs, axis: -1, reverse: true, inclusive: false)
+        let totalMass = massAbove[.ellipsis, ..<1] + sortedProbs[.ellipsis, ..<1]
+        let droppedCount = (massAbove .>= MLXArray(topP) * totalMass)
+            .sum(axis: -1, keepDims: true)
+            .asType(.int32)
+        let threshold = takeAlong(sortedLogprobs, droppedCount, axis: -1)
+        let negInf = MLXArray(-Float.infinity).asType(logprobs.dtype)
+        return MLX.where(logprobs .< threshold, negInf, logprobs)
     }
 
     private static func applyMinP(_ logprobs: MLXArray, minP: Float) -> MLXArray {

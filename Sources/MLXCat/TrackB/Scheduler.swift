@@ -47,6 +47,8 @@ public actor Scheduler {
     /// Hybrid prefix reuse (default on; `MLXCAT_HYBRID_PREFIX_REUSE=0` disables): capture recurrent-state checkpoints during
     /// prefill so hybrid models can resume a follow-up turn from the prefix cache.
     private let capturesRecurrentCheckpoints: Bool
+    /// See ``fullPromptMatchReuseEnabled(environment:)``.
+    private let reusesFullPromptMatch: Bool
     private let pressurePolicy: PressurePolicy
     private var waiting: [Request] = []
     private var running: [String: RunningRequest] = [:]
@@ -113,6 +115,7 @@ public actor Scheduler {
         self.schedulerManagedTextPrefill = schedulerManagedTextPrefill
         self.chunkIdlePrefill = chunkIdlePrefill
         self.capturesRecurrentCheckpoints = Self.hybridPrefixReuseEnabled()
+        self.reusesFullPromptMatch = Self.fullPromptMatchReuseEnabled()
         self.prefillsLastTokenAlone = Self.prefillsLastTokenAlone(
             usesWindowedKVCache: cacheCapabilities.usesWindowedKVCache
         )
@@ -153,6 +156,26 @@ public actor Scheduler {
         switch environment["MLXCAT_HYBRID_PREFIX_REUSE"]?.lowercased() {
         case "0", "false", "off": return false
         default: return true
+        }
+    }
+
+    /// Whether a prefix hit covering the WHOLE prompt is reused (off by default;
+    /// `MLXCAT_PREFIX_FULL_MATCH_REUSE=1` turns it on).
+    ///
+    /// A request identical to a stored one (a retry, a regenerate, a benchmark's
+    /// warm repeat) matches every prompt token, which leaves no token to prefill
+    /// and so no logits to sample from. Today that hit is released and the whole
+    /// prompt is prefilled cold. With the lever on, the store is asked again for
+    /// the prompt minus its last token: a trimmable cache comes back one token
+    /// short and only that token is prefilled; a hybrid slot resumes from its
+    /// deepest checkpoint, as any shorter match does. The same "reuse at most
+    /// N-1" rule is what Trans-N-ai/swama#123 and mlx-lm's prompt cache use.
+    public static func fullPromptMatchReuseEnabled(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Bool {
+        switch environment["MLXCAT_PREFIX_FULL_MATCH_REUSE"]?.lowercased() {
+        case "1", "true", "on": return true
+        default: return false
         }
     }
 
@@ -221,15 +244,31 @@ public actor Scheduler {
     /// `MLXCAT_DECODE_CLEAR_CACHE_STEPS=0` disables the periodic clear (any other
     /// non-negative integer sets the interval); `MLXCAT_IDLE_CLEAR_CACHE=0`
     /// disables the drain-to-idle clear.
+    ///
+    /// `MLXCAT_ADMISSION_CLEAR_CACHE=1` (off by default) also clears once each
+    /// time a prefilled row joins the decode batch. mlx-swift-lm does the
+    /// single-stream version of this, clearing on the first generated token
+    /// (ml-explore/mlx-swift-lm#620): a request shorter than the decode interval
+    /// otherwise never clears. Our idle release already covers back-to-back
+    /// requests; the case it does not cover is a server that never drains, where
+    /// each admission's prefill scratch (shaped `[1, chunk, ...]`, never reused
+    /// by `[B, 1, ...]` decode) sits on the free list until the next interval.
     public struct CacheReleasePolicy: Sendable, Equatable {
         /// Clear every N decode steps. Zero never clears.
         public var decodeStepInterval: Int
         /// Clear once each time the scheduler drains to fully idle.
         public var releasesWhenIdle: Bool
+        /// Clear once each time an admitted row finishes prefill.
+        public var releasesAfterAdmission: Bool
 
-        public init(decodeStepInterval: Int = 512, releasesWhenIdle: Bool = true) {
+        public init(
+            decodeStepInterval: Int = 512,
+            releasesWhenIdle: Bool = true,
+            releasesAfterAdmission: Bool = false
+        ) {
             self.decodeStepInterval = max(0, decodeStepInterval)
             self.releasesWhenIdle = releasesWhenIdle
+            self.releasesAfterAdmission = releasesAfterAdmission
         }
 
         /// mlx-lm's interval, plus the idle release it has no need for (its
@@ -249,6 +288,11 @@ public actor Scheduler {
             switch environment["MLXCAT_IDLE_CLEAR_CACHE"]?.lowercased() {
             case "0", "false", "never": policy.releasesWhenIdle = false
             case "1", "true", "always": policy.releasesWhenIdle = true
+            default: break
+            }
+            switch environment["MLXCAT_ADMISSION_CLEAR_CACHE"]?.lowercased() {
+            case "1", "true", "always": policy.releasesAfterAdmission = true
+            case "0", "false", "never": policy.releasesAfterAdmission = false
             default: break
             }
             return policy
@@ -557,6 +601,11 @@ public actor Scheduler {
         request: Request,
         sampling: SamplingParameters
     ) throws -> Response? {
+        if cacheReleasePolicy.releasesAfterAdmission {
+            // Only buffers already on MLX's free list go back; the row's cache
+            // and any pending graph keep theirs.
+            Memory.clearCache()
+        }
         let seededGeneratedTokens = resumeGeneratedTokens.removeValue(forKey: request.uid) ?? []
         let initialTokenID = row.initialGeneratedToken?.tokenID
         let newlyGeneratedTokens = initialTokenID.map { [$0] } ?? []
@@ -598,6 +647,13 @@ public actor Scheduler {
             running[request.uid]?.checkpoints = row.checkpoints
         } else {
             storeCompletedAdmissionPrefix(row, request: request)
+            // A row that finishes at admission (max_tokens 1, or EOS first) never
+            // reaches `running`, so the finish path below never releases its
+            // prefix lease. Without this the slot stays leased for good: no
+            // later fetch can see it and eviction skips it.
+            if let hit = row.prefixHit {
+                prefixStore?.release(hit)
+            }
         }
 
         guard let initialTokenID else { return nil }
@@ -836,9 +892,31 @@ public actor Scheduler {
         if prefixCacheEnabled,
             prefixCacheEligible,
             let prefixStore,
-            let hit = prefixStore.fetch(tokens: promptTokens, sessionKey: request.cacheSession)
+            var hit = prefixStore.fetch(tokens: promptTokens, sessionKey: request.cacheSession)
         {
             Self.prefixDebug("hit uid=\(request.uid) matched=\(hit.matchedTokenCount) of \(promptTokens.count)")
+            if hit.matchedTokenCount == promptTokens.count,
+                reusesFullPromptMatch,
+                promptTokens.count > 2
+            {
+                prefixStore.release(hit)
+                if let shorter = prefixStore.fetch(
+                    tokens: Array(promptTokens.dropLast()), sessionKey: request.cacheSession)
+                {
+                    Self.prefixDebug(
+                        "full-match reuse uid=\(request.uid) matched=\(shorter.matchedTokenCount) of \(promptTokens.count)")
+                    hit = shorter
+                } else {
+                    return prefillMissRow(
+                        request: request,
+                        sampling: sampling,
+                        promptTokens: promptTokens,
+                        promptTokensArray: promptTokensArray,
+                        storedPromptTokens: promptTokens,
+                        rowCache: rowCache
+                    )
+                }
+            }
             if hit.matchedTokenCount == promptTokens.count {
                 prefixStore.release(hit)
                 return prefillMissRow(

@@ -1,0 +1,199 @@
+{
+  "_comment": "Watch cursors. Per repo: the newest commit and release that a watch pass actually read, so the next pass reads from here instead of a fixed window. depth: read (release notes, merged PRs, code where needed) | skimmed (release notes or filtered titles only; re-read in full if something there matters) | baseline (added to the watchlist this pass; history before the cursor was not read). Advance a cursor only for repos the pass read. See docs/watch/CHECKER.md.",
+  "schema": 1,
+  "window_start_if_no_cursor_days": 60,
+  "repos": {
+    "ml-explore/mlx": {
+      "branch": "main",
+      "commit": "34635d4f1b3dbbed2b1eac5c2d90748e8d070d6c",
+      "commit_date": "2026-10-02",
+      "release": "v0.32.3",
+      "read_on": "2026-10-02",
+      "depth": "skimmed"
+    },
+    "ml-explore/mlx-swift": {
+      "branch": "main",
+      "commit": "19601207e9a0de51e03ee6ec0c3c5f3784275075",
+      "commit_date": "2026-09-30",
+      "release": "0.32.3",
+      "read_on": "2026-10-02",
+      "depth": "read"
+    },
+    "ml-explore/mlx-swift-lm": {
+      "branch": "main",
+      "commit": "9112faeeb023286bb15a3980922295167cc0c5c1",
+      "commit_date": "2026-10-02",
+      "release": "3.32.3",
+      "read_on": "2026-10-02",
+      "depth": "read"
+    },
+    "huggingface/swift-transformers": {
+      "branch": "main",
+      "commit": "af520cfccbbdc2127a0b77a1547fa47b7cd1f8d8",
+      "commit_date": "2026-09-23",
+      "release": "1.3.4",
+      "read_on": "2026-10-02",
+      "depth": "read"
+    },
+    "argmaxinc/argmax-oss-swift": {
+      "branch": "main",
+      "commit": "f4e5d6be37ec820614fb0d72037e76c22d4c16f7",
+      "commit_date": "2026-09-24",
+      "release": "v1.1.0",
+      "read_on": "2026-10-02",
+      "depth": "read"
+    },
+    "jundot/omlx": {
+      "branch": "main",
+      "commit": "be598043300d2483fb7ee3d7bdd9231de0e8f92a",
+      "commit_date": "2026-10-02",
+      "release": "v0.7.0",
+      "read_on": "2026-10-02",
+      "depth": "read"
+    },
+    "ml-explore/mlx-lm": {
+      "branch": "main",
+      "commit": "53b9af378278d6dd5dacac447edeb0f523b16253",
+      "commit_date": "2026-10-01",
+      "release": "v0.31.3",
+      "read_on": "2026-10-02",
+      "depth": "read"
+    },
+    "waybarrios/vllm-mlx": {
+      "branch": "main",
+      "commit": "7e9b90e6ee1e0dd40c774ab9606cdc4e05683a1e",
+      "commit_date": "2026-10-02",
+      "release": "v0.5.0",
+      "read_on": "2026-10-02",
+      "depth": "read"
+    },
+    "ddalcu/mlx-serve": {
+      "branch": "main",
+      "commit": "c25ec62b34686a4de37d51b5c8b335f864c1b514",
+      "commit_date": "2026-10-02",
+      "release": "v26.10.1",
+      "read_on": "2026-10-02",
+      "depth": "read"
+    },
+    "lmstudio-ai/mlx-engine": {
+      "branch": "main",
+      "commit": "86f20eb48bc79c528f682fabfc0384f799cdea0f",
+      "commit_date": "2026-09-25",
+      "release": null,
+      "read_on": "2026-10-02",
+      "depth": "read"
+    },
+    "Blaizzy/mlx-vlm": {
+      "branch": "main",
+      "commit": "66e68ce36816cb5134acba3b0d72c6271f35ba24",
+      "commit_date": "2026-10-02",
+      "release": "v0.7.4",
+      "read_on": "2026-10-02",
+      "depth": "read"
+    },
+    "Trans-N-ai/swama": {
+      "branch": "main",
+      "commit": "fb62009f46a2415e63c89860359565d7be252184",
+      "commit_date": "2026-10-02",
+      "release": "v2.4.0",
+      "read_on": "2026-10-02",
+      "depth": "read"
+    },
+    "SharpAI/SwiftLM": {
+      "branch": "main",
+      "commit": "7704c178e06297a4575edbd3a05a0bd49849b60c",
+      "commit_date": "2026-10-01",
+      "release": "b795",
+      "read_on": "2026-10-02",
+      "depth": "read"
+    },
+    "raullenchai/Rapid-MLX": {
+      "branch": "main",
+      "commit": "6aaf981b0691bff2dd8308b4a26561086883c490",
+      "commit_date": "2026-10-02",
+      "release": "v0.15.3",
+      "read_on": "2026-10-02",
+      "depth": "read"
+    },
+    "ollama/ollama": {
+      "branch": "main",
+      "commit": "b0c1ca4f7549d7acdfa52a7dcffc934bc63a43ce",
+      "commit_date": "2026-10-02",
+      "release": "v0.35.1-rc2",
+      "read_on": "2026-10-02",
+      "depth": "read"
+    },
+    "ggml-org/llama.cpp": {
+      "branch": "master",
+      "commit": "fb4b2737a808a3fb7c2117a498f43815dc9be53e",
+      "commit_date": "2026-10-02",
+      "release": "b11342",
+      "read_on": "2026-10-02",
+      "depth": "skimmed"
+    },
+    "google-ai-edge/LiteRT-LM": {
+      "branch": "main",
+      "commit": "1a14a1142095b7f5419b76cc58be7ab78fb5dee9",
+      "commit_date": "2026-10-02",
+      "release": "v0.17.1",
+      "read_on": "2026-10-02",
+      "depth": "skimmed"
+    },
+    "vllm-project/vllm": {
+      "branch": "main",
+      "commit": "01549796563f2e8bd0d6b08243cfb954a7b42ec8",
+      "commit_date": "2026-10-02",
+      "release": "v0.30.0",
+      "read_on": "2026-10-02",
+      "depth": "skimmed"
+    },
+    "john-rocky/apple-silicon-llm-bench": {
+      "branch": "main",
+      "commit": "61e243f9291f63c7576ce68205d2c759bc411ca7",
+      "commit_date": "2026-09-08",
+      "release": null,
+      "read_on": "2026-10-02",
+      "depth": "read"
+    },
+    "john-rocky/edge-llm-bench": {
+      "branch": "main",
+      "commit": "d0942bea08c5a9a496e51e16d4022d306878d7ad",
+      "commit_date": "2026-10-01",
+      "release": "gpu-profiling-numerics-repro-2026-09-29",
+      "read_on": "2026-10-02",
+      "depth": "baseline"
+    },
+    "vllm-project/vllm-metal": {
+      "branch": "main",
+      "commit": "e547f9259ab9957acaee6c4015c27094a736a0c5",
+      "commit_date": "2026-10-02",
+      "release": "v0.30.0.dev20261002053335",
+      "read_on": "2026-10-02",
+      "depth": "baseline"
+    },
+    "bstnxbt/dflash-mlx": {
+      "branch": "main",
+      "commit": "60803233af4589e18588b9bacbb03880801c828a",
+      "commit_date": "2026-08-20",
+      "release": "v0.1.10",
+      "read_on": "2026-10-02",
+      "depth": "baseline"
+    },
+    "ARahim3/mlx-dspark": {
+      "branch": "main",
+      "commit": "ed106c1e97ceeec204d23c976451512f4d42dfe1",
+      "commit_date": "2026-09-28",
+      "release": "v0.20.1",
+      "read_on": "2026-10-02",
+      "depth": "baseline"
+    },
+    "drumih/turbo-fieldfare": {
+      "branch": "main",
+      "commit": "77e8f9c02ec5345f4d9b633961c938bbafefb757",
+      "commit_date": "2026-09-27",
+      "release": "0.9.1",
+      "read_on": "2026-10-02",
+      "depth": "baseline"
+    }
+  }
+}
