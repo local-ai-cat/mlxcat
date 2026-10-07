@@ -210,6 +210,21 @@ read.
 
 **ml-explore/mlx-lm** (MIT; no release since v0.31.3, main active)
 
+- **A tiny top_p masked every token** —
+  [mlx-lm#1912](https://github.com/ml-explore/mlx-lm/pull/1912), 2026-09-24
+  `apply_top_p` kept tokens whose ascending cumulative probability exceeded
+  `1 - top_p`. With a tiny `top_p` that threshold rounds to 1.0, the cumulative
+  sum of fp16/bf16 probabilities can end just below it, every token goes to
+  `-inf`, and sampling returns an arbitrary token. The fix counts the float32 mass
+  strictly above each token against the row's own total, so the most likely token
+  always survives.
+  *mlxcat:* had the identical code (`TokenSampler.applyTopP`,
+  `Sources/MLXCat/TrackB/Sampling.swift`). Reproduced: at `top_p` 1e-8 every token
+  was masked in fp16 and bf16, and in one fp32 row. *Cost:* a few lines, default
+  path, no lever (a correctness fix, not a trade-off).
+  **Verdict: ported 2026-10-07** with `TopPSamplingTests` (their test, plus a
+  nucleus check at an ordinary threshold). It was missed on the 10-02 pass and
+  found in a reader's notes after the freeze.
 - **Read batch left padding on the host, not with a reduction** —
   [mlx-lm#1824](https://github.com/ml-explore/mlx-lm/pull/1824), 2026-09-04
   `left_padding.min().item()` launched a reduction and waited on it for a value
