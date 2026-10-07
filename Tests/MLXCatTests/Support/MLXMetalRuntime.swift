@@ -40,7 +40,11 @@ enum MLXMetalRuntime {
             file: file,
             line: line
         )
-        try removeLegacyBundleCopies(executableDirectory: executableDirectory)
+        // A metallib colocated with the binary wins MLX's search; nothing to do.
+        let colocatedLibrary = executableDirectory.appendingPathComponent("mlx.metallib")
+        if FileManager.default.fileExists(atPath: colocatedLibrary.path) {
+            return
+        }
 
         let root = repositoryRoot()
         let metalSourceDirectory = root
@@ -73,25 +77,6 @@ enum MLXMetalRuntime {
         )
 
         try loadDevice(from: runtimeDirectory)
-    }
-
-    /// Earlier versions of this file copied the metallib into the bundle. Removing
-    /// those copies puts the bundle back to what was signed, so a `.build` from
-    /// before the change re-signs cleanly too.
-    private static func removeLegacyBundleCopies(executableDirectory: URL) throws {
-        let resources = executableDirectory.appendingPathComponent("Resources")
-        let legacyCopies = [
-            executableDirectory.appendingPathComponent("mlx.metallib"),
-            resources.appendingPathComponent("mlx.metallib"),
-            resources.appendingPathComponent("default.metallib"),
-        ]
-        let fileManager = FileManager.default
-        for copy in legacyCopies where fileManager.fileExists(atPath: copy.path) {
-            try fileManager.removeItem(at: copy)
-        }
-        if let remaining = try? fileManager.contentsOfDirectory(atPath: resources.path), remaining.isEmpty {
-            try fileManager.removeItem(at: resources)
-        }
     }
 
     /// Constructs MLX's Metal device with `directory` as the current directory,
