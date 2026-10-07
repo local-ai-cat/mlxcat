@@ -4,6 +4,7 @@ import MLXHuggingFace
 import MLXLLM
 import MLXLMCommon
 import MLXCat
+@testable import MLXCatNative
 import Tokenizers
 import XCTest
 
@@ -70,6 +71,7 @@ final class FullPromptMatchReuseIntegrationTests: XCTestCase {
         guard let resolution = TestModelResolver.resolve() else {
             throw XCTSkip("Set MLXSERVE_TEST_MODEL to run the full-match reuse check.")
         }
+        try skipIfPrefixCacheIsOff(for: resolution.url)
         let container = try await LLMModelFactory.shared.loadContainer(
             from: resolution.url, using: #huggingFaceTokenizerLoader())
 
@@ -140,6 +142,7 @@ final class PrefixLeaseBalanceIntegrationTests: XCTestCase {
         guard let resolution = TestModelResolver.resolve() else {
             throw XCTSkip("Set MLXSERVE_TEST_MODEL to run the prefix lease balance check.")
         }
+        try skipIfPrefixCacheIsOff(for: resolution.url)
         let container = try await LLMModelFactory.shared.loadContainer(
             from: resolution.url, using: #huggingFaceTokenizerLoader())
         let base = (0 ..< 900).map { 1000 + ($0 * 7 % 4096) }
@@ -161,5 +164,13 @@ final class PrefixLeaseBalanceIntegrationTests: XCTestCase {
         XCTAssertEqual(partial.fetchHitCount, partial.releaseCount, "a lease leaked on the default path")
         XCTAssertGreaterThan(exact.fetchHitCount, 0)
         XCTAssertEqual(exact.fetchHitCount, exact.releaseCount, "a lease leaked on the full-match path")
+    }
+}
+
+/// The scheduler turns the prefix cache off for windowed-KV models (gemma 4,
+/// gpt-oss), so neither check has a hit to observe there.
+private func skipIfPrefixCacheIsOff(for modelURL: URL) throws {
+    if try NativeModelLoader(maxConcurrentRequests: 1).cacheCapabilities(in: modelURL).usesWindowedKVCache {
+        throw XCTSkip("The prefix cache is off for windowed-KV models; nothing to check.")
     }
 }
