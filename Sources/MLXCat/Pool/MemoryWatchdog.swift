@@ -22,8 +22,9 @@ public struct MemoryWatchdogConfiguration: Sendable, Equatable {
     public let ceilingBytes: Int64
     public let softFraction: Double
     public let hardFraction: Double
-    /// Clear the MLX cache once more after evicting, before re-sampling. Off by
-    /// default (`MLXCAT_WATCHDOG_TRIM_AFTER_EVICT=1` turns it on).
+    /// Clear the MLX cache once more after evicting, before re-sampling. The
+    /// default is ``defaultTrimsAfterEviction`` (off);
+    /// `MLXCAT_WATCHDOG_TRIM_AFTER_EVICT` overrides it either way.
     ///
     /// The sampler counts active memory plus MLX's free-list cache. An evicted
     /// model's weights do not leave that sum when the pool drops it: they move
@@ -43,11 +44,17 @@ public struct MemoryWatchdogConfiguration: Sendable, Equatable {
     public static let defaultSoftFraction = 0.80
     public static let defaultHardFraction = 0.92
 
+    /// The shipped default for ``trimsAfterEviction``. Both the initializer and
+    /// ``trimsAfterEvictionFromEnvironment(_:)`` fall back to it, and
+    /// `MemoryWatchdogTests` runs the ladder with the lever on and off, so
+    /// flipping the default is this one line.
+    public static let defaultTrimsAfterEviction = false
+
     public init(
         ceilingBytes: Int64,
         softFraction: Double = defaultSoftFraction,
         hardFraction: Double = defaultHardFraction,
-        trimsAfterEviction: Bool = false
+        trimsAfterEviction: Bool = defaultTrimsAfterEviction
     ) {
         self.trimsAfterEviction = trimsAfterEviction
         self.ceilingBytes = max(0, ceilingBytes)
@@ -58,13 +65,15 @@ public struct MemoryWatchdogConfiguration: Sendable, Equatable {
         self.hardFraction = clampedHard
     }
 
-    /// `MLXCAT_WATCHDOG_TRIM_AFTER_EVICT`: `1`/`true`/`always` on, anything else off.
+    /// `MLXCAT_WATCHDOG_TRIM_AFTER_EVICT`: `1`/`true`/`always` on,
+    /// `0`/`false`/`never` off, unset or anything else ``defaultTrimsAfterEviction``.
     public static func trimsAfterEvictionFromEnvironment(
         _ environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> Bool {
         switch environment["MLXCAT_WATCHDOG_TRIM_AFTER_EVICT"]?.lowercased() {
         case "1", "true", "always": return true
-        default: return false
+        case "0", "false", "never": return false
+        default: return defaultTrimsAfterEviction
         }
     }
 

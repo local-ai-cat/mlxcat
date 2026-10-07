@@ -39,10 +39,26 @@ private actor FakeMemoryWorld: MemoryWatchdogReclaimer {
     func recordedEvents() -> [String] { events }
 }
 
-final class MemoryWatchdogTests: XCTestCase {
+/// The reclaim ladder, run with the shipped default for
+/// `MLXCAT_WATCHDOG_TRIM_AFTER_EVICT`. The two subclasses below run every test
+/// here again with the lever pinned off and on, so flipping
+/// ``MemoryWatchdogConfiguration/defaultTrimsAfterEviction`` needs no test edit.
+class MemoryWatchdogTests: XCTestCase {
+    /// Overridden by the subclasses to pin the lever.
+    var trimsAfterEviction: Bool { MemoryWatchdogConfiguration.defaultTrimsAfterEviction }
+
     // 100-byte ceiling => soft 80, hard 92 with the conservative defaults.
     private func config(ceiling: Int64 = 100) -> MemoryWatchdogConfiguration {
-        MemoryWatchdogConfiguration(ceilingBytes: ceiling)
+        MemoryWatchdogConfiguration(ceilingBytes: ceiling, trimsAfterEviction: trimsAfterEviction)
+    }
+
+    /// The events an eviction step records: `evict(target)`, followed by a
+    /// second `trim(target)` when the lever is on.
+    private func evictStep(_ targetBytes: Int64) -> [String] {
+        if trimsAfterEviction {
+            return ["evict(\(targetBytes))", "trim(\(targetBytes))"]
+        }
+        return ["evict(\(targetBytes))"]
     }
 
     private func watchdog(world: FakeMemoryWorld, ceiling: Int64 = 100) -> MemoryWatchdog {
@@ -94,7 +110,8 @@ final class MemoryWatchdogTests: XCTestCase {
 
     func testPollTrimsBeforeEvictingAndRecovers() async throws {
         // Start at 95 (over hard). Trim frees 10 -> 85 (still >= soft 80),
-        // so evict runs and frees 10 -> 75 (< soft) => recovers to ok.
+        // so evict runs and frees 10 -> 75 (< soft) => recovers to ok. With the
+        // lever on, the second trim frees 10 more (65): still ok.
         let world = FakeMemoryWorld(usage: 95, trimFrees: 10, evictFrees: 10)
         let guardActor = watchdog(world: world)
 
@@ -102,7 +119,7 @@ final class MemoryWatchdogTests: XCTestCase {
 
         XCTAssertEqual(level, .ok)
         let events = await world.recordedEvents()
-        XCTAssertEqual(events, ["trim(15)", "evict(5)"])
+        XCTAssertEqual(events, ["trim(15)"] + evictStep(5))
         let blocked = await guardActor.admissionsBlocked
         XCTAssertFalse(blocked)
     }
@@ -130,7 +147,7 @@ final class MemoryWatchdogTests: XCTestCase {
         let blocked = await guardActor.admissionsBlocked
         XCTAssertTrue(blocked)
         let events = await world.recordedEvents()
-        XCTAssertEqual(events, ["trim(8)", "evict(8)"])
+        XCTAssertEqual(events, ["trim(8)"] + evictStep(8))
     }
 
     func testPollStaysHardWhenReclaimInsufficient() async throws {
@@ -163,7 +180,7 @@ final class MemoryWatchdogTests: XCTestCase {
         try await guardActor.checkAdmission(additionalBytes: 10)
 
         let events = await world.recordedEvents()
-        XCTAssertEqual(events, ["trim(8)", "evict(8)"])
+        XCTAssertEqual(events, ["trim(8)"] + evictStep(8))
     }
 
     func testCheckAdmissionDeniesWhenReclaimInsufficient() async throws {
@@ -181,6 +198,8 @@ final class MemoryWatchdogTests: XCTestCase {
             XCTAssertEqual(current, 90)
             XCTAssertEqual(ceiling, 92)
         }
+        let events = await world.recordedEvents()
+        XCTAssertEqual(events, ["trim(8)"] + evictStep(8))
     }
 
     func testRecoveryUnblocksAfterUsageDrops() async throws {
@@ -197,6 +216,14 @@ final class MemoryWatchdogTests: XCTestCase {
         blocked = await guardActor.admissionsBlocked
         XCTAssertFalse(blocked)
     }
+}
+
+final class MemoryWatchdogLeverOffTests: MemoryWatchdogTests {
+    override var trimsAfterEviction: Bool { false }
+}
+
+final class MemoryWatchdogLeverOnTests: MemoryWatchdogTests {
+    override var trimsAfterEviction: Bool { true }
 }
 
 /// MLX's accounting as the live sampler sees it: active + free-list cache.
@@ -250,15 +277,26 @@ final class MemoryWatchdogTrimAfterEvictionTests: XCTestCase {
         )
     }
 
-    func testOffByDefault() {
-        XCTAssertFalse(MemoryWatchdogConfiguration(ceilingBytes: 100).trimsAfterEviction)
-        XCTAssertFalse(MemoryWatchdogConfiguration.trimsAfterEvictionFromEnvironment([:]))
-        XCTAssertFalse(
+    /// The initializer and an unset (or unrecognised) variable both follow the
+    /// one declared default; explicit values override it either way.
+    func testDefaultComesFromOneConstant() {
+        let shipped = MemoryWatchdogConfiguration.defaultTrimsAfterEviction
+        XCTAssertEqual(MemoryWatchdogConfiguration(ceilingBytes: 100).trimsAfterEviction, shipped)
+        XCTAssertEqual(MemoryWatchdogConfiguration.trimsAfterEvictionFromEnvironment([:]), shipped)
+        XCTAssertEqual(
             MemoryWatchdogConfiguration.trimsAfterEvictionFromEnvironment(
-                ["MLXCAT_WATCHDOG_TRIM_AFTER_EVICT": "0"]))
-        XCTAssertTrue(
-            MemoryWatchdogConfiguration.trimsAfterEvictionFromEnvironment(
-                ["MLXCAT_WATCHDOG_TRIM_AFTER_EVICT": "1"]))
+                ["MLXCAT_WATCHDOG_TRIM_AFTER_EVICT": "maybe"]),
+            shipped)
+        for off in ["0", "false", "never", "FALSE"] {
+            XCTAssertFalse(
+                MemoryWatchdogConfiguration.trimsAfterEvictionFromEnvironment(
+                    ["MLXCAT_WATCHDOG_TRIM_AFTER_EVICT": off]), off)
+        }
+        for on in ["1", "true", "always", "True"] {
+            XCTAssertTrue(
+                MemoryWatchdogConfiguration.trimsAfterEvictionFromEnvironment(
+                    ["MLXCAT_WATCHDOG_TRIM_AFTER_EVICT": on]), on)
+        }
     }
 
     /// Today's behaviour, pinned: the evicted bytes are still counted (as cache)
