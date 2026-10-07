@@ -435,6 +435,32 @@
         "ready_timeout_s": 120
       }
     },
+    "mlxcat-full-match": {
+      "description": "mlxcat with full-match prefix reuse ON (MLXCAT_PREFIX_FULL_MATCH_REUSE=1): a request whose whole prompt is already in the prefix cache reuses N-1 tokens and prefills only the last one, instead of being prefilled cold. The rule from Trans-N-ai/swama#123. Read the pair `mlxcat` vs `mlxcat-full-match` under --cache-modes warm, the exact replay this lever exists for; under cold the two arms should match. Off by default; see docs/LEVERS.md.",
+      "platforms": [
+        "macos",
+        "ios"
+      ],
+      "launch": {
+        "bin": "{repo}/.build/release/mlxcat-http",
+        "bin_env": "MLXCAT_HTTP_BIN",
+        "args": [
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "{port}",
+          "--model-dir",
+          "{model_root}",
+          "--memory-ceiling-bytes",
+          "{memory_ceiling_bytes}"
+        ],
+        "env": {
+          "MLXCAT_PREFIX_FULL_MATCH_REUSE": "1"
+        },
+        "port_base": 12440,
+        "ready_timeout_s": 120
+      }
+    },
     "mtplx": {
       "description": "MTPLX (pip mtplx) — native MTP speculative decoding on MLX. Runs its OWN MTP-bearing checkpoint, not the mlx-community file: a different quant, so a faster row is a caveat, not a win.",
       "platforms": [
