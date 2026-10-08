@@ -12,6 +12,41 @@ struct NativeChatHistoryTests {
         #expect(NativeModelEngineError.generationFailed("image preparation failed").localizedDescription == "image preparation failed")
     }
 
+    @Test("Gemma tool images survive its text-only tool-response template", arguments: [false, true])
+    func toolImagePlaceholder(preserveReasoning: Bool) throws {
+        let request = try OpenAIChatRequest.parse(Data(#"{"model":"gemma-4-E2B","messages":[{"role":"user","content":"inspect"},{"role":"assistant","content":null,"tool_calls":[{"id":"a","type":"function","function":{"name":"snapshot","arguments":"{}"}}]},{"role":"tool","tool_call_id":"a","content":[{"type":"text","text":"rendered"},{"type":"image_url","image_url":{"url":"https://example.invalid/frame.png"}}]}]}"#.utf8))
+        var messages = request.messages
+        if preserveReasoning {
+            messages[1] = OpenAIChatMessage(role: "assistant", content: "", reasoningContent: "inspect it",
+                                            toolCalls: messages[1].toolCalls)
+        }
+        var chat = try messages.map {
+            Chat.Message(role: try #require(Chat.Message.Role(rawValue: $0.role)), content: $0.content,
+                         tool: try NativeChatHistory.toolMetadata(for: $0))
+        }
+        chat[2].images = [.url(URL(fileURLWithPath: "/fixture/frame.png"))]
+        let input = try NativeChatHistory.preservingReasoning(in: UserInput(chat: chat), messages: messages, modelID: "gemma-4-E2B")
+        guard case .messages(let rendered) = input.prompt else {
+            Issue.record("Expected formatted tool history")
+            return
+        }
+        let parts = try #require(rendered[2]["content"] as? [[String: any Sendable]])
+        let templateText = parts.filter { $0["type"] as? String == "text" }.compactMap { $0["text"] as? String }.joined()
+        #expect(templateText == "<|image|>rendered")
+        #expect(input.images.count == 1)
+        #expect(rendered[2]["role"] as? String == "tool")
+        #expect((rendered[1]["reasoning_content"] as? String) == (preserveReasoning ? "inspect it" : nil))
+    }
+
+    @Test("Gemma rejects assistant image plus tool calls before image ordering can change")
+    func rejectsMixedAssistantMedia() throws {
+        let request = try OpenAIChatRequest.parse(Data(#"{"model":"gemma-4-E2B","messages":[{"role":"assistant","content":[{"type":"image_url","image_url":{"url":"https://example.invalid/a.png"}}],"tool_calls":[{"id":"a","type":"function","function":{"name":"snapshot","arguments":"{}"}}]},{"role":"tool","tool_call_id":"a","content":[{"type":"image_url","image_url":{"url":"https://example.invalid/b.png"}}]}]}"#.utf8))
+        let input = UserInput(chat: [])
+        #expect(throws: NativeChatHistory.HistoryError.assistantMediaWithToolCalls) {
+            try NativeChatHistory.preservingReasoning(in: input, messages: request.messages, modelID: request.model)
+        }
+    }
+
     @Test("Cancellation remains distinct from normal completion")
     func cancellationIsNotStop() {
         #expect(openAIFinishReason(.cancelled) == "cancelled")
