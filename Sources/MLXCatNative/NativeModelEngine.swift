@@ -172,6 +172,9 @@ public final class NativeModelEngine: @unchecked Sendable {
                         }
                         guard response.token >= 0 else {
                             if response.finishReason != nil {
+                                continuation.yield(OpenAIChatChunk(text: "", tokenID: response.token,
+                                    finishReason: openAIFinishReason(response.finishReason),
+                                    cachedPromptTokens: response.cachedPromptTokens))
                                 break
                             }
                             continue
@@ -237,13 +240,15 @@ public final class NativeModelEngine: @unchecked Sendable {
         from request: OpenAIChatRequest,
         reasoningEffort: ReasoningEffortTemplateValue
     ) throws -> UserInput {
-        UserInput(
-            chat: try injectedMessages(from: request).map(chatMessage),
+        let messages = try injectedMessages(from: request)
+        let input = UserInput(
+            chat: try messages.map(chatMessage),
             tools: toolSpecDictionaries(
                 from: selectOpenAITools(tools: request.tools, toolChoice: request.toolChoice)
             ),
             additionalContext: additionalContext(from: request, reasoningEffort: reasoningEffort)
         )
+        return try NativeChatHistory.preservingReasoning(in: input, messages: messages, modelID: modelID)
     }
 
     private func prepareChatInput(_ request: OpenAIChatRequest) async throws -> LMInput {
@@ -575,13 +580,13 @@ public final class NativeModelEngine: @unchecked Sendable {
     private func chatMessage(from message: OpenAIChatMessage) throws -> Chat.Message {
         let role = Chat.Message.Role(rawValue: message.role) ?? .user
         let images = try message.imageReferences.map(image)
-        // TODO(M6b): render prior assistant tool_calls once OpenAIChatMessage carries them.
         return Chat.Message(
             role: role,
             content: message.content,
             images: images,
             videos: try message.videoReferences.map { try media($0, kind: .video) }.map { .url($0) },
-            audios: try message.audioReferences.map { try media($0, kind: .audio) }.map { .url($0) }
+            audios: try message.audioReferences.map { try media($0, kind: .audio) }.map { .url($0) },
+            tool: try NativeChatHistory.toolMetadata(for: message)
         )
     }
 

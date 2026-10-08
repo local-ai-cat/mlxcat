@@ -46,10 +46,25 @@ public struct OpenAIChatMediaReference: Sendable, Equatable {
     }
 }
 
+public struct OpenAIChatToolCall: Sendable, Equatable {
+    public let id: String
+    public let name: String
+    public let arguments: String
+
+    public init(id: String, name: String, arguments: String) {
+        self.id = id
+        self.name = name
+        self.arguments = arguments
+    }
+}
+
 public struct OpenAIChatMessage: Sendable {
     public let role: String
     public let content: String
     public let reasoningContent: String?
+    public let toolCalls: [OpenAIChatToolCall]
+    public let toolCallID: String?
+    public let toolName: String?
     public let imageReferences: [OpenAIChatImageReference]
     /// Audio the model consumes. Audio/video-capable models (gemma-4) use them; models
     /// without those towers ignore them. There is deliberately NO text-description
@@ -62,6 +77,9 @@ public struct OpenAIChatMessage: Sendable {
         role: String,
         content: String,
         reasoningContent: String? = nil,
+        toolCalls: [OpenAIChatToolCall] = [],
+        toolCallID: String? = nil,
+        toolName: String? = nil,
         imageReferences: [OpenAIChatImageReference] = [],
         audioReferences: [OpenAIChatMediaReference] = [],
         videoReferences: [OpenAIChatMediaReference] = []
@@ -69,6 +87,9 @@ public struct OpenAIChatMessage: Sendable {
         self.role = role
         self.content = content
         self.reasoningContent = reasoningContent
+        self.toolCalls = toolCalls
+        self.toolCallID = toolCallID
+        self.toolName = toolName
         self.imageReferences = imageReferences
         self.audioReferences = audioReferences
         self.videoReferences = videoReferences
@@ -1577,11 +1598,15 @@ public extension OpenAIChatRequest {
             throw OpenAIServerError.missingField("messages")
         }
 
-        let messages = rawMessages.compactMap { raw -> OpenAIChatMessage? in
+        let messages = try rawMessages.compactMap { raw -> OpenAIChatMessage? in
             guard let role = raw["role"] as? String else { return nil }
             let reasoningContent = raw["reasoning_content"] as? String
+            let toolCalls = try parseToolCalls(raw["tool_calls"])
+            let toolCallID = raw["tool_call_id"] as? String
+            let toolName = raw["name"] as? String
             if let content = raw["content"] as? String {
-                return OpenAIChatMessage(role: role, content: content, reasoningContent: reasoningContent)
+                return OpenAIChatMessage(role: role, content: content, reasoningContent: reasoningContent,
+                                         toolCalls: toolCalls, toolCallID: toolCallID, toolName: toolName)
             }
             if let parts = raw["content"] as? [[String: Any]] {
                 let text = parts.compactMap { part in
@@ -1592,10 +1617,14 @@ public extension OpenAIChatRequest {
                     role: role,
                     content: text,
                     reasoningContent: reasoningContent,
+                    toolCalls: toolCalls, toolCallID: toolCallID, toolName: toolName,
                     imageReferences: imageReferences,
                     audioReferences: parts.compactMap { Self.mediaReference(from: $0, kind: .audio) },
                     videoReferences: parts.compactMap { Self.mediaReference(from: $0, kind: .video) }
                 )
+            }
+            if role == "assistant", !toolCalls.isEmpty, raw["content"] == nil || raw["content"] is NSNull {
+                return OpenAIChatMessage(role: role, content: "", reasoningContent: reasoningContent, toolCalls: toolCalls)
             }
             return nil
         }
@@ -1761,6 +1790,25 @@ public extension OpenAIChatRequest {
             converted[key] = jsonValue
         }
         return converted
+    }
+
+    private static func parseToolCalls(_ value: Any?) throws -> [OpenAIChatToolCall] {
+        guard let value else { return [] }
+        guard let calls = value as? [[String: Any]] else { throw OpenAIServerError.invalidJSON }
+        return try calls.map { call in
+            guard let id = call["id"] as? String,
+                  let function = call["function"] as? [String: Any],
+                  let name = function["name"] as? String else { throw OpenAIServerError.invalidJSON }
+            let arguments: String
+            if let string = function["arguments"] as? String {
+                arguments = string
+            } else if let object = function["arguments"] as? [String: Any] {
+                arguments = String(decoding: try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]), as: UTF8.self)
+            } else {
+                throw OpenAIServerError.invalidJSON
+            }
+            return OpenAIChatToolCall(id: id, name: name, arguments: arguments)
+        }
     }
 
     private static func parseTools(_ value: Any?) throws -> [OpenAIJSONValue]? {
