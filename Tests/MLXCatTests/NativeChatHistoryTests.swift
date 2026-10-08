@@ -7,6 +7,11 @@ import MLXVLM
 
 @Suite("Native structured tool history")
 struct NativeChatHistoryTests {
+    @Test("Generation failures retain an actionable localized description")
+    func failureDescription() {
+        #expect(NativeModelEngineError.generationFailed("image preparation failed").localizedDescription == "image preparation failed")
+    }
+
     @Test("Cancellation remains distinct from normal completion")
     func cancellationIsNotStop() {
         #expect(openAIFinishReason(.cancelled) == "cancelled")

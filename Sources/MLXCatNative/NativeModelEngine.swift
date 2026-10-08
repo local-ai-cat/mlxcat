@@ -1480,10 +1480,12 @@ public struct NativeModelLoader: EnginePoolModelLoader {
     ]
 }
 
-private enum NativeModelEngineError: Error, CustomStringConvertible {
+enum NativeModelEngineError: LocalizedError, CustomStringConvertible {
     case generationFailed(String)
     case invalidPrompt
     case invalidImageReference(String)
+
+    var errorDescription: String? { description }
 
     var description: String {
         switch self {
