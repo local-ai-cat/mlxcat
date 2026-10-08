@@ -7,6 +7,13 @@ import MLXVLM
 
 @Suite("Native structured tool history")
 struct NativeChatHistoryTests {
+    @Test("Cancellation remains distinct from normal completion")
+    func cancellationIsNotStop() {
+        #expect(openAIFinishReason(.cancelled) == "cancelled")
+        #expect(openAIFinishReason(.length) == "length")
+        #expect(openAIFinishReason(.stop) == "stop")
+    }
+
     @Test("HTTP preserves null-content calls, reasoning and linked results")
     func parsesStructuredHistory() throws {
         let body = Data(#"{"model":"gemma-4-E2B","messages":[{"role":"user","content":"go"},{"role":"assistant","content":null,"reasoning_content":"inspect","tool_calls":[{"id":"a","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"index.html\"}"}}]},{"role":"tool","tool_call_id":"a","content":"source"}]}"#.utf8)

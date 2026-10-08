@@ -1497,16 +1497,16 @@ private enum NativeModelEngineError: Error, CustomStringConvertible {
     }
 }
 
-private func openAIFinishReason(_ finishReason: FinishReason?) -> String? {
+func openAIFinishReason(_ finishReason: FinishReason?) -> String? {
     switch finishReason {
     case .stop:
         return "stop"
     case .length:
         return "length"
     case .cancelled:
-        return "stop"
+        return "cancelled"
     case .failed:
-        return "stop"
+        return "error"
     case nil:
         return nil
     }
