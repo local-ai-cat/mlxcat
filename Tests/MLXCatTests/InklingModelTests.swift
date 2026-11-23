@@ -48,24 +48,35 @@ final class InklingModelTests: XCTestCase {
             cacheCapabilities: .init(usesWindowedKVCache: true),
             serializationPolicy: .always, schedulerManagedTextPrefill: true, chunkIdlePrefill: true,
             windowedLayerDecoder: InklingVisitCache.restore, prefill: .init(stepSize: 2))
-        let stream = try await engine.startChatCompletion(.init(
-            model: "Inkling-2-Mini-test", messages: [.init(role: "user", content: "Hi")],
-            maxTokens: 2, stream: true, enableThinking: false))
-        XCTAssertEqual(stream.promptTokens, 6)
-        var chunks: [OpenAIChatChunk] = []
-        for try await chunk in stream.chunks { chunks.append(chunk) }
-        XCTAssertEqual(chunks.count, 2)
-        XCTAssertTrue(chunks.allSatisfy { (0..<8).contains($0.tokenID) && !$0.text.isEmpty })
-        XCTAssertEqual(chunks.last?.finishReason, "length")
-        XCTAssertEqual(chunks.first?.cachedPromptTokens, 0)
+        func generate(_ messages: [OpenAIChatMessage], session: String) async throws
+            -> (count: Int, chunks: [OpenAIChatChunk])
+        {
+            let stream = try await engine.startChatCompletion(.init(
+                model: "Inkling-2-Mini-test", messages: messages,
+                maxTokens: 2, stream: true, enableThinking: false, cacheSession: session))
+            var chunks: [OpenAIChatChunk] = []
+            for try await chunk in stream.chunks { chunks.append(chunk) }
+            return (stream.promptTokens, chunks)
+        }
 
-        let warm = try await engine.startChatCompletion(.init(
-            model: "Inkling-2-Mini-test", messages: [.init(role: "user", content: "Hi")],
-            maxTokens: 2, stream: true, enableThinking: false))
-        var warmChunks: [OpenAIChatChunk] = []
-        for try await chunk in warm.chunks { warmChunks.append(chunk) }
-        XCTAssertEqual(warmChunks.map(\.tokenID), chunks.map(\.tokenID))
-        XCTAssertEqual(warmChunks.first?.cachedPromptTokens, 4)
+        let initial: [OpenAIChatMessage] = [.init(role: "user", content: "Hi")]
+        let cold = try await generate(initial, session: "conversation")
+        XCTAssertEqual(cold.count, 6)
+        XCTAssertEqual(cold.chunks.count, 2)
+        XCTAssertTrue(cold.chunks.allSatisfy { (0..<8).contains($0.tokenID) && !$0.text.isEmpty })
+        XCTAssertEqual(cold.chunks.last?.finishReason, "length")
+        XCTAssertEqual(cold.chunks.first?.cachedPromptTokens, 0)
+
+        let next = initial + [
+            .init(role: "assistant", content: cold.chunks.map(\.text).joined()),
+            .init(role: "user", content: "Follow up"),
+        ]
+        let warm = try await generate(next, session: "conversation")
+        let uncached = try await generate(next, session: "separate")
+        XCTAssertEqual(warm.count, 9)
+        XCTAssertEqual(warm.chunks.map(\.tokenID), uncached.chunks.map(\.tokenID))
+        XCTAssertEqual(warm.chunks.first?.cachedPromptTokens, 4)
+        XCTAssertEqual(uncached.chunks.first?.cachedPromptTokens, 0)
         XCTAssertEqual(engine.prefixCacheStats().fetchHitCount, 1)
     }
 
@@ -74,7 +85,10 @@ final class InklingModelTests: XCTestCase {
         let eosToken: String? = nil
         let unknownToken: String? = nil
 
-        func encode(text: String, addSpecialTokens: Bool) -> [Int] { [1, 3, 2, 4, 5, 4] }
+        func encode(text: String, addSpecialTokens: Bool) -> [Int] {
+            let initial = [1, 3, 2, 4, 5, 4]
+            return text.contains("Follow up") ? initial + [5, 3, 2] : initial
+        }
         func decode(tokenIds: [Int], skipSpecialTokens: Bool) -> String {
             tokenIds.map(String.init).joined()
         }
