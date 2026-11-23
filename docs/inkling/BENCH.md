@@ -123,6 +123,11 @@ the median and observed range. The remaining task cells are running.
 | Inkling 2 Mini MLX 4/8-bit | 3/3 | 412.67 [225.02–434.76] | 16.09 [16.07–16.92] | 21.64 [19.43–22.01] | 26.96 [26.14–26.97] | 14 [11–15] | 2 [2–3] | 9 [8–10] |
 | Qwen3.8-27B-4bit | 3/3 | 140.42 [129.90–143.54] | 13.10 [13.06–13.39] | 5.55 [5.39–6.56] | 20.48 [19.75–20.52] | 11 [10–11] | 0 [0–0] | 6 [6–6] |
 
+Each Qwen repeat reported 9,216 cached prompt tokens across its six turns.
+Inkling reported zero and processed 16,933–38,312 prompt tokens across
+eight to ten turns. The timings include each model's native cache behavior
+and the conversation length produced by its tool choices.
+
 ## Grouped NVFP4 prefill cost
 
 Run the 111-token tool fixture over loopback in A/B/B/A order. Each arm starts
