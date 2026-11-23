@@ -239,3 +239,17 @@ write files, and network access confined to the loopback gateway. The sandbox
 harness archives raw tool events and per-turn usage per repeat. A decline
 takes precedence in classification. A rejected invocation with malformed
 arguments counts as malformed. Other failed tool events count as tool errors.
+
+The corrected matrix is `matrix-bash-sandbox-45d1209`. The sandbox smoke
+tests exposed two infrastructure issues before this matrix began. The shell
+needed a run-local `TMPPREFIX` for heredocs, and SwiftPM needed to use its
+native driver and skip its inner sandbox while still under the outer
+filesystem sandbox. The earlier smoke artifacts are preserved separately.
+The final tool metric also compares the stream's model-specific tool frame
+markers with Whisker's invocation events to count frames dropped before
+execution. A nonzero Bash exit receipt is a tool error even when Whisker
+reports the event as completed.
+
+| Corrected cell | Done | Median wall s | Median decode tok/s | Median-turn TTFT s | Peak GiB | Declined | Malformed | Tool errors |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Inkling T2 | 3/3 | 135.88 | 15.94 | 8.15 | 25.10 | 0 | 0 | 0 |

@@ -47,3 +47,33 @@ tool calls. Its source model is
 [Thinking Machines Lab's Inkling 2 Mini](https://huggingface.co/thinkingmachines/Inkling-2-Mini)
 under [Apache 2.0](https://www.apache.org/licenses/LICENSE-2.0), with the publisher's
 [Model Acceptable Use Policy](https://thinkingmachines.ai/model-acceptable-use-policy/).
+
+## Prefill and decode follow-up
+
+- **Prefix reuse.** oMLX `04e6e8e` records rolling KV and convolution
+  state at known boundaries in `omlx/models/inkling2/cache.py` and restores the
+  complete visit state in `model.py`. The Swift scheduler stores all six visit
+  arrays at the last fixed prefill boundary and uses its existing byte-bounded
+  session store. It keeps the original chunking and one-token sample boundary.
+  Image requests use the model's own prefill because token IDs alone cannot
+  identify image features.
+- **Packed prefill.** mlx-vlm `111ac668` sorts routed rows before the grouped
+  multiply and supplies the tensor scale to the packed kernel. The Metal trial
+  uses upstream MLX `b835fb3`'s SIMD prefix scheduling from
+  `mlx/backend/metal/kernels/utils.h` and applies the tensor scale within each
+  16×32 output tile. The existing staged path remains available for A/B runs.
+- **Vocabulary bandwidth.** MTPLX `3890be5` reads 16-bit vocabulary weights into
+  FP32 accumulators in `mtplx/models/inkling/head.py`. The Swift trial follows
+  the pinned MLX GEMV lane and reduction order for the singleton shape and
+  retains the standard FP32 matmul for other shapes.
+- **Affine checkpoint.** VisualInference `443e30e` retains the first 20
+  layers' NVFP4 expert codes, stores the last four expert layers in 4-bit
+  affine groups, and stores large dense projections in 8-bit affine groups.
+  Swift reads the per-tensor metadata, keeps both affine layouts packed, and
+  only dequantizes selected embedding rows. It uses 256-token prefill chunks
+  for this checkpoint by default, following the publisher's memory sweep.
+- **MTP.** MTPLX `fast/step.py` and `fast/round.py` use row-stable
+  verification and commit only accepted state. The Swift verification probe
+  compares a panel with ordinary singleton decoding on the same known tokens
+  and cache. A throughput claim or a match on a few generated completions alone
+  cannot establish equivalence of a new verifier.
