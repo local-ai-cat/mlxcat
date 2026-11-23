@@ -8,8 +8,10 @@ struct InklingVision {
         let bias: MLXArray?
 
         func callAsFunction(_ x: MLXArray) -> MLXArray {
-            let output = matmul(x, weight.transposed())
-            return bias.map { output + $0 } ?? output
+            if let bias {
+                return addMM(bias, x, weight.transposed())
+            }
+            return matmul(x, weight.transposed())
         }
     }
 
@@ -94,17 +96,59 @@ struct InklingVision {
     private func interpolatedPosition(rows: Int, columns: Int) -> MLXArray {
         let grid = config.gridSize
         let values = position.asType(.float32).reshaped(grid, grid, config.width)
-        func interpolate(_ input: MLXArray, count: Int, axis: Int) -> MLXArray {
-            let coordinates = (arange(count).asType(.float32) + 0.5) * (Float(grid) / Float(count)) - 0.5
+        if rows == grid, columns == grid { return values }
+        func taps(_ count: Int) -> (indices: MLXArray, weights: MLXArray) {
+            let coordinates = maximum(
+                (arange(count).asType(.float32) + 0.5) * (Float(grid) / Float(count)) - 0.5, 0)
             let lower = floor(coordinates)
-            let first = input.take(clip(lower, min: 0, max: grid - 1).asType(.int32), axis: axis)
-            let second = input.take(clip(lower + 1, min: 0, max: grid - 1).asType(.int32), axis: axis)
-            let shape = axis == 0 ? [count, 1, 1] : [1, count, 1]
-            let fraction = (coordinates - lower).reshaped(shape)
-            return first + (second - first) * fraction
+            let fraction = coordinates - lower
+            let indices = clip(stacked([lower, lower + 1], axis: -1), min: 0, max: grid - 1)
+                .asType(.int32)
+            return (indices, stacked([1 - fraction, fraction], axis: -1))
         }
-        return interpolate(interpolate(values, count: rows, axis: 0), count: columns, axis: 1)
+        let vertical = taps(rows)
+        let horizontal = taps(columns)
+        if Device.defaultDevice().deviceType == .gpu {
+            let rowWidth = columns * config.width
+            return Self.positionResize(
+                [values, vertical.indices, vertical.weights, horizontal.indices, horizontal.weights],
+                grid: (rowWidth, rows, 1), threadGroup: (min(rowWidth, 256), 1, 1),
+                outputShapes: [[rows, columns, config.width]], outputDTypes: [.float32])[0]
+        }
+        let alongColumns = (
+            values.take(horizontal.indices, axis: 1)
+                * horizontal.weights.reshaped(1, columns, 2, 1)
+        ).sum(axis: 2)
+        return (
+            alongColumns.take(vertical.indices, axis: 0)
+                * vertical.weights.reshaped(rows, 2, 1, 1)
+        ).sum(axis: 1)
     }
+
+    // Contract the horizontal taps inside the vertical loop, as in
+    // mlx-vlm's separable_interpolate Metal kernel.
+    private static let positionResize = MLXFast.metalKernel(
+        name: "mlxcat_inkling_position_resize",
+        inputNames: ["x", "iy", "wy", "ix", "wx"], outputNames: ["out"],
+        source: """
+            const uint gx = thread_position_in_grid.x;
+            const uint y = thread_position_in_grid.y;
+            const int inWidth = x_shape[1], channels = x_shape[2];
+            const int outWidth = ix_shape[0], outHeight = iy_shape[0];
+            if (gx >= uint(outWidth * channels) || y >= uint(outHeight)) return;
+            const size_t column = (gx / channels) * 2;
+            const size_t channel = gx % channels;
+            float result = 0.0f;
+            for (int dy = 0; dy < 2; ++dy) {
+                const size_t row = size_t(iy[y * 2 + dy]) * inWidth * channels + channel;
+                float horizontal = 0.0f;
+                for (int dx = 0; dx < 2; ++dx) {
+                    horizontal += x[row + size_t(ix[column + dx]) * channels] * wx[column + dx];
+                }
+                result += horizontal * wy[y * 2 + dy];
+            }
+            out[size_t(y) * outWidth * channels + gx] = result;
+            """)
 
     private func spatialAngles(rows: Int, columns: Int) -> MLXArray {
         let merge = config.merge
@@ -120,10 +164,9 @@ struct InklingVision {
             }
         }
         let spatialWidth = config.width / config.heads / 2
-        let inverse = (0..<(spatialWidth / 2)).map { offset in
-            pow(Float(10_000), -Float(2 * offset) / Float(spatialWidth))
-        }
-        let products = MLXArray(coordinates).reshaped(-1, 2, 1) * MLXArray(inverse)
+        let exponents = -arange(0, spatialWidth, step: 2).asType(.float32) / Float(spatialWidth)
+        let inverse = pow(MLXArray(Float(10_000)), exponents)
+        let products = MLXArray(coordinates).reshaped(-1, 2, 1) * inverse
         let angles = products.reshaped(coordinates.count / 2, spatialWidth)
         return stacked([angles, angles], axis: -1)
             .reshaped(1, coordinates.count / 2, 1, spatialWidth * 2)
