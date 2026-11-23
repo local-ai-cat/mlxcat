@@ -1,7 +1,8 @@
 # Inkling 2 Mini and Qwen3.8 coding benchmark
 
-The full three-repeat comparison is running on release build `a2059f1`.
-The transport stub is excluded from the measurements below.
+The latest complete paired results below are from release build `a2059f1`.
+The fused unpack release is under verification. The transport stub is
+excluded from the measurements below.
 
 ## Protocol
 
@@ -111,3 +112,44 @@ repeats and uses a fresh checkout and Whisker thread for every repeat.
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Inkling 2 Mini MLX 4/8-bit | 3/3 | 204.60 [144.93–290.19] | 15.55 [15.28–16.09] | 8.45 [7.61–10.38] | 23.80 [23.75–24.82] | 14 [12–15] | 3 [2–3] | 11 [8–11] |
 | Qwen3.8-27B-4bit | 3/3 | 124.29 [117.00–135.64] | 13.21 [13.13–13.32] | 5.38 [5.25–5.73] | 20.51 [19.73–20.52] | 10 [10–10] | 0 [0–0] | 6 [6–6] |
+
+## Three-repeat T1 comparison on the verified release
+
+Both models passed all T1 repeats on release build `a2059f1`. Values show
+the median and observed range. The remaining task cells are running.
+
+| Model | Passed | Wall s | Decode tok/s | TTFT s | Peak GiB | Tool calls | Failed calls | Rounds |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Inkling 2 Mini MLX 4/8-bit | 3/3 | 412.67 [225.02–434.76] | 16.09 [16.07–16.92] | 21.64 [19.43–22.01] | 26.96 [26.14–26.97] | 14 [11–15] | 2 [2–3] | 9 [8–10] |
+| Qwen3.8-27B-4bit | 3/3 | 140.42 [129.90–143.54] | 13.10 [13.06–13.39] | 5.55 [5.39–6.56] | 20.48 [19.75–20.52] | 11 [10–11] | 0 [0–0] | 6 [6–6] |
+
+## Grouped NVFP4 prefill cost
+
+Run the 111-token tool fixture over loopback in A/B/B/A order. Each arm starts
+a fresh release server and completes a short greeting before timing the tool
+request. TTFT and decode rate come from server usage. Peak physical footprint
+is sampled during the measured request. Values are means across the two arms.
+
+| Release | Warm TTFT | Decode tok/s | Peak footprint |
+| --- | ---: | ---: | ---: |
+| `6b7edf1` with FP32 postscale | 0.579 s | 19.10 | 19.92 GiB |
+| `a2059f1` with reference grouped scaling | 5.455 s | 19.13 | 22.46 GiB |
+
+The pinned-core compatibility path adds prefill time and temporary memory
+when the routes select grouped matrix multiplication. Both arms emitted the
+59-token tool continuation. The native fixture verifier measured maximum
+logit error of 1.018 before the grouped fix and zero after it.
+
+## Fused NVFP4 unpacking
+
+Compare the two grouped implementations in a standalone Swift probe. Each
+arm warms Metal with a short prompt, then evaluates first-token logits for the
+111-token tool fixture. A/B/B/A used the same verified checkpoint and cache
+state. Peak is MLX allocation after resetting its peak counter for each arm.
+Both implementations matched the reference's 59 greedy tokens and all
+sampled logits exactly in this case.
+
+| Grouped projection staging | Mean prefill time | Mean MLX peak |
+| --- | ---: | ---: |
+| FP32 unpack and scale, then BF16 conversion | 5.756 s | 24.36 GiB |
+| Fused unpack and scale directly to BF16 | 1.906 s | 23.09 GiB |

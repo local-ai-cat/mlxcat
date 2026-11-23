@@ -32,7 +32,7 @@ The Swift reference tree exposes NVFP4 and MXFP8 modes for both quantized matmul
 
 ## Implementation notes
 
-The pinned MLX core instantiates Metal kernels for NVFP4 group 16 and MXFP8 group 32 in FP32, BF16 and FP16. The pinned Swift gather wrapper lacks an outer-scale argument. For NVFP4 vector routing, use the mlx-vlm FP32 fallback and apply each selected expert's stored `weight_scale_2` before rounding to the input dtype. For grouped matrix routing, MLX 0.32 scales the unpacked tile before rounding the weights to BF16. The pinned implementation materializes one equivalently scaled projection, performs native grouped matmul, and evaluates it before allocating the next workspace. Checkpoint weights stay packed.
+The pinned MLX core instantiates Metal kernels for NVFP4 group 16 and MXFP8 group 32 in FP32, BF16 and FP16. The pinned Swift gather wrapper lacks an outer-scale argument. For NVFP4 vector routing, use the mlx-vlm FP32 fallback and apply each selected expert's stored `weight_scale_2` before rounding to the input dtype. For grouped matrix routing, MLX 0.32 scales the unpacked tile before rounding the weights to BF16. The pinned implementation fuses unpacking, scaling and conversion into one projection workspace, performs native grouped matmul, and evaluates it before allocating the next workspace. Checkpoint weights stay packed.
 
 The pinned MXFP8 vector dispatcher uses 512-element alignment. The reference uses 256-element alignment, which selects a different reduction for the 2,304-wide gate and up projections. Add zero columns to those packed tensors once and append corresponding zero activations. The synthetic Metal tests cover both formats, expert-specific scales, and the MXFP8 reduction at the older kernel's alignment.
 
