@@ -92,8 +92,11 @@ The assessment harness runs acceptance tests outside the model loop.
 
 ## First completed Whisker repeat
 
-The first netprojects T1 run passed the independent Swift tests after editing
-only the counting implementation. It took 126.16 seconds, generated at
-16.80 decode tokens/s, had 7.06 seconds median per-round TTFT, peaked at
-23.44 GiB physical footprint and issued 11 tool calls, of which one failed.
-Whisker completed seven model rounds. This is one repeat.
+Both models passed the independent T1 Swift tests with release build
+`70747f1`. T1 fixes an off-by-one in the counting implementation. These
+measurements describe one repeat per model.
+
+| Model | Wall | Decode tok/s | Median TTFT | Peak footprint | Tool calls | Failed tool calls | Rounds |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Inkling 2 Mini MLX 4/8-bit | 126.16 s | 16.80 | 7.06 s | 23.44 GiB | 11 | 1 | 7 |
+| Qwen3.8-27B-4bit | 214.68 s | 12.15 | 6.90 s | 21.68 GiB | 11 | 0 | 6 |
