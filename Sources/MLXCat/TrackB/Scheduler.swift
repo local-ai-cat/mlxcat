@@ -41,6 +41,7 @@ public actor Scheduler {
     private let prefixStore: (any PrefixKVStore)?
     private let prefixCacheEnabled: Bool
     private let serializationPolicy: SerializationPolicy
+    private let usesWindowedPrefixCheckpoints: Bool
     private let schedulerManagedTextPrefill: Bool
     private let chunkIdlePrefill: Bool
     private let prefillsLastTokenAlone: Bool
@@ -105,8 +106,11 @@ public actor Scheduler {
         // scheduler catches and logs. That is not a crash, it is a cache that
         // has silently stopped working while filling the log — so it is turned
         // off explicitly instead.
-        self.prefixCacheEnabled =
-            prefixStore != nil && !cacheCapabilities.usesWindowedKVCache && !kvQuantization.isEnabled
+        let windowedCheckpoints = cacheCapabilities.usesWindowedKVCache
+            && (prefixStore as? SessionPrefixKVStore)?.supportsWindowedCheckpoints == true
+        self.usesWindowedPrefixCheckpoints = windowedCheckpoints
+        self.prefixCacheEnabled = prefixStore != nil && !kvQuantization.isEnabled
+            && (!cacheCapabilities.usesWindowedKVCache || windowedCheckpoints)
         if kvQuantization.isEnabled {
             self.serializationPolicy = .always
         } else {
@@ -117,7 +121,7 @@ public actor Scheduler {
         self.capturesRecurrentCheckpoints = Self.hybridPrefixReuseEnabled()
         self.reusesFullPromptMatch = Self.fullPromptMatchReuseEnabled()
         self.prefillsLastTokenAlone = Self.prefillsLastTokenAlone(
-            usesWindowedKVCache: cacheCapabilities.usesWindowedKVCache
+            usesWindowedKVCache: cacheCapabilities.usesWindowedKVCache && !windowedCheckpoints
         )
         self.pressurePolicy = pressurePolicy
         self.cacheReleasePolicy = cacheReleasePolicy ?? .fromEnvironment()
@@ -639,13 +643,13 @@ public actor Scheduler {
             running[request.uid] = RunningRequest(
                 request: request,
                 promptTokens: row.promptTokens,
-                prefixHit: row.prefixHit,
+                prefixHit: usesWindowedPrefixCheckpoints ? nil : row.prefixHit,
                 generatedTokens: generatorSeededTokens,
                 generatedTokensIncludedInPrompt: seededGeneratedTokens.count,
                 cachedTokenCount: 0
             )
             running[request.uid]?.checkpoints = row.checkpoints
-        } else {
+        } else if !usesWindowedPrefixCheckpoints {
             storeCompletedAdmissionPrefix(row, request: request)
             // A row that finishes at admission (max_tokens 1, or EOS first) never
             // reaches `running`, so the finish path below never releases its
@@ -654,6 +658,13 @@ public actor Scheduler {
             if let hit = row.prefixHit {
                 prefixStore?.release(hit)
             }
+        }
+
+        if usesWindowedPrefixCheckpoints {
+            if let hit = row.prefixHit {
+                prefixStore?.release(hit)
+            }
+            storeWindowedPrefixCheckpoint(row, request: request)
         }
 
         guard let initialTokenID else { return nil }
@@ -896,7 +907,7 @@ public actor Scheduler {
         {
             Self.prefixDebug("hit uid=\(request.uid) matched=\(hit.matchedTokenCount) of \(promptTokens.count)")
             if hit.matchedTokenCount == promptTokens.count,
-                reusesFullPromptMatch,
+                (reusesFullPromptMatch || usesWindowedPrefixCheckpoints),
                 promptTokens.count > 2
             {
                 prefixStore.release(hit)
@@ -931,7 +942,10 @@ public actor Scheduler {
             do {
                 let serialized = try prefixStore.reconstructCache(from: hit)
                 let reconstructedCache = try serialized.map {
-                    try BlockAwarePrefixKVStore.cache(from: $0)
+                    if let sessionStore = prefixStore as? SessionPrefixKVStore {
+                        return try sessionStore.restoreLayer($0)
+                    }
+                    return try BlockAwarePrefixKVStore.cache(from: $0)
                 }
                 return try prepareHitRow(
                     request: request,
@@ -1024,7 +1038,7 @@ public actor Scheduler {
         let promptEnd = admission.prefillRange.upperBound
         let lastToken = promptEnd - 1
         let candidates: [Int]
-        switch Self.checkpointPlacement {
+        switch usesWindowedPrefixCheckpoints ? .grid : Self.checkpointPlacement {
         case .grid:
             // Only on the prefill chunk grid, which a cold admission (starting at
             // 0) crosses anyway: the checkpoint adds no boundary, and a resume from
@@ -1069,6 +1083,21 @@ public actor Scheduler {
         }
     }
 
+    private func storeWindowedPrefixCheckpoint(_ row: PreparedBatchRow, request: Request) {
+        guard let prefixStore, let checkpoint = row.checkpoints.last else { return }
+        let layers = checkpoint.layers.compactMap { $0 }
+        guard layers.count == row.cache.count else { return }
+        // Windowed attention and convolution cannot rewind. Publish only the
+        // chunk boundary that every cold prefill would execute.
+        do {
+            try prefixStore.store(
+                tokens: Array(row.promptTokens.prefix(checkpoint.position)),
+                sessionKey: request.cacheSession, cache: layers)
+        } catch {
+            logCacheFailure("windowed prefix checkpoint store failed", error)
+        }
+    }
+
     private func storeCompletedAdmissionPrefix(_ row: PreparedBatchRow, request: Request) {
         guard prefixCacheEnabled,
             let prefixStore,
@@ -1110,7 +1139,7 @@ public actor Scheduler {
         runningRequest: RunningRequest,
         minimumNewTokens: Int = 1
     ) {
-        guard prefixCacheEnabled,
+        guard prefixCacheEnabled, !usesWindowedPrefixCheckpoints,
             let prefixStore,
             !runningRequest.promptTokens.isEmpty
         else {

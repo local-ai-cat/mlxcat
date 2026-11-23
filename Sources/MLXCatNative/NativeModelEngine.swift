@@ -33,14 +33,17 @@ public final class NativeModelEngine: @unchecked Sendable {
         serializationPolicy: SerializationPolicy,
         schedulerManagedTextPrefill: Bool,
         chunkIdlePrefill: Bool,
-        kvQuantization: KVQuantizationPolicy = .off
+        kvQuantization: KVQuantizationPolicy = .off,
+        windowedLayerDecoder: (@Sendable (SerializedKVLayer) throws -> any KVCache)? = nil,
+        prefill: PrefillParameters = .init()
     ) {
         self.context = context
         self.modelID = modelID
         self.maxContextTokens = maxContextTokens
-        self.parameters = GenerateParameters(maxTokens: 16, temperature: 0)
+        self.parameters = GenerateParameters(maxTokens: 16, temperature: 0, prefill: prefill)
         self.cacheCapabilities = cacheCapabilities
-        self.prefixStore = SessionPrefixKVStore(maxBytes: Self.prefixCacheMaxBytes())
+        self.prefixStore = SessionPrefixKVStore(
+            maxBytes: Self.prefixCacheMaxBytes(), windowedLayerDecoder: windowedLayerDecoder)
         self.engine = MLXCatEngine(
             model: context.model,
             parameters: parameters,
@@ -943,6 +946,9 @@ public struct NativeModelLoader: EnginePoolModelLoader {
                 directory: directory, eosTokenIds: [checkpointConfig.eosTokenID ?? 200006]),
             model: built.model, processor: built.processor,
             tokenizer: tokenizer)
+        let usesPrefixReuse = Scheduler.hybridPrefixReuseEnabled()
+        let cacheDecoder: (@Sendable (SerializedKVLayer) throws -> any KVCache)? =
+            usesPrefixReuse ? InklingVisitCache.restore : nil
         return NativeModelEngine(
             context: context, modelID: id, maxContextTokens: try contextWindow(in: directory),
             maxConcurrentRequests: maxConcurrentRequests,
@@ -955,8 +961,10 @@ public struct NativeModelLoader: EnginePoolModelLoader {
                     headDimension: config.headWidth,
                     hiddenSize: config.hiddenSize)),
             serializationPolicy: .always,
-            schedulerManagedTextPrefill: false,
-            chunkIdlePrefill: true)
+            schedulerManagedTextPrefill: usesPrefixReuse,
+            chunkIdlePrefill: true,
+            windowedLayerDecoder: cacheDecoder,
+            prefill: .init(stepSize: InklingLanguageModel.prefillStep))
     }
 
     public func unloadModel(_ engine: NativeModelEngine, id: String) async {

@@ -1,5 +1,6 @@
 import Foundation
 import MLX
+import MLXCat
 import MLXLMCommon
 import MLXNN
 
@@ -14,6 +15,19 @@ final class InklingVisitCache: KVCache {
         self.taps = taps
         self.maxSize = window
         visit = .init(taps: taps)
+    }
+
+    static func restore(_ layer: SerializedKVLayer) throws -> any KVCache {
+        guard layer.className == String(describing: Self.self),
+            layer.state.count == 6, layer.metaState.count == 3,
+            let offset = Int(layer.metaState[0]), offset > 0,
+            let taps = Int(layer.metaState[1]), taps > 0,
+            let window = Int(layer.metaState[2]), window >= 0
+        else { throw PrefixKVStoreError.unsupportedLayerState }
+        let cache = InklingVisitCache(taps: taps, window: window == 0 ? nil : window)
+        cache.state = layer.state
+        cache.metaState = layer.metaState
+        return cache
     }
 
     var offset: Int { visit.attention.offset }
@@ -49,7 +63,7 @@ final class InklingVisitCache: KVCache {
     }
 
     var metaState: [String] {
-        get { [String(offset)] }
+        get { [String(offset), String(taps), String(maxSize ?? 0)] }
         set { visit.attention.offset = newValue.first.flatMap(Int.init) ?? 0 }
     }
 
@@ -72,6 +86,7 @@ final class InklingVisitCache: KVCache {
 }
 
 final class InklingLanguageModel: Module, LanguageModel {
+    static let prefillStep = 1024
     let textModel: InklingTextModel
     let visionModel: InklingVision?
     let imageTokenID: Int
@@ -95,7 +110,7 @@ final class InklingLanguageModel: Module, LanguageModel {
 
         // Match mlx-vlm's chunk boundary: reserve the last prompt position
         // for the forward that produces the first sampled token.
-        let chunkSize = prefill.resolvedStepSize(defaultStepSize: 1024)
+        let chunkSize = prefill.resolvedStepSize(defaultStepSize: Self.prefillStep)
         let last = tokens.dim(1) - 1
         for start in stride(from: 0, to: last, by: chunkSize) {
             let end = min(last, start + chunkSize)

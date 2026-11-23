@@ -46,7 +46,8 @@ final class InklingModelTests: XCTestCase {
             context: context, modelID: "Inkling-2-Mini-test", maxContextTokens: 32,
             maxConcurrentRequests: 2,
             cacheCapabilities: .init(usesWindowedKVCache: true),
-            serializationPolicy: .always, schedulerManagedTextPrefill: false, chunkIdlePrefill: true)
+            serializationPolicy: .always, schedulerManagedTextPrefill: true, chunkIdlePrefill: true,
+            windowedLayerDecoder: InklingVisitCache.restore, prefill: .init(stepSize: 2))
         let stream = try await engine.startChatCompletion(.init(
             model: "Inkling-2-Mini-test", messages: [.init(role: "user", content: "Hi")],
             maxTokens: 2, stream: true, enableThinking: false))
@@ -56,6 +57,16 @@ final class InklingModelTests: XCTestCase {
         XCTAssertEqual(chunks.count, 2)
         XCTAssertTrue(chunks.allSatisfy { (0..<8).contains($0.tokenID) && !$0.text.isEmpty })
         XCTAssertEqual(chunks.last?.finishReason, "length")
+        XCTAssertEqual(chunks.first?.cachedPromptTokens, 0)
+
+        let warm = try await engine.startChatCompletion(.init(
+            model: "Inkling-2-Mini-test", messages: [.init(role: "user", content: "Hi")],
+            maxTokens: 2, stream: true, enableThinking: false))
+        var warmChunks: [OpenAIChatChunk] = []
+        for try await chunk in warm.chunks { warmChunks.append(chunk) }
+        XCTAssertEqual(warmChunks.map(\.tokenID), chunks.map(\.tokenID))
+        XCTAssertEqual(warmChunks.first?.cachedPromptTokens, 4)
+        XCTAssertEqual(engine.prefixCacheStats().fetchHitCount, 1)
     }
 
     private struct TestTokenizer: MLXLMCommon.Tokenizer {

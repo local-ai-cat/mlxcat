@@ -54,6 +54,8 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
     }
 
     private let lock = NSRecursiveLock()
+    private let layerDecoder: @Sendable (SerializedKVLayer) throws -> any KVCache
+    let supportsWindowedCheckpoints: Bool
     private let maxBytes: Int64
     private let maxAnonymousSlots: Int
     private var sessionSlots: [String: Slot] = [:]
@@ -66,9 +68,22 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
     private var _clearCount = 0
     private var _evictionCount = 0
 
-    public init(maxBytes: Int64 = 0, maxAnonymousSlots: Int = 8) {
+    public convenience init(maxBytes: Int64 = 0, maxAnonymousSlots: Int = 8) {
+        self.init(maxBytes: maxBytes, maxAnonymousSlots: maxAnonymousSlots, windowedLayerDecoder: nil)
+    }
+
+    package init(
+        maxBytes: Int64, maxAnonymousSlots: Int = 8,
+        windowedLayerDecoder: (@Sendable (SerializedKVLayer) throws -> any KVCache)?
+    ) {
+        self.layerDecoder = windowedLayerDecoder ?? BlockAwarePrefixKVStore.cache(from:)
+        self.supportsWindowedCheckpoints = windowedLayerDecoder != nil
         self.maxBytes = max(0, maxBytes)
         self.maxAnonymousSlots = max(1, maxAnonymousSlots)
+    }
+
+    func restoreLayer(_ layer: SerializedKVLayer) throws -> any KVCache {
+        try layerDecoder(layer)
     }
 
     public var stats: SessionPrefixKVStoreStats {
@@ -149,7 +164,9 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
                 if let recurrent = checkpoint?[index] ?? nil {
                     return recurrent
                 }
-                let cache = try BlockAwarePrefixKVStore.cache(from: layer)
+                // At the exact boundary all arrays, including any rolling state, are valid.
+                guard storage.trimCount > 0 else { return layer }
+                let cache = try restoreLayer(layer)
                 if storage.trimCount > 0 {
                     guard cache.trim(storage.trimCount) == storage.trimCount else {
                         throw PrefixKVStoreError.unsupportedCacheTrim(layer.className)
@@ -177,7 +194,7 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
         try withLock {
             guard tokens.count > 1, !cache.isEmpty else { return }
             let copied = try cache.map { layer -> SerializedKVLayer in
-                _ = try BlockAwarePrefixKVStore.cache(from: layer)
+                _ = try restoreLayer(layer)
                 return SerializedKVLayer(
                     state: layer.state,
                     metaState: layer.metaState,
@@ -194,7 +211,7 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
                 byteCount: byteCount,
                 lastAccess: nextSequence()
             )
-            slot.hasRecurrentLayers = Self.recurrentLayers(of: copied).contains { $0 != nil }
+            slot.hasRecurrentLayers = recurrentLayers(of: copied).contains { $0 != nil }
             Scheduler.prefixDebug(
                 "store tokens=\(tokens.count) layers=\(copied.count) recurrent=\(slot.hasRecurrentLayers) "
                     + "offered=\(checkpoints.map { "\($0.position)/\($0.layers.count)" })")
@@ -224,7 +241,7 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
                             slot.checkpoints[position] = layers
                         }
                         if slot.checkpoints[old.tokens.count] == nil {
-                            slot.checkpoints[old.tokens.count] = Self.recurrentLayers(of: old.layers)
+                            slot.checkpoints[old.tokens.count] = recurrentLayers(of: old.layers)
                         }
                     }
                 }
@@ -321,9 +338,9 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
     }
 
     /// The layers that cannot trim (recurrent state), index-aligned, `nil` elsewhere.
-    static func recurrentLayers(of layers: [SerializedKVLayer]) -> [SerializedKVLayer?] {
+    private func recurrentLayers(of layers: [SerializedKVLayer]) -> [SerializedKVLayer?] {
         layers.map { layer in
-            guard let cache = try? BlockAwarePrefixKVStore.cache(from: layer), !cache.isTrimmable
+            guard let cache = try? restoreLayer(layer), !cache.isTrimmable
             else { return nil }
             return layer
         }
