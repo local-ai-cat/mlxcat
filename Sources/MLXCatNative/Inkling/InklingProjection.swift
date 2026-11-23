@@ -26,7 +26,7 @@ enum InklingProjection {
     case dense(MLXArray)
     case vocabulary16(MLXArray)
     private static let usesVocabularyGEMV =
-        ProcessInfo.processInfo.environment["MLXCAT_INKLING_VOCAB_GEMV"] == "1"
+        ProcessInfo.processInfo.environment["MLXCAT_INKLING_VOCAB_GEMV"] != "0"
 
     static func vocabulary(_ weight: MLXArray) -> Self {
         usesVocabularyGEMV ? .vocabulary16(weight) : .dense(weight.asType(.float32))

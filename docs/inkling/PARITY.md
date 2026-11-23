@@ -177,3 +177,22 @@ reported the same passing counts.
 
 The NVFP4 unpacker and both custom attention and position kernels passed
 compile-only Metal 3.1 checks with `-Werror` for macOS 15.2 and iOS 18.2.
+
+## Prefill and vocabulary follow-up
+
+The packaged Swift verifier ran against the same local mlx-vlm receipts at
+`406dd58`. Greedy token IDs matched throughout each arm. All 960 sampled
+FP32 scores per arm were identical to the reference, within the existing
+0.25 absolute tolerance. Each arm also matched all 12 rendered prompt
+token sequences.
+
+| Checkpoint | Arm | Greedy match | Maximum sampled logit error |
+| --- | --- | ---: | ---: |
+| netprojects | Control | 760/760 | 0 |
+| baytizzel | Control | 760/760 | 0 |
+| netprojects | Packed grouped prefill | 760/760 | 0 |
+| netprojects | Mixed-storage vocabulary | 760/760 | 0 |
+
+The HTTP continuation A/B separately matched the greedy token IDs on both
+turns while the warm arm restored 3,072 tokens of attention and convolution
+state. The standalone 256-token vocabulary A/B also matched every token.

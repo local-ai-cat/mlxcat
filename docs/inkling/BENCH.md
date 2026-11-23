@@ -300,3 +300,8 @@ The packed path is the default for eligible prefill after all 760 greedy
 tokens and 960 sampled logits matched the netprojects fixtures. The lower
 peak is the reason for choosing it despite the cold latency increase on
 this prompt. Set `MLXCAT_INKLING_PACKED_PREFILL=0` for staged prefill.
+
+The mixed-storage vocabulary projection is the default for eligible
+one-token calls. All 760 greedy tokens and 960 sampled logits matched
+in its separate fixture run. Set `MLXCAT_INKLING_VOCAB_GEMV=0` to use the
+cached FP32 head.
