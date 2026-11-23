@@ -1,14 +1,14 @@
 # Inkling 2 Mini and Qwen3.8 coding benchmark
 
-The full three-repeat comparison is in progress. The transport stub is
-excluded from the measurements below.
+The full three-repeat comparison is running on release build `a2059f1`.
+The transport stub is excluded from the measurements below.
 
 ## Protocol
 
 Run one model at a time on the M4 Pro under the machine's exclusive lease.
 Use the same release build of `mlxcat-http` for both models. Run each of
 T1–T6 three times from the same frozen fixture commit `ba6b87d`, with a fresh
-checkout and Whisker thread per run. Use the Whisker harness in auto-edit mode,
+checkout and Whisker thread per run. Use a frozen Whisker 0.1.0 binary in auto-edit mode,
 greedy sampling with seed 42, a shared advertised 32,768-token context limit,
 and at most 30 model rounds. Evaluate acceptance independently of the answer
 the model reports.

@@ -1,8 +1,7 @@
 # Inkling 2 Mini parity
 
-Both verified checkpoint builds run natively. The same-Mac Python comparison
-is still outside the token and logit gate. The current netprojects run is
-below. Coding results are recorded in [BENCH.md](BENCH.md).
+Both verified checkpoint builds passed the same-Mac Python fixture gate at
+`a2059f1`. Coding results are recorded in [BENCH.md](BENCH.md).
 
 ## Acceptance
 
@@ -18,10 +17,14 @@ Both indexes report four shards and 19,525,880,832 tensor payload bytes. Before 
 
 ## Local test entry point
 
-`InklingParityTests.testGreedyTokensAndReferenceLogits` accepts
-`MLXCAT_INKLING_VERIFIED_MODEL` and `MLXCAT_INKLING_REFERENCE`. Run it under the
-machine's exclusive lease after verification. It uses the fixture's expanded
-token IDs and attention chunk size, including the reference image for the image
+Build `mlxcat-inkling-parity` and stage the Metal library with
+`scripts/build-metallib.sh .build/debug`. Set
+`MLXCAT_INKLING_VERIFIED_MODEL` and `MLXCAT_INKLING_REFERENCE` and run
+`.build/debug/mlxcat-inkling-parity` under the machine's exclusive lease.
+`InklingParityTests.testGreedyTokensAndReferenceLogits` invokes the same
+standalone verifier when the environment is set. The verifier checks the
+formatted input token IDs and uses the fixture's attention chunk size,
+including the reference image for the image
 case. It checks the exported top-k scores at all available positions
 and stops comparing a case when the greedy token IDs diverge. The fixture script
 allows at least 64 generated tokens per case.
@@ -146,5 +149,19 @@ With those changes the pinned-core Swift probe matched all 12 greedy
 continuations, including the 8,225-token prompt. Ten cases had zero sampled
 logit error, including the image. Long context reached 3.471 maximum error
 and the tool call reached 1.018. Both prompts reach the grouped matrix
-dispatch during prefill, so the vector-alignment change is being tested
-without padding the matrix path.
+dispatch during prefill. An unpadded MXFP8 control produced the same errors.
+Disabling fused NVFP4 tensor scaling on MLX 0.32.4 also reproduced the tool
+call error. Scaling the unpacked NVFP4 weights before BF16 rounding
+eliminated both errors on the pinned core.
+
+## Packaged verifier at `a2059f1`
+
+The standalone verifier and `mlxcat-http` share the native model and
+processor loader. The verifier checks the rendered prompt, then compares
+greedy token IDs and the exported top-k logit samples. Standalone Metal
+initialization resolved the earlier XCTest-host discrepancy.
+
+| Checkpoint | Prompt IDs | Greedy output | Sampled logits | Maximum absolute logit error | Result |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Netprojects MLX 4/8-bit | 12/12 cases | 760/760 tokens | 960/960 exact | 0.0 | Pass |
+| Baytizzel MLX M5Pro 48 GB | 12/12 cases | 760/760 tokens | 960/960 exact | 0.0 | Pass |
