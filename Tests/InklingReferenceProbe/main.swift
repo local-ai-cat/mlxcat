@@ -70,6 +70,13 @@ struct InklingReferenceProbe {
                 passed = false
                 continue
             }
+            if environment["MLXCAT_INKLING_PROBE_VERIFY_PANEL"] == "1" {
+                let panel = Array(expected.prefix(8))
+                let proof = try runtime.compareVerificationPanel(
+                    panel, in: input, chunk: fixture.prefillChunk)
+                print("\(name): panel vs serial over \(panel.count) rows, max error "
+                    + "\(proof.maximumLogitError), top-token differences \(proof.differentTopTokens)")
+            }
             let actual = try runtime.compare(
                 expected, in: input, chunk: fixture.prefillChunk,
                 topTokenIDs: fixture.topLogits.map { $0.map(\.id) })

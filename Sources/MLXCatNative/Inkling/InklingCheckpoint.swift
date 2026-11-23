@@ -14,9 +14,11 @@ struct InklingCheckpoint {
         case missingTensor(String)
         case missingShard(String)
         case wrongShard(String)
+        case invalidQuantization(String)
     }
 
     let tensors: [String: MLXArray]
+    private let quantization: [String: Any]
 
     init(directory: URL) throws {
         let indexURL = directory.appending(component: "model.safetensors.index.json")
@@ -38,12 +40,39 @@ struct InklingCheckpoint {
             }
         }
         self.tensors = tensors
+        let config = directory.appending(component: "config.json")
+        let object = try JSONSerialization.jsonObject(with: Data(contentsOf: config)) as? [String: Any]
+        self.quantization = object?["quantization"] as? [String: Any] ?? [:]
     }
+
+    var usesPackedVocabulary: Bool { tensors["language_model.lm_head.scales"] != nil }
 
     func required(_ name: String) throws -> MLXArray {
         guard let tensor = tensors[name] else { throw LoadError.missingTensor(name) }
         return tensor
     }
+
+    private func affine(_ path: String) throws -> InklingProjection.Affine {
+        let weight = try required("\(path).weight")
+        let scales = try required("\(path).scales")
+        let biases = try required("\(path).biases")
+        guard let metadata = quantization[path] as? [String: Any],
+            metadata["mode"] as? String == "affine",
+            let groupSize = metadata["group_size"] as? Int, [32, 64, 128].contains(groupSize),
+            let bits = metadata["bits"] as? Int, [2, 3, 4, 5, 6, 8].contains(bits),
+            weight.dtype == .uint32, weight.ndim >= 2, scales.ndim == weight.ndim,
+            scales.shape == biases.shape, scales.dtype == biases.dtype,
+            weight.shape.dropLast() == scales.shape.dropLast(),
+            weight.dim(-1) * 32 == scales.dim(-1) * groupSize * bits
+        else { throw LoadError.invalidQuantization(path) }
+        return .init(packed: weight, scales: scales, biases: biases, groupSize: groupSize, bits: bits)
+    }
+
+    private func projection(_ path: String) throws -> InklingProjection {
+        if tensors["\(path).scales"] != nil { return .affine(try affine(path)) }
+        return .dense(try required("\(path).weight"))
+    }
+
 }
 
 extension InklingCheckpoint {
@@ -55,13 +84,19 @@ extension InklingCheckpoint {
         }
         return try InklingTextModel(
             config: config, loop: loop, layers: layers,
-            embeddings: required("\(model).embed_tokens.weight"),
+            embeddings: projection("\(model).embed_tokens"),
             embeddingNorm: required("\(model).embed_norm.weight"),
             messageQueries: tensors["\(model).message_queries"]
                 ?? required("\(model).message_input.query"),
             finalQuery: required("\(model).final_input.query"),
             finalNorm: required("\(model).norm.weight"),
-            vocabulary: required("language_model.lm_head.weight").asType(.float32))
+            vocabulary: vocabulary())
+    }
+
+    private func vocabulary() throws -> InklingProjection {
+        let path = "language_model.lm_head"
+        if usesPackedVocabulary { return try .affine(affine(path)) }
+        return try .vocabulary(required("\(path).weight"))
     }
 
     private func layer(
@@ -82,6 +117,9 @@ extension InklingCheckpoint {
             let format: InklingExperts.Projection.Format
             if let factor = tensors["\(path).weight_scale_2"] {
                 format = .nvfp4(scale: factor)
+            } else if tensors["\(path).biases"] != nil {
+                let weight = try affine(path)
+                format = .affine(biases: weight.biases, groupSize: weight.groupSize, bits: weight.bits)
             } else {
                 format = .mxfp8
             }
@@ -90,13 +128,13 @@ extension InklingCheckpoint {
         }
         let attentionModule = try InklingDecoderAttention(
             config: config, window: isLocal ? config.windowSize : nil,
-            queryWeight: required("\(attention).q_proj.weight"),
-            keyWeight: required("\(attention).k_proj.weight"),
-            valueWeight: required("\(attention).v_proj.weight"),
-            relativeWeight: required("\(attention).r_proj.weight"),
-            outputWeight: required("\(attention).o_proj.weight"),
-            gateWeight: required("\(attention).gate_proj.weight"),
-            sinkWeight: required("\(attention).sink_proj.weight"),
+            queryWeight: projection("\(attention).q_proj"),
+            keyWeight: projection("\(attention).k_proj"),
+            valueWeight: projection("\(attention).v_proj"),
+            relativeWeight: projection("\(attention).r_proj"),
+            outputWeight: projection("\(attention).o_proj"),
+            gateWeight: projection("\(attention).gate_proj"),
+            sinkWeight: projection("\(attention).sink_proj"),
             relativeProjection: required("\(attention).rel_proj"),
             queryScale: required("\(attention).q_scale"),
             relativeScale: required("\(attention).rel_scale"),
@@ -136,7 +174,7 @@ extension InklingCheckpoint {
     func visionModel(config: InklingConfiguration.Vision) throws -> InklingVision {
         let prefix = "vision_tower"
         func linear(_ path: String) throws -> InklingVision.Linear {
-            try .init(weight: required("\(path).weight"), bias: tensors["\(path).bias"])
+            try .init(weight: projection(path), bias: tensors["\(path).bias"])
         }
         func norm(_ path: String) throws -> InklingVision.Norm {
             try .init(weight: required("\(path).weight"), bias: required("\(path).bias"),

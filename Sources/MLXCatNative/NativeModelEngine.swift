@@ -946,6 +946,9 @@ public struct NativeModelLoader: EnginePoolModelLoader {
                 directory: directory, eosTokenIds: [checkpointConfig.eosTokenID ?? 200006]),
             model: built.model, processor: built.processor,
             tokenizer: tokenizer)
+        let defaultPrefillStep = checkpoint.usesPackedVocabulary ? 256 : InklingLanguageModel.prefillStep
+        let prefillStep = ProcessInfo.processInfo.environment["MLXCAT_INKLING_PREFILL_STEP"]
+            .flatMap(Int.init).flatMap { $0 > 0 ? $0 : nil } ?? defaultPrefillStep
         let usesPrefixReuse = Scheduler.hybridPrefixReuseEnabled()
         let cacheDecoder: (@Sendable (SerializedKVLayer) throws -> any KVCache)? =
             usesPrefixReuse ? InklingVisitCache.restore : nil
@@ -964,7 +967,7 @@ public struct NativeModelLoader: EnginePoolModelLoader {
             schedulerManagedTextPrefill: usesPrefixReuse,
             chunkIdlePrefill: true,
             windowedLayerDecoder: cacheDecoder,
-            prefill: .init(stepSize: InklingLanguageModel.prefillStep))
+            prefill: .init(stepSize: prefillStep))
     }
 
     public func unloadModel(_ engine: NativeModelEngine, id: String) async {

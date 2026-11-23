@@ -86,20 +86,20 @@ struct InklingTextModel {
     let config: InklingConfiguration.Text
     let loop: InklingLoop
     let layers: [Layer]
-    let embeddings: MLXArray
+    let embeddings: InklingProjection
     let embeddingNorm: MLXArray
     let messageQueries: MLXArray
     let finalQuery: MLXArray
     let finalNorm: MLXArray
-    /// The FP32 projection retains its exact converted weights across decode steps.
-    let vocabulary: MLXArray
+    /// Dense checkpoints retain the FP32 conversion across decode steps.
+    let vocabulary: InklingProjection
 
     func makeCache() -> [VisitState] {
         loop.visits.map { _ in VisitState(taps: config.convolutionSize) }
     }
 
     func embed(_ tokens: MLXArray) -> MLXArray {
-        MLXFast.rmsNorm(embeddings[tokens], weight: embeddingNorm, eps: config.rmsEpsilon)
+        MLXFast.rmsNorm(embeddings.rows(tokens), weight: embeddingNorm, eps: config.rmsEpsilon)
     }
 
     func forward(
@@ -121,7 +121,7 @@ struct InklingTextModel {
             normalizeValues: config.normalizeResidual).squeezed(axis: -2)
         let normalized = MLXFast.rmsNorm(hidden, weight: finalNorm, eps: config.rmsEpsilon)
             .asType(embeddingNorm.dtype).asType(.float32)
-        let logits = matmul(normalized, vocabulary.transposed())
+        let logits = vocabulary(normalized)
         let capped = tanh(logits / config.logitCap) * config.logitCap
         return capped[.ellipsis, ..<config.vocabularySize]
     }

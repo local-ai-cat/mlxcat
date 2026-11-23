@@ -6,6 +6,7 @@ struct InklingExperts {
         enum Format {
             case nvfp4(scale: MLXArray)
             case mxfp8
+            case affine(biases: MLXArray, groupSize: Int, bits: Int)
         }
 
         let weight: MLXArray
@@ -50,6 +51,10 @@ struct InklingExperts {
             _ input: MLXArray, indices: MLXArray, sorted: Bool = false
         ) -> MLXArray {
             switch format {
+            case .affine(let biases, let groupSize, let bits):
+                return gatherQuantizedMM(
+                    input, weight, scales: scales, biases: biases, rhsIndices: indices,
+                    groupSize: groupSize, bits: bits, mode: .affine, sortedIndices: sorted)
             case .mxfp8:
                 let values = inputPadding == 0 ? input
                     : Self.extending(input, columns: inputPadding, fill: 0)

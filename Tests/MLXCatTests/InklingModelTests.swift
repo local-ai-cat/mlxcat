@@ -117,9 +117,9 @@ final class InklingModelTests: XCTestCase {
                 : .dynamic(staticWeight: signal(2, 32), projection: signal(2, width))
             let attention = InklingDecoderAttention(
                 config: config, window: local ? 4 : nil,
-                queryWeight: signal(64, width), keyWeight: signal(32, width), valueWeight: signal(32, width),
-                relativeWeight: signal(8, width), outputWeight: signal(width, 64),
-                gateWeight: signal(64, width), sinkWeight: signal(2, width),
+                queryWeight: .dense(signal(64, width)), keyWeight: .dense(signal(32, width)), valueWeight: .dense(signal(32, width)),
+                relativeWeight: .dense(signal(8, width)), outputWeight: .dense(signal(width, 64)),
+                gateWeight: .dense(signal(64, width)), sinkWeight: .dense(signal(2, width)),
                 relativeProjection: signal(4, 4), queryScale: MLXArray.ones([2, 32]),
                 relativeScale: MLXArray.ones([2, 4]), keyConvolution: convolution,
                 valueConvolution: convolution)
@@ -137,15 +137,28 @@ final class InklingModelTests: XCTestCase {
         }
         let model = try InklingTextModel(
             config: config, loop: config.makeLoop(), layers: layers,
-            embeddings: signal(8, width), embeddingNorm: norm,
+            embeddings: .dense(signal(8, width)), embeddingNorm: norm,
             messageQueries: signal(8, width).reshaped(2, 4, width).asType(.float32),
             finalQuery: signal(1, width).asType(.float32), finalNorm: norm,
-            vocabulary: signal(8, width).asType(.float32))
+            vocabulary: .dense(signal(8, width).asType(.float32)))
         return InklingLanguageModel(textModel: model, visionModel: nil, imageTokenID: 200054)
     }
 }
 
 extension InklingModelTests {
+    func testMixedStorageVocabularyGEMVPreservesFP32LaneOrder() throws {
+        try MLXMetalRuntime.requireAvailable()
+        let rows = 4_096
+        let width = 384
+        let x = cos(arange(width).asType(.float32)).asType(.bfloat16)
+            .asType(.float32).reshaped(1, 1, width)
+        let weight = sin(arange(rows * width).asType(.float32))
+            .reshaped(rows, width).asType(.bfloat16)
+        let expected = matmul(x, weight.asType(.float32).transposed())
+        let actual = InklingVocabularyGEMV.run(x, weight: weight)
+        XCTAssertEqual(actual.asArray(Float.self), expected.asArray(Float.self))
+    }
+
     func testVocabularyProjectionAB() throws {
         guard ProcessInfo.processInfo.environment["MLXCAT_INKLING_VOCAB_AB"] == "1" else {
             throw XCTSkip("Set MLXCAT_INKLING_VOCAB_AB=1 under an exclusive machine lease.")

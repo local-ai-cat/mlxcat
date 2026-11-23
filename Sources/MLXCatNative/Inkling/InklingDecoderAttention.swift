@@ -46,13 +46,13 @@ struct InklingDecoderAttention {
 
     let config: InklingConfiguration.Text
     let window: Int?
-    let queryWeight: MLXArray
-    let keyWeight: MLXArray
-    let valueWeight: MLXArray
-    let relativeWeight: MLXArray
-    let outputWeight: MLXArray
-    let gateWeight: MLXArray
-    let sinkWeight: MLXArray
+    let queryWeight: InklingProjection
+    let keyWeight: InklingProjection
+    let valueWeight: InklingProjection
+    let relativeWeight: InklingProjection
+    let outputWeight: InklingProjection
+    let gateWeight: InklingProjection
+    let sinkWeight: InklingProjection
     let relativeProjection: MLXArray
     let queryScale: MLXArray
     let relativeScale: MLXArray
@@ -67,15 +67,15 @@ struct InklingDecoderAttention {
         let headWidth = config.headWidth
         let heads = config.heads
         let kvHeads = config.keyValueHeads
-        let keyInput = matmul(key, keyWeight.transposed())
-        let valueInput = matmul(value, valueWeight.transposed())
+        let keyInput = keyWeight(key)
+        let valueInput = valueWeight(value)
         let k = keyConvolution.apply(keyInput, features: key, heads: kvHeads, state: &state.key)
         let v = valueConvolution.apply(valueInput, features: value, heads: kvHeads, state: &state.value)
         var queries = clipped(
-            matmul(query, queryWeight.transposed()).reshaped(batch, length, heads, headWidth),
+            queryWeight(query).reshaped(batch, length, heads, headWidth),
             scale: queryScale, threshold: config.queryClip)
         var relative = clipped(
-            matmul(query, relativeWeight.transposed()).reshaped(batch, length, heads, config.relativeWidth),
+            relativeWeight(query).reshaped(batch, length, heads, config.relativeWidth),
             scale: relativeScale, threshold: config.relativeClip)
         if window == nil, let floor = config.logScaleFloor {
             let positions = arange(length).asType(.float32) + Float(state.offset + 1)
@@ -91,7 +91,7 @@ struct InklingDecoderAttention {
         let (cachedKeys, cachedValues) = state.append(
             keys: keys.transposed(0, 2, 1, 3), values: values.transposed(0, 2, 1, 3),
             window: window)
-        let sink = matmul(query, sinkWeight.transposed())
+        let sink = sinkWeight(query)
         let mask = InklingAttention.mask(
             relative: relative, projection: relativeProjection.asType(query.dtype),
             sink: sink, keyCount: cachedKeys.dim(2), window: window)
@@ -102,8 +102,8 @@ struct InklingDecoderAttention {
             values: concatenated([cachedValues, zero], axis: 2),
             scale: 1 / Float(headWidth).squareRoot(), mask: .array(mask))
         let merged = output.transposed(0, 2, 1, 3).reshaped(batch, length, heads * headWidth)
-        let gate = sigmoid(matmul(query, gateWeight.transposed()).asType(.float32))
-        return matmul((merged.asType(.float32) * gate).asType(query.dtype), outputWeight.transposed())
+        let gate = sigmoid(gateWeight(query).asType(.float32))
+        return outputWeight((merged.asType(.float32) * gate).asType(query.dtype))
     }
 
     private func clipped(_ value: MLXArray, scale: MLXArray? = nil, threshold: Float) -> MLXArray {

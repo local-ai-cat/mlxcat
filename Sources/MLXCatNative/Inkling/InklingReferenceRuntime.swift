@@ -46,5 +46,27 @@ package struct InklingReferenceRuntime {
         return (tokens, scores)
     }
 
+    /// A speculative verifier must reproduce the logits of the ordinary
+    /// one-token path for each row, including at a rotating cache boundary.
+    package func compareVerificationPanel(
+        _ tokens: [Int], in input: LMInput, chunk: Int
+    ) throws -> (maximumLogitError: Float, differentTopTokens: Int) {
+        let cache = try model.newCache(parameters: nil)
+        _ = try model.prepare(input, cache: cache, state: nil, prefill: .init(stepSize: chunk))
+        eval(cache)
+        let panel = model(MLXArray(tokens), cache: cache.map { $0.copy() })
+        var maximum: Float = 0
+        var differentTokens = 0
+        for (index, token) in tokens.enumerated() {
+            let expected = model(MLXArray([token]), cache: cache)[0, 0]
+            let actual = panel[0, index]
+            maximum = max(maximum, abs(expected - actual).max().item(Float.self))
+            if argMax(expected).item(Int.self) != argMax(actual).item(Int.self) {
+                differentTokens += 1
+            }
+        }
+        return (maximum, differentTokens)
+    }
+
     private enum ProbeError: Error { case missingLogits }
 }

@@ -62,6 +62,29 @@ final class InklingExpertsTests: XCTestCase {
         }
     }
 
+    func testAffineExpertGatherMatchesSelectedAffineMatrix() throws {
+        try MLXMetalRuntime.requireAvailable()
+        let rows = 32
+        let width = 64
+        let weight = sin(arange(2 * rows * width).asType(.float32))
+            .reshaped(2, rows, width).asType(.bfloat16)
+        let input = cos(arange(2 * width).asType(.float32))
+            .reshaped(2, 1, width).asType(.bfloat16)
+        let packed = quantized(weight, groupSize: 64, bits: 4, mode: .affine)
+        let biases = try XCTUnwrap(packed.biases)
+        let projection = InklingExperts.Projection(
+            weight: packed.wq, scales: packed.scales,
+            format: .affine(biases: biases, groupSize: 64, bits: 4))
+        let actual = projection(input, indices: MLXArray([Int32(1), 0]))
+        for (row, expert) in [1, 0].enumerated() {
+            let expected = quantizedMM(
+                input[row], packed.wq[expert], scales: packed.scales[expert],
+                biases: biases[expert], groupSize: 64, bits: 4, mode: .affine)
+            XCTAssertEqual(actual[row].asType(.float32).asArray(Float.self),
+                           expected.asType(.float32).asArray(Float.self))
+        }
+    }
+
     func testPackedGroupedTileMatchesStagedGroupedMatmul() throws {
         try MLXMetalRuntime.requireAvailable()
         let width = 64

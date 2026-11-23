@@ -4,14 +4,11 @@ import MLXNN
 
 struct InklingVision {
     struct Linear {
-        let weight: MLXArray
+        let weight: InklingProjection
         let bias: MLXArray?
 
         func callAsFunction(_ x: MLXArray) -> MLXArray {
-            if let bias {
-                return addMM(bias, x, weight.transposed())
-            }
-            return matmul(x, weight.transposed())
+            weight(x, bias: bias)
         }
     }
 
