@@ -124,3 +124,27 @@ gate and up projections have a 2,304-element input, so the cores dispatch
 different reduction kernels. The newer core also fails the current Metal 3
 compile gate. The pinned core remains the branch default while the narrower
 MXFP8 compatibility path is evaluated.
+
+The full 0.32.4 probe matched all 12 greedy continuations through 64 tokens or
+EOS. The 11 text cases had zero error in their sampled logits. The image case
+matched all 61 tokens and had a maximum logit error of 2.481.
+
+## Pinned core and vision arithmetic
+
+The pinned-core standalone A/B matched all 64 code tokens in both arms.
+Its maximum sampled logit error fell from 0.0725 to zero with zero-filled
+MXFP8 columns. The release HTTP path also matched all 64 code tokens at
+19.17 decode tokens/s. The separate XCTest process still diverged on code
+with the same input IDs, including when fed a fresh array of fixture IDs.
+
+The vision port matches mlx-vlm's fused linear bias, spatial-frequency
+arithmetic and horizontal-first position interpolation. In the intermediate
+trace the native pixels and every vision layer, including the adapter
+output, matched the Python arrays element for element.
+
+With those changes the pinned-core Swift probe matched all 12 greedy
+continuations, including the 8,225-token prompt. Ten cases had zero sampled
+logit error, including the image. Long context reached 3.471 maximum error
+and the tool call reached 1.018. Both prompts reach the grouped matrix
+dispatch during prefill, so the vector-alignment change is being tested
+without padding the matrix path.
