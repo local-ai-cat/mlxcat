@@ -165,3 +165,7 @@ initialization resolved the earlier XCTest-host discrepancy.
 | --- | ---: | ---: | ---: | ---: | --- |
 | Netprojects MLX 4/8-bit | 12/12 cases | 760/760 tokens | 960/960 exact | 0.0 | Pass |
 | Baytizzel MLX M5Pro 48 GB | 12/12 cases | 760/760 tokens | 960/960 exact | 0.0 | Pass |
+
+The opt-in XCTest wrapper also passed the code case. The ordinary mlxcat suite
+reported 557 XCTest cases with 66 opt-in skips and zero failures, plus seven
+passing Swift Testing cases.
