@@ -174,3 +174,6 @@ passing Swift Testing cases.
 The same 24 fixture cases passed again at `45d1209`, with identical input
 IDs, greedy output IDs and sampled logits in every case. The ordinary suite
 reported the same passing counts.
+
+The NVFP4 unpacker and both custom attention and position kernels passed
+compile-only Metal 3.1 checks with `-Werror` for macOS 15.2 and iOS 18.2.
