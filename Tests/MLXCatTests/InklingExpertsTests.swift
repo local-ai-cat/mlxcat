@@ -62,6 +62,30 @@ final class InklingExpertsTests: XCTestCase {
         }
     }
 
+    func testPackedGroupedTileMatchesStagedGroupedMatmul() throws {
+        try MLXMetalRuntime.requireAvailable()
+        let width = 64
+        let channels = 64
+        let experts = 3
+        let input = sin(arange(37 * width).asType(.float32))
+            .reshaped(37, 1, width).asType(.bfloat16)
+        let weight = cos(arange(experts * channels * width).asType(.float32))
+            .reshaped(experts, channels, width)
+        let packed = quantized(weight, groupSize: 16, bits: 4, mode: .nvfp4)
+        let factors = MLXArray([Float(0.75), 1, 1.5])
+        let routes = MLXArray(Array(repeating: Int32(0), count: 18)
+            + Array(repeating: Int32(2), count: 19))
+        let staged = InklingNVFP4Unpack.run(
+            weights: packed.wq, scales: packed.scales, factor: factors, dtype: input.dtype)
+        let expected = gatherMM(
+            input, staged.transposed(0, 2, 1), rhsIndices: routes, sortedIndices: true)
+        let actual = InklingNVFP4Grouped.run(
+            input, weights: packed.wq, scales: packed.scales, factors: factors, indices: routes)
+        XCTAssertEqual(actual.shape, expected.shape)
+        XCTAssertEqual(actual.asType(.float32).asArray(Float.self),
+                       expected.asType(.float32).asArray(Float.self))
+    }
+
     func testGroupedNVFP4UsesTheSelectedExpertsTensorScale() throws {
         try MLXMetalRuntime.requireAvailable()
         let one = MLXArray.ones([1, 8, 64], dtype: .bfloat16)

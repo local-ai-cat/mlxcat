@@ -1,3 +1,4 @@
+import Foundation
 import MLX
 
 struct InklingExperts {
@@ -11,6 +12,8 @@ struct InklingExperts {
         let scales: MLXArray
         let format: Format
         private let inputPadding: Int
+        private static let usesPackedGroupedPrefill =
+            ProcessInfo.processInfo.environment["MLXCAT_INKLING_PACKED_PREFILL"] == "1"
 
         init(weight: MLXArray, scales: MLXArray, format: Format) {
             self.format = format
@@ -64,8 +67,16 @@ struct InklingExperts {
                 {
                     let tensorScale = globalScale.asType(.float32)
                     let nvfp4Range: Float = 448 * 6
+                    let factor = (tensorScale * nvfp4Range) / nvfp4Range
+                    if Self.usesPackedGroupedPrefill, input.ndim == 3, input.dim(1) == 1,
+                        input.dim(-1).isMultiple(of: 32), weight.dim(1).isMultiple(of: 32),
+                        input.dtype == .bfloat16
+                    {
+                        return InklingNVFP4Grouped.run(
+                            input, weights: weight, scales: scales, factors: factor, indices: indices)
+                    }
                     let scaled = InklingNVFP4Unpack.run(
-                        weights: weight, scales: scales, factor: (tensorScale * nvfp4Range) / nvfp4Range,
+                        weights: weight, scales: scales, factor: factor,
                         dtype: input.dtype)
                     let projected = gatherMM(
                         input, scaled.transposed(0, 2, 1),
