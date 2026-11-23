@@ -1,7 +1,7 @@
 # Inkling 2 Mini and Qwen3.8 coding benchmark
 
-No real Whisker measurements have been recorded yet. The local harness passed
-a transport smoke using a deterministic stub. Its results are excluded below.
+The full three-repeat comparison is in progress. The transport stub is
+excluded from the measurements below.
 
 ## Protocol
 
@@ -71,3 +71,29 @@ in both arms and peaked near 2.59 GiB. The Swift model stores the converted FP32
 projection and releases the raw checkpoint dictionary after load. The
 retained weight representation is about 0.86 GiB larger than BF16. Model-level
 resident memory and decode speed remain to be measured.
+
+## Native HTTP functional smoke
+
+On the verified netprojects checkpoint, a 24-token greeting finished in 82
+generated tokens and streamed a friendly answer. Timings below came from
+`mlxcat-http` usage. Decode rate excludes the first generated token.
+
+| Request | TTFT | Decode tok/s |
+| --- | ---: | ---: |
+| Cold greeting including model load | 4.870 s | 18.23 |
+| Warm greeting | 0.287 s | 18.95 |
+| Weather tool invocation | 1.353 s | 18.72 |
+| Reference image | 1.334 s | 18.76 |
+
+The first Whisker smoke hit the server's default 16-token completion cap
+midway through a tool frame. The coding benchmark proxy sets an explicit
+2,048-token cap and supplies the same six local file tools to both models.
+The assessment harness runs acceptance tests outside the model loop.
+
+## First completed Whisker repeat
+
+The first netprojects T1 run passed the independent Swift tests after editing
+only the counting implementation. It took 126.16 seconds, generated at
+16.80 decode tokens/s, had 7.06 seconds median per-round TTFT, peaked at
+23.44 GiB physical footprint and issued 11 tool calls, of which one failed.
+Whisker completed seven model rounds. This is one repeat.

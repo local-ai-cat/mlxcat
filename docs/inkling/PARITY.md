@@ -63,3 +63,20 @@ measurement boundary from the warmed Python fixture.
 
 The image row-order regression now passes with an asymmetric bitmap. The
 full-weight image comparison remains pending after that correction.
+
+## Netprojects follow-up
+
+The netprojects checkpoint passed the four-shard size and index verification.
+The Python lane independently verified the shard hashes and produced the same
+input IDs, generated IDs and exported logits on both builds for all 12 cases.
+
+With the row-order correction, the native netprojects image case matched all
+61 generated IDs. Its maximum absolute top-k logit error was 0.608 and its
+median was 0.084. Two scores exceeded the 0.25 gate. The release server also
+returned a correct image answer and decoded a structured `get_weather`
+invocation with the city argument `Lisbon`.
+
+An isolated candidate used mlx-swift `00afc1d` with its newer MLX core.
+On the code case, enabling the fused outer scale in that build gave the same
+results as its FP32 fallback. Both matched 39 greedy tokens, with maximum
+logit error 2.326. This probe did not justify changing the shipping pin.
