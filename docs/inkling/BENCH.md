@@ -21,6 +21,15 @@ from `proc_pid_rusage` at 50 ms intervals. Count completed, unsuccessful and
 declined tool calls from the purr event log, and count model rounds from server
 usage events. Summarize repeat medians with ranges and task acceptance counts.
 
+| Task | Independent acceptance |
+| --- | --- |
+| T1 | Fix the Swift off-by-one in one implementation file and pass the complete test suite. |
+| T2 | Add the documented Python label counter, pass pytest, and handle duplicate and blank labels. |
+| T3 | Rename the Swift type across sources and tests, build the package, and pass the affected test. |
+| T4 | Retrieve three facts from the operations file and leave the checkout clean. |
+| T5 | Replace three deprecated call sites, retain the wrapper, and build the Swift package. |
+| T6 | Add the CLI uppercase flag with tests and documentation while preserving the default output. |
+
 | Model | T1–T6 acceptance | Wall | Decode tok/s | TTFT | Peak footprint | Tool calls | Failed tool calls | Rounds |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Inkling 2 Mini MLX 4/8-bit | Pending | | | | | | | |
