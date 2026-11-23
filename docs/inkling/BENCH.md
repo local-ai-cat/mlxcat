@@ -254,8 +254,15 @@ reports the event as completed.
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Inkling T2 | 3/3 | 135.88 | 15.94 | 8.15 | 25.10 | 0 | 0 | 0 |
 | Qwen T2 | 3/3 | 176.52 | 13.19 | 4.12 | 20.37 | 0 | 0 | 2 |
+| Inkling T3 | 3/3 | 351.07 | 15.87 | 19.35 | 25.12 | 0 | 0 | 5 |
+| Qwen T3 | 3/3 | 192.81 | 13.31 | 6.46 | 20.81 | 0 | 0 | 0 |
 
 The outcome columns are totals across the three repeats. Both executed Qwen
 errors in the corrected T2 cell were configuration-file searches where
 `grep` returned 1 for no matches. All three edits and independent acceptance
 checks passed.
+
+The corrected T3 paired reruns completed six of six checkouts. Inkling
+recovered from five nonzero shell exits, including unquoted glob syntax
+in its grep invocations. The independent acceptance check confirmed the
+rename and the affected Swift test in all six checkouts.
