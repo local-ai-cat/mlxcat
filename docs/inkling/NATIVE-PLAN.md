@@ -24,7 +24,7 @@ Snapshot the attention-residual stream immediately before the first core visit. 
 | mlx-swift `Source/MLX/Ops.swift:1124,1126,1539,2520` | Use native MLX operations for dense and indexed packed matmul. |
 | oMLX `omlx/patches/inkling2/model.py:1032–1071` | Describe the cache layout explicitly for each visit, including recurrent state. |
 | vLLM `vllm/models/inkling2/nvidia/loop.py:342–389` | Cross-check explicit layer/pass visits and prelude reset. Its fused CUDA operators are architecture-specific. |
-| Ollama `mlxrunner/model/inkling2/model.go:133–192` | Cross-check cache ownership and test split versus unsplit prefill because low-precision expert routing can vary with row count. |
+| Ollama `mlxrunner/model/inkling2/model.go:133–192` and `model/parsers/inkling2.go` | Cross-check cache ownership and split prefill. Use the typed output framing for streamed reasoning, text and tool calls. |
 
 ## MLX operation gates
 
