@@ -104,7 +104,7 @@ public actor Scheduler {
         // A rolling cache can only be restored by a snapshot at an exact
         // prefill boundary. The session store needs the model's decoder for
         // these layers, and quantized cache is still ineligible.
-        let windowedCheckpoints = cacheCapabilities.usesWindowedKVCache
+        let windowedCheckpoints = !kvQuantization.isEnabled && cacheCapabilities.usesWindowedKVCache
             && (prefixStore as? SessionPrefixKVStore)?.supportsWindowedCheckpoints == true
         self.usesWindowedPrefixCheckpoints = windowedCheckpoints
         self.prefixCacheEnabled = prefixStore != nil && !kvQuantization.isEnabled

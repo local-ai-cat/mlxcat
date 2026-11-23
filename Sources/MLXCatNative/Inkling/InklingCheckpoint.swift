@@ -45,11 +45,18 @@ struct InklingCheckpoint {
         self.quantization = object?["quantization"] as? [String: Any] ?? [:]
     }
 
-    var usesPackedVocabulary: Bool { tensors["language_model.lm_head.scales"] != nil }
+    var usesPackedVocabulary: Bool {
+        let path = "language_model.lm_head"
+        return quantizationMode(for: path) == "affine" || tensors["\(path).scales"] != nil
+    }
 
     func required(_ name: String) throws -> MLXArray {
         guard let tensor = tensors[name] else { throw LoadError.missingTensor(name) }
         return tensor
+    }
+
+    private func quantizationMode(for path: String) -> String? {
+        (quantization[path] as? [String: Any])?["mode"] as? String
     }
 
     private func affine(_ path: String) throws -> InklingProjection.Affine {
@@ -69,7 +76,9 @@ struct InklingCheckpoint {
     }
 
     private func projection(_ path: String) throws -> InklingProjection {
-        if tensors["\(path).scales"] != nil { return .affine(try affine(path)) }
+        if quantizationMode(for: path) == "affine" || tensors["\(path).scales"] != nil {
+            return .affine(try affine(path))
+        }
         return .dense(try required("\(path).weight"))
     }
 
@@ -117,7 +126,7 @@ extension InklingCheckpoint {
             let format: InklingExperts.Projection.Format
             if let factor = tensors["\(path).weight_scale_2"] {
                 format = .nvfp4(scale: factor)
-            } else if tensors["\(path).biases"] != nil {
+            } else if quantizationMode(for: path) == "affine" || tensors["\(path).biases"] != nil {
                 let weight = try affine(path)
                 format = .affine(biases: weight.biases, groupSize: weight.groupSize, bits: weight.bits)
             } else {
