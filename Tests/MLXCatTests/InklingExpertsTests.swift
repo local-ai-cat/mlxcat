@@ -61,4 +61,30 @@ final class InklingExpertsTests: XCTestCase {
             }
         }
     }
+
+    func testGroupedNVFP4UsesTheSelectedExpertsTensorScale() throws {
+        try MLXMetalRuntime.requireAvailable()
+        let one = MLXArray.ones([1, 8, 64], dtype: .bfloat16)
+        let packed = quantized(concatenated([one, one * 2], axis: 0),
+                               groupSize: 16, bits: 4, mode: .nvfp4)
+        let projection = InklingExperts.Projection(
+            weight: packed.wq, scales: packed.scales,
+            format: .nvfp4(scale: MLXArray([Float(0.5), 2])))
+        let input = MLXArray.ones([16, 1, 64], dtype: .bfloat16)
+        let selected = MLXArray(Array(repeating: Int32(0), count: 8)
+                                + Array(repeating: Int32(1), count: 8))
+        let result = projection(input, indices: selected, sorted: true)
+        XCTAssertEqual(result.shape, [16, 1, 8])
+
+        // Compare against separate projections of the two stable expert rows.
+        let dense = dequantized(packed.wq, scales: packed.scales, biases: nil,
+                                groupSize: 16, bits: 4, mode: .nvfp4, dtype: .float32)
+        for (expert, scale) in [Float(0.5), 2].enumerated() {
+            let expertWeight = (dense[expert] * scale).asType(.bfloat16)
+            let expected = matmul(input[(expert * 8)..<((expert + 1) * 8)], expertWeight.transposed())
+            let actual = result[(expert * 8)..<((expert + 1) * 8)]
+            XCTAssertEqual(actual.asType(.float32).asArray(Float.self),
+                           expected.asType(.float32).asArray(Float.self))
+        }
+    }
 }

@@ -54,6 +54,28 @@ struct InklingExperts {
                     values, weight, scales: scales, biases: nil, rhsIndices: indices,
                     groupSize: 32, bits: 8, mode: .mxfp8, sortedIndices: sorted)
             case .nvfp4(let globalScale):
+                // MLX's grouped matrix kernel rounds the scaled tile to the
+                // input dtype before GEMM. Reproduce that on the pinned core
+                // with one transient dense projection. The vector kernel
+                // applies the scale after FP32 accumulation.
+                let grouped = sorted && indices.size >= 16 && indices.size / weight.dim(0) >= 4
+                if grouped, globalScale.size == 1 || globalScale.size == weight.dim(0),
+                    Device.defaultDevice().deviceType == .gpu
+                {
+                    let unscaled = dequantized(
+                        weight, scales: scales, biases: nil, groupSize: 16,
+                        bits: 4, mode: .nvfp4, dtype: .float32)
+                    let tensorScale = globalScale.asType(.float32).reshaped(-1, 1, 1)
+                    let nvfp4Range: Float = 448 * 6
+                    let scaled = unscaled * ((tensorScale * nvfp4Range) / nvfp4Range)
+                    let projected = gatherMM(
+                        input, scaled.asType(input.dtype).transposed(0, 2, 1),
+                        rhsIndices: indices, sortedIndices: true)
+                    // Finish this projection before building the next one so
+                    // the temporary weights never accumulate across visits.
+                    eval(projected)
+                    return projected
+                }
                 // mlx-vlm quantization/nvfp4.py uses this FP32 fallback for
                 // per-row scales. The pinned gather API has no globalScale.
                 let result = gatherQuantizedMM(
