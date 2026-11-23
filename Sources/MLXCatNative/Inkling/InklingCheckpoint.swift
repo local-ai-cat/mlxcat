@@ -61,7 +61,7 @@ extension InklingCheckpoint {
                 ?? required("\(model).message_input.query"),
             finalQuery: required("\(model).final_input.query"),
             finalNorm: required("\(model).norm.weight"),
-            vocabulary: required("language_model.lm_head.weight"))
+            vocabulary: required("language_model.lm_head.weight").asType(.float32))
     }
 
     private func layer(

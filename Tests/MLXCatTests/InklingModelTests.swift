@@ -128,7 +128,34 @@ final class InklingModelTests: XCTestCase {
             config: config, loop: config.makeLoop(), layers: layers,
             embeddings: signal(8, width), embeddingNorm: norm,
             messageQueries: signal(8, width).reshaped(2, 4, width).asType(.float32),
-            finalQuery: signal(1, width).asType(.float32), finalNorm: norm, vocabulary: signal(8, width))
+            finalQuery: signal(1, width).asType(.float32), finalNorm: norm,
+            vocabulary: signal(8, width).asType(.float32))
         return InklingLanguageModel(textModel: model, visionModel: nil, imageTokenID: 200054)
+    }
+}
+
+extension InklingModelTests {
+    func testVocabularyProjectionAB() throws {
+        guard ProcessInfo.processInfo.environment["MLXCAT_INKLING_VOCAB_AB"] == "1" else {
+            throw XCTSkip("Set MLXCAT_INKLING_VOCAB_AB=1 under an exclusive machine lease.")
+        }
+        try MLXMetalRuntime.requireAvailable()
+        let weight = MLXArray.ones([201_024, 2_304], dtype: .bfloat16)
+        let input = sin(arange(2_304).asType(.float32)).reshaped(1, 1, 2_304)
+        eval(weight, input)
+        let iterations = 12
+        for cached in [false, true, true, false] {
+            let projection = cached ? weight.asType(.float32) : weight
+            eval(matmul(input, projection.asType(.float32).transposed()))
+            Memory.clearCache()
+            let retained = Memory.activeMemory
+            Memory.peakMemory = 0
+            let start = Date()
+            for _ in 0..<iterations {
+                eval(matmul(input, projection.asType(.float32).transposed()))
+            }
+            let elapsed = Date().timeIntervalSince(start) * 1000 / Double(iterations)
+            print("Inkling vocabulary cached=\(cached): \(elapsed) ms, retained \(retained) bytes, peak \(Memory.peakMemory) bytes")
+        }
     }
 }

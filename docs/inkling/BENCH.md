@@ -53,3 +53,21 @@ The fused mask follows mlx-vlm's shape-generic Metal band kernel in
 in the output allocation. The CPU implementation and the strided-input
 differential test retain the composed mask. GPU inference uses the fused
 kernel. End-to-end decode and TTFT impact remain to be measured.
+
+## Vocabulary projection
+
+On the same M4 Pro under the exclusive lease, a warmed synthetic single-token
+FP32 projection used Mini's 201,024 × 2,304 vocabulary matrix. Each A/B/B/A
+arm evaluated 12 steps.
+
+| Projection | Mean time across the two arms |
+| --- | ---: |
+| Convert BF16 weights on every step | 21.94 ms |
+| Reuse the converted FP32 weights | 8.40 ms |
+
+This follows the decode projection cache in mlx-vlm
+`models/inkling2/language.py`. The prototype probe kept the BF16 matrix alive
+in both arms and peaked near 2.59 GiB. The Swift model stores the converted FP32
+projection and releases the raw checkpoint dictionary after load. The
+retained weight representation is about 0.86 GiB larger than BF16. Model-level
+resident memory and decode speed remain to be measured.

@@ -20,7 +20,7 @@ Snapshot the attention-residual stream immediately before the first core visit. 
 | --- | --- |
 | mlx-vlm `models/inkling2/language.py:721–782,945–955` | Canonical message-bank boundaries, pass restart and per-visit cache ownership. |
 | mlx-lm `mlx_lm/models/cache.py`, `mlx_lm/generate.py` | Reuse mlxcat's existing chunked generation and batching seams. No Inkling 2 model file in the inspected tree. |
-| mlx-swift-lm `Libraries/MLXLMCommon/KVCache.swift` and existing MoE models | Follow the native model/cache contracts and use the same module registration and packed projection patterns. No Inkling 2 model file in the inspected tree. |
+| mlx-swift-lm `Libraries/MLXLMCommon/KVCache.swift`, `Libraries/MLXLMCommon/SwitchLayers.swift`, and `Libraries/MLXLLM/Models/Qwen3MoE.swift` | Follow the native model/cache contracts and use the same module registration and packed projection patterns. No Inkling 2 model file in the inspected tree. |
 | mlx-swift `Source/MLX/Ops.swift:1124,1126,1539,2520` | Use native MLX operations for dense and indexed packed matmul. |
 | oMLX `omlx/patches/inkling2/model.py:1032–1071` | Describe the cache layout explicitly for each visit, including recurrent state. |
 | vLLM `vllm/models/inkling2/nvidia/loop.py:342–389` | Cross-check explicit layer/pass visits and prelude reset. Its fused CUDA operators are architecture-specific. |
@@ -35,3 +35,11 @@ The Swift reference tree exposes NVFP4 and MXFP8 modes for both quantized matmul
 The pinned MLX core instantiates Metal kernels for NVFP4 group 16 and MXFP8 group 32 in FP32, BF16 and FP16. The pinned Swift gather wrapper lacks an outer-scale argument. The native NVFP4 path therefore uses the mlx-vlm FP32 fallback, applies each selected expert's stored `weight_scale_2`, then rounds to the input dtype. The synthetic Metal test compares each gathered result against the same pinned packed projection run expert by expert. It covers different expert weights and outer scales. Separately dequantizing and multiplying an all-ones matrix produced different results in the initial probe for both formats, so that path would be a different numerical reference.
 
 The first native serving path serializes requests and keeps the paired attention and convolution states per visit. It uses the publisher's typed chat protocol and ports the Mini chat template to Swift because the pinned Jinja `tojson` filter rejects the publisher's `sort_keys` and `separators` arguments. The verifier fixture lane uses the mlx-vlm introduction revision `111ac668`. Its loop boundaries and residual equations agree with the reviewed `466069f` snapshot. The parity harness uses the fixture's prefill chunk size and reserves the last prompt token for the sampling forward as in that revision.
+
+## Download metadata
+
+The catalogue identity is [netprojects/Inkling-2-Mini-MLX-4-8bit](https://huggingface.co/netprojects/Inkling-2-Mini-MLX-4-8bit).
+The checkpoint is a separate download. Its source model is
+[Thinking Machines Lab's Inkling 2 Mini](https://huggingface.co/thinkingmachines/Inkling-2-Mini)
+under [Apache 2.0](https://www.apache.org/licenses/LICENSE-2.0), with the publisher's
+[Model Acceptable Use Policy](https://thinkingmachines.ai/model-acceptable-use-policy/).

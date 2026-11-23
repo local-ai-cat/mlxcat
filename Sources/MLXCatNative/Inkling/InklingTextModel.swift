@@ -91,6 +91,7 @@ struct InklingTextModel {
     let messageQueries: MLXArray
     let finalQuery: MLXArray
     let finalNorm: MLXArray
+    /// The FP32 projection retains its exact converted weights across decode steps.
     let vocabulary: MLXArray
 
     func makeCache() -> [VisitState] {
@@ -120,7 +121,7 @@ struct InklingTextModel {
             normalizeValues: config.normalizeResidual).squeezed(axis: -2)
         let normalized = MLXFast.rmsNorm(hidden, weight: finalNorm, eps: config.rmsEpsilon)
             .asType(embeddingNorm.dtype).asType(.float32)
-        let logits = matmul(normalized, vocabulary.asType(.float32).transposed())
+        let logits = matmul(normalized, vocabulary.transposed())
         let capped = tanh(logits / config.logitCap) * config.logitCap
         return capped[.ellipsis, ..<config.vocabularySize]
     }
