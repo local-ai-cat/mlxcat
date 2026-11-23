@@ -101,7 +101,9 @@ struct InklingTextModel {
         MLXFast.rmsNorm(embeddings[tokens], weight: embeddingNorm, eps: config.rmsEpsilon)
     }
 
-    func forward(embeddings: MLXArray, cache: inout [VisitState]) -> MLXArray {
+    func forward(
+        embeddings: MLXArray, cache: inout [VisitState], projectLogits: Bool = true
+    ) -> MLXArray {
         precondition(cache.count == loop.visits.count)
         let residual = loop.forward(embedding: embeddings, makeBank: InklingMath.messageBank) {
             slot, visit, bank, stream in
@@ -112,6 +114,7 @@ struct InklingTextModel {
                 &stream, messages: messages,
                 boundary: visit.layer.isMultiple(of: config.residualBlockSize), state: &cache[slot])
         }
+        guard projectLogits else { return residual.partial }
         let hidden = InklingMath.attentionResidual(
             states: residual.completed + [residual.partial], query: finalQuery,
             normalizeValues: config.normalizeResidual).squeezed(axis: -2)

@@ -861,6 +861,8 @@ public final class OpenAIServer: @unchecked Sendable {
         var cachedPromptTokens = 0
         var finishReason = "length"
         var text = ""
+        var inklingParser = toolCallModelFamily(forModel: request.model) == .inkling
+            ? ThinkingParser() : nil
         // Raw generated token ids captured before the thinking parser reshapes text,
         // flushed on the terminal chunk delta for the migration-gate parity oracle.
         var streamTokenIDs: [Int] = []
@@ -901,6 +903,10 @@ public final class OpenAIServer: @unchecked Sendable {
                 }
                 let stopMatch = stopMatcher.feed(chunk.text)
                 text += stopMatch.text
+                if let delta = inklingParser?.feed(stopMatch.text) {
+                    try await sendParserDelta(
+                        delta, id: id, created: created, model: request.model, connection: connection)
+                }
                 if stopMatch.stopped {
                     finishReason = "stop"
                     stoppedByTextStop = true
@@ -927,6 +933,10 @@ public final class OpenAIServer: @unchecked Sendable {
         if !stoppedByTextStop {
             let stopMatch = stopMatcher.finish()
             text += stopMatch.text
+            if let delta = inklingParser?.feed(stopMatch.text) {
+                try await sendParserDelta(
+                    delta, id: id, created: created, model: request.model, connection: connection)
+            }
             if stopMatch.stopped {
                 finishReason = "stop"
             }
@@ -938,33 +948,10 @@ public final class OpenAIServer: @unchecked Sendable {
             startInThinking: request.startInThinking
         )
         let parsed = ToolCallParseResult(content: result.content, toolCalls: result.toolCalls)
-        if parsed.toolCalls.isEmpty {
-            try await sendParserDelta(
-                (result.reasoning, result.content),
-                id: id,
-                created: created,
-                model: request.model,
-                connection: connection
-            )
-        } else {
-            if !result.reasoning.isEmpty {
-                try await sendParserDelta(
-                    (result.reasoning, ""),
-                    id: id,
-                    created: created,
-                    model: request.model,
-                    connection: connection
-                )
-            }
-            if !parsed.content.isEmpty {
-                try await sendParserDelta(
-                    ("", parsed.content),
-                    id: id,
-                    created: created,
-                    model: request.model,
-                    connection: connection
-                )
-            }
+        let delta = inklingParser?.finish() ?? (result.reasoning, result.content)
+        try await sendParserDelta(
+            delta, id: id, created: created, model: request.model, connection: connection)
+        if !parsed.toolCalls.isEmpty {
             try await sendSSE(
                 [
                     "id": id,

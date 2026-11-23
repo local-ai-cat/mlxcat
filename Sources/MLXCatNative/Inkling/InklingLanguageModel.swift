@@ -86,11 +86,32 @@ final class InklingLanguageModel: Module, LanguageModel {
     func prepare(
         _ input: LMInput, cache: [any KVCache], state: LMOutput.State?, prefill: PrefillParameters
     ) throws -> PrepareResult {
-        guard let image = input.image else { return .tokens(input.text) }
-        guard let visionModel, let frames = image.frames else {
+        guard input.text.tokens.size > 0 else { throw InklingInputProcessor.InputError.emptyPrompt }
+        let tokens = input.text.tokens.reshaped(1, -1)
+        let embeddings = textModel.embed(tokens)
+        if let image = input.image {
+            try insertImageFeatures(image, tokens: tokens, into: embeddings)
+        }
+
+        // Match mlx-vlm's chunk boundary: reserve the last prompt position
+        // for the forward that produces the first sampled token.
+        let chunkSize = prefill.resolvedStepSize(defaultStepSize: 1024)
+        let last = tokens.dim(1) - 1
+        for start in stride(from: 0, to: last, by: chunkSize) {
+            let end = min(last, start + chunkSize)
+            _ = forward(embeddings[0..., start..<end, 0...], cache: cache, projectLogits: false)
+            eval(cache)
+            Memory.clearCache()
+        }
+        return .logits(.init(logits: forward(embeddings[0..., last..., 0...], cache: cache)))
+    }
+
+    private func insertImageFeatures(
+        _ image: LMInput.ProcessedImage, tokens: MLXArray, into embeddings: MLXArray
+    ) throws {
+        guard let visionModel, let frames = image.frames, !frames.isEmpty else {
             throw InklingInputProcessor.InputError.unsupportedMedia
         }
-        let tokens = input.text.tokens.reshaped(1, -1)
         let slots = tokens.asArray(Int.self).enumerated().compactMap { offset, token in
             token == imageTokenID ? offset : nil
         }
@@ -105,9 +126,7 @@ final class InklingLanguageModel: Module, LanguageModel {
             return visionModel(pixels, rows: frame.h, columns: frame.w)
         }
         let features = concatenated(arrays, axis: 0)
-        let embeddings = textModel.embed(tokens)
         embeddings[0, MLXArray(slots), 0...] = features.asType(embeddings.dtype)
-        return .logits(.init(logits: forward(embeddings, cache: cache)))
     }
 
     func newCache(parameters: GenerateParameters?) throws -> [any KVCache] {
@@ -123,10 +142,12 @@ final class InklingLanguageModel: Module, LanguageModel {
         return forward(textModel.embed(tokens), cache: cache)
     }
 
-    private func forward(_ embeddings: MLXArray, cache: [any KVCache]?) -> MLXArray {
+    private func forward(
+        _ embeddings: MLXArray, cache: [any KVCache]?, projectLogits: Bool = true
+    ) -> MLXArray {
         let caches = cache?.map { $0 as! InklingVisitCache }
         var visits = caches?.map(\.visit) ?? textModel.makeCache()
-        let result = textModel.forward(embeddings: embeddings, cache: &visits)
+        let result = textModel.forward(embeddings: embeddings, cache: &visits, projectLogits: projectLogits)
         if let caches {
             for (cache, visit) in zip(caches, visits) { cache.visit = visit }
         }
@@ -137,6 +158,7 @@ final class InklingLanguageModel: Module, LanguageModel {
 struct InklingInputProcessor: UserInputProcessor {
     enum InputError: Error {
         case unsupportedMedia
+        case emptyPrompt
     }
 
     let tokenizer: any MLXLMCommon.Tokenizer
@@ -153,8 +175,18 @@ struct InklingInputProcessor: UserInputProcessor {
                 messages[index]["content"] = [["type": "text", "text": message.content]] + imageParts
             }
         }
-        let tokens = try tokenizer.applyChatTemplate(
-            messages: messages, tools: input.tools, additionalContext: input.additionalContext)
+        var additional = input.additionalContext
+        if let history = additional?.removeValue(forKey: "inkling_reasoning_history") as? [String],
+            history.count <= messages.count
+        {
+            let first = messages.count - history.count
+            for (offset, reasoning) in history.enumerated() where !reasoning.isEmpty {
+                messages[first + offset]["reasoning_content"] = reasoning
+            }
+        }
+        let prompt = try InklingChatTemplate.render(
+            messages: messages, tools: input.tools, reasoningEffort: additional?["reasoning_effort"])
+        let tokens = tokenizer.encode(text: prompt, addSpecialTokens: false)
         guard !input.images.isEmpty else { return LMInput(tokens: MLXArray(tokens)) }
         guard let imagePatchSize else { throw InputError.unsupportedMedia }
         let prepared = try input.images.map { try InklingImageProcessor.prepare($0, patch: imagePatchSize) }

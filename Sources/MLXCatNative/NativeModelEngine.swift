@@ -726,6 +726,14 @@ public final class NativeModelEngine: @unchecked Sendable {
         if case .value(let value) = reasoningEffort {
             context["reasoning_effort"] = sendableValue(from: value)
         }
+        if context["reasoning_effort"] == nil, request.enableThinking == false,
+            self.context.model is InklingLanguageModel
+        {
+            context["reasoning_effort"] = "none"
+        }
+        if self.context.model is InklingLanguageModel {
+            context["inkling_reasoning_history"] = request.messages.map { $0.reasoningContent ?? "" }
+        }
         if let enableThinking = request.enableThinking {
             context["enable_thinking"] = enableThinking
         } else if request.thinkingBudget != nil {
@@ -952,7 +960,7 @@ public struct NativeModelLoader: EnginePoolModelLoader {
                     headDimension: config.headWidth,
                     hiddenSize: config.hiddenSize)),
             serializationPolicy: .always,
-            schedulerManagedTextPrefill: true,
+            schedulerManagedTextPrefill: false,
             chunkIdlePrefill: true)
     }
 
