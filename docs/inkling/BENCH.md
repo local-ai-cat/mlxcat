@@ -100,3 +100,14 @@ measurements describe one repeat per model.
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Inkling 2 Mini MLX 4/8-bit | 126.16 s | 16.80 | 7.06 s | 23.44 GiB | 11 | 1 | 7 |
 | Qwen3.8-27B-4bit | 214.68 s | 12.15 | 6.90 s | 21.68 GiB | 11 | 0 | 6 |
+
+## Three-repeat T1 comparison at `60122de`
+
+Both models passed all three independent T1 checks. Values show the median
+and observed range. The later repeated run includes a warm server between
+repeats and uses a fresh checkout and Whisker thread for every repeat.
+
+| Model | Passed | Wall s | Decode tok/s | TTFT s | Peak GiB | Tool calls | Failed calls | Rounds |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Inkling 2 Mini MLX 4/8-bit | 3/3 | 204.60 [144.93–290.19] | 15.55 [15.28–16.09] | 8.45 [7.61–10.38] | 23.80 [23.75–24.82] | 14 [12–15] | 3 [2–3] | 11 [8–11] |
+| Qwen3.8-27B-4bit | 3/3 | 124.29 [117.00–135.64] | 13.21 [13.13–13.32] | 5.38 [5.25–5.73] | 20.51 [19.73–20.52] | 10 [10–10] | 0 [0–0] | 6 [6–6] |

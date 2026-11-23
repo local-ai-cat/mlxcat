@@ -110,3 +110,17 @@ the captured reference top-k entries through the first token mismatch.
 | System | 30 | 2.399 | 0.174 |
 | Tool call | 59 (EOS) | 1.818 | 0.262 |
 | Unicode | 7 | 0.979 | 0.169 |
+
+## MLX 0.32.4 comparison
+
+The isolated Swift probe with MLX 0.32.4 and the reference residual scale
+matched all 64 code tokens and every sampled logit exactly. The result was
+identical with BF16 or promoted FP32 input to the MXFP8 operator.
+
+The pinned MLX 0.31.1 core uses a 512-element alignment test to select its
+fast quantized gather vector kernel. MLX 0.32.4 derives the alignment from
+the bit width, which selects that kernel at 256 elements for MXFP8. Inkling's
+gate and up projections have a 2,304-element input, so the cores dispatch
+different reduction kernels. The newer core also fails the current Metal 3
+compile gate. The pinned core remains the branch default while the narrower
+MXFP8 compatibility path is evaluated.
