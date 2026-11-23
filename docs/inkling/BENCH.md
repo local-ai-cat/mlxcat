@@ -364,3 +364,18 @@ The separately captured code fixture matched 33/64 IDs. The image and
 tool fixtures matched all 61 and 59 greedy IDs, with maximum sampled
 FP32 errors of 2.51 and 3.33. The original netprojects and baytizzel
 reference results above use their own unchanged weights.
+
+An affine alignment trial padded the 8-bit dense input width to select
+the newer MLX reduction layout on the pinned core. The code fixture
+still matched 33/64 tokens after padding, and all three fixture maximum
+logit errors exceeded 0.25. The alignment trial was removed.
+
+## Whisker with the combined defaults
+
+One additional Inkling T2 smoke on the final release passed independent
+acceptance with zero tool failures. The cold turn had zero cached tokens
+and its eight follow-ups reused 1,024 to 4,096 tokens each. Median-turn
+TTFT was 4.05 s, decode was 17.66 tok/s, and wall time was 142.49 s. The
+frozen Bash-enabled T2 baseline had three repeats and a median-turn TTFT
+of 8.15 s. The smoke generated a different number of agent rounds, so
+the matched prompt A/B above isolates the cache effect.

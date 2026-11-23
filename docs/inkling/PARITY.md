@@ -216,5 +216,6 @@ With packed prefill and mixed-storage vocabulary both enabled by default,
 the verifier again matched 760/760 greedy tokens, 960/960 sampled scores
 and 12/12 rendered prompts on each original checkpoint. Maximum sampled
 logit error was zero on both. The combined-default release built
-successfully and its package suite passed all 560 XCTest cases with
-66 opt-in skips, plus seven Swift Testing cases.
+successfully. Its package suite executed 560 XCTest cases with 66 opt-in
+skips and zero failures. All seven Swift Testing cases and all 28
+benchmark harness tests passed.
