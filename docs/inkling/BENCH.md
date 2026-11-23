@@ -328,3 +328,39 @@ The native Swift port adopted the mixed-storage vocabulary read. The
 native speculative panel exceeded the exactness tolerance, so Swift uses
 ordinary decoding. Raw MTPLX token IDs and arm metrics are in
 `mtplx-reference-ab.jsonl` in the shared work directory.
+
+## VisualInference 4-bit context curve
+
+The verified VisualInference pack (`443e30e`) has 15,846,700,032 indexed
+weight bytes. The same M4 ran the publisher's mlx-vlm/MLX 0.32.4 stack
+and native Swift. Each arm used greedy sampling and matching prompts.
+Swift used 256-token prefill chunks. Python used 1,024 for the first two
+points and 256 for the longer points. The 32-token prompt requested 256
+output tokens. The other prompts requested 32 outputs. The Python memory
+counter samples MLX allocations. The native figures come from macOS
+process physical footprint and include additional process allocations.
+
+| Prompt tokens | mlx-vlm MLX peak GiB | Native physical peak GiB | Native TTFT s | Native decode tok/s |
+| ---: | ---: | ---: | ---: | ---: |
+| 32 | 14.93 | 15.85 | 0.29 | 23.70 |
+| 224 | 15.47 | 15.62 | 1.28 | 23.59 |
+| 4,364 | 16.26 | 16.66 | 19.36 | 20.68 |
+| 8,824 | 16.53 | 17.94 | 39.54 | 19.15 |
+| 17,684 | 17.05 | 19.65 | 81.32 | 16.61 |
+
+At 224 prompt tokens the measured MLX peak was 15.47 GiB, within 0.03 GiB
+of the published 15.5 GiB. The 32-token coding prompt decoded at 27.86
+tok/s in mlx-vlm versus the published 31.1 tok/s on its 28-token prompt.
+The same local mlx-vlm prompt with DSpark decoded at 17.37 tok/s and
+agreed with its autoregressive arm for the first 90 of 256 tokens.
+The native 224-token point left 0.38 GiB below 16 GiB before accounting
+for macOS and other processes. The native 4,364-token point exceeded
+16 GiB on its own. These measurements were on the 48 GiB M4.
+[VisualInference benchmark conditions](https://huggingface.co/VisualInference/Inkling-2-Mini-MLX-4bit/blob/443e30e1ddbb05b711975a6b549ffe209755edc6/README.md)
+
+The initial Swift run of this checkpoint diverged from its own Python
+reference. Its 256-token coding completion matched the first 84 IDs.
+The separately captured code fixture matched 33/64 IDs. The image and
+tool fixtures matched all 61 and 59 greedy IDs, with maximum sampled
+FP32 errors of 2.51 and 3.33. The original netprojects and baytizzel
+reference results above use their own unchanged weights.
