@@ -1,6 +1,8 @@
 import Foundation
 import MLX
+import MLXHuggingFace
 import MLXLMCommon
+import Tokenizers
 import XCTest
 
 @testable import MLXCatNative
@@ -17,6 +19,8 @@ final class InklingParityTests: XCTestCase {
         let prefillChunk: Int
         let topLogits: [[TopLogit]]
         let imageSHA256: String?
+        let messages: MLXLMCommon.JSONValue
+        let settings: [String: MLXLMCommon.JSONValue]
 
         enum CodingKeys: String, CodingKey {
             case inputIDs = "input_ids"
@@ -24,10 +28,12 @@ final class InklingParityTests: XCTestCase {
             case prefillChunk = "prefill_chunk_tokens"
             case topLogits = "top_logits"
             case imageSHA256 = "image_sha256"
+            case messages
+            case settings
         }
     }
 
-    func testGreedyTokensAndReferenceLogits() throws {
+    func testGreedyTokensAndReferenceLogits() async throws {
         let environment = ProcessInfo.processInfo.environment
         guard let modelPath = environment["MLXCAT_INKLING_VERIFIED_MODEL"],
             let fixturePath = environment["MLXCAT_INKLING_REFERENCE"]
@@ -46,36 +52,53 @@ final class InklingParityTests: XCTestCase {
         let decoder = JSONDecoder()
         let config = try decoder.decode(
             InklingConfiguration.self, from: Data(contentsOf: directory.appending(component: "config.json")))
+        let loader = #huggingFaceTokenizerLoader()
+        let tokenizer = try await loader.load(from: directory)
+        let imageTokenID = config.imageTokenID ?? 200054
+        let processor = InklingInputProcessor(
+            tokenizer: tokenizer, imageTokenID: imageTokenID,
+            imagePatchSize: config.vision.map { $0.patchSize * $0.merge })
         let weights = try InklingCheckpoint(directory: directory)
         let vision = try config.vision.map { try weights.visionModel(config: $0) }
         let model = try InklingLanguageModel(
             textModel: weights.textModel(config: config.text),
-            visionModel: vision, imageTokenID: config.imageTokenID ?? 200054)
+            visionModel: vision, imageTokenID: imageTokenID)
         let tolerance: Float = 0.25
 
         for path in paths {
             let fixture = try decoder.decode(Fixture.self, from: Data(contentsOf: path))
             let cache = try model.newCache(parameters: nil)
-            let image: LMInput.ProcessedImage?
-            if fixture.imageSHA256 != nil, let config = config.vision {
-                let tiles = try InklingImageProcessor.prepare(
-                    .url(fixtures.appending(component: "shapes.png")), patch: config.patchSize * config.merge)
-                image = .init(pixels: tiles.0, frames: [tiles.1])
-            } else {
-                image = nil
+            let imageSource: [UserInput.Image] = fixture.imageSHA256 == nil ? []
+                : [.url(fixtures.appending(component: "shapes.png"))]
+            let settings = fixture.settings.mapValues(Self.sendableValue)
+            let tools = settings["tools"] as? [[String: any Sendable]]
+            let userInput: UserInput
+            switch fixture.messages {
+            case .string(let prompt):
+                userInput = UserInput(
+                    chat: [.user(prompt, images: imageSource)], tools: tools, additionalContext: settings)
+            case .array(let messages):
+                userInput = UserInput(
+                    messages: messages.compactMap { Self.sendableValue($0) as? [String: any Sendable] },
+                    images: imageSource, tools: tools, additionalContext: settings)
+            default:
+                return XCTFail("Unexpected fixture message format")
             }
-            let input = LMInput(text: .init(tokens: MLXArray(fixture.inputIDs)), image: image)
+            let input = try processor.prepare(input: userInput)
+            let inputIDs = input.text.tokens.asArray(Int.self)
+            XCTAssertEqual(inputIDs, fixture.inputIDs, path.lastPathComponent)
+            guard inputIDs == fixture.inputIDs else { continue }
             let result = try model.prepare(
                 input, cache: cache, state: nil, prefill: .init(stepSize: fixture.prefillChunk))
             guard case .logits(let output) = result else { return XCTFail("Expected prefill logits") }
             var logits = output.logits
-            var maximumError: Float = 0
+            var errors: [Float] = []
             for (step, reference) in fixture.generatedIDs.prefix(64).enumerated() {
                 let row = logits[0, -1, 0...]
                 if step < fixture.topLogits.count {
                     for score in fixture.topLogits[step] {
                         let actual = row[score.id].item(Float.self)
-                        maximumError = max(maximumError, abs(actual - score.logit))
+                        errors.append(abs(actual - score.logit))
                         XCTAssertEqual(actual, score.logit, accuracy: tolerance,
                                        "\(path.lastPathComponent) step \(step), token \(score.id)")
                     }
@@ -85,7 +108,23 @@ final class InklingParityTests: XCTestCase {
                 if token != reference { break }
                 logits = model(MLXArray([token]), cache: cache)
             }
-            print("Inkling parity \(path.lastPathComponent) maximum observed logit error \(maximumError)")
+            let sorted = errors.sorted()
+            if let maximum = sorted.last {
+                print("Inkling parity \(path.lastPathComponent): max \(maximum), median \(sorted[sorted.count / 2])")
+            }
         }
     }
+
+    private static func sendableValue(_ value: MLXLMCommon.JSONValue) -> any Sendable {
+        switch value {
+        case .null: NSNull()
+        case .bool(let value): value
+        case .int(let value): value
+        case .double(let value): value
+        case .string(let value): value
+        case .array(let values): values.map(sendableValue)
+        case .object(let values): values.mapValues(sendableValue)
+        }
+    }
+
 }

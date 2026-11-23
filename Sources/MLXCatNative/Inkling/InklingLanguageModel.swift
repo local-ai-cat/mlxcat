@@ -172,7 +172,7 @@ struct InklingInputProcessor: UserInputProcessor {
         if case .chat(let chat) = input.prompt {
             for (index, message) in chat.enumerated() where !message.images.isEmpty {
                 let imageParts = message.images.map { _ in ["type": "image"] }
-                messages[index]["content"] = [["type": "text", "text": message.content]] + imageParts
+                messages[index]["content"] = imageParts + [["type": "text", "text": message.content]]
             }
         }
         var additional = input.additionalContext
