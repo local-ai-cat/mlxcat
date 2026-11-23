@@ -1,12 +1,14 @@
 # Inkling 2 Mini parity
 
-The first full-weight Baytizzel run failed the token and logit gate. Whisker results are pending.
+Both verified checkpoint builds run natively. The same-Mac Python comparison
+is still outside the token and logit gate. The current netprojects run is
+below. Coding results are recorded in [BENCH.md](BENCH.md).
 
 ## Acceptance
 
 - Verify every shard listed in the checkpoint index before loading it. Check the safetensors header, file size, indexed tensor names and total payload size. Verify the SHA-256 manifest when the checkpoint supplies one.
 - Run mlx-vlm in the shared uv venv and the native path under the same machine lease, one model at a time. Record the build revisions, checkpoint, seed, prompt token IDs, prefill chunk size and decoded token IDs.
-- Require equality for each of the first 64 greedy token IDs, or through EOS if it arrives earlier. Compare native FP32 logits at the reference fixture's token indices with a provisional maximum absolute error of 0.25 logits. Report actual maximum and median errors, and the first failing prompt and position. This initial tolerance is an acceptance target and has not been measured.
+- Require equality for each of the first 64 greedy token IDs, or through EOS if it arrives earlier. Compare native FP32 logits at the reference fixture's token indices with a maximum absolute error of 0.25 logits. Report actual maximum and median errors, and the first failing prompt and position.
 - Compare text and image token preparation separately. For tools and reasoning, also verify the streamed HTTP events and the assembled non-streamed response.
 - Compare solo versus batched generation and cold versus warm prefix-cache continuation separately from reference parity.
 
