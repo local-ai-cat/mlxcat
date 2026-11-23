@@ -196,3 +196,18 @@ token sequences.
 The HTTP continuation A/B separately matched the greedy token IDs on both
 turns while the warm arm restored 3,072 tokens of attention and convolution
 state. The standalone 256-token vocabulary A/B also matched every token.
+
+### Speculative verification gate
+
+The native probe forked each fixture's populated cache, then compared
+an eight-token verification panel with eight ordinary one-token forwards
+on the same inputs. The 96 top-token decisions agreed. The maximum
+full-vocabulary logit difference was 9.253425, and every panel exceeded
+the 0.25 absolute tolerance. The current native panel therefore stays
+disabled for Inkling speculation. MTPLX's row-stable attention, expert
+and state-commit path is a separate implementation.
+
+The updated package suite executed 560 XCTest cases with 66 opt-in
+skips and zero failures. Seven Swift Testing cases also passed.
+Both new Metal kernels compiled with warnings treated as errors for
+macOS 14, macOS 15.2, and iOS 18.2 using Metal 3.1.
