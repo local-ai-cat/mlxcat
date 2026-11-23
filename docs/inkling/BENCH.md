@@ -295,3 +295,8 @@ peak physical footprint went from 20.35 to 19.41 GiB.
 
 Raw arm JSON, server logs and memory-pressure receipts are in
 `native-prefix-packed-ab-1` under the shared Inkling work directory.
+
+The packed path is the default for eligible prefill after all 760 greedy
+tokens and 960 sampled logits matched the netprojects fixtures. The lower
+peak is the reason for choosing it despite the cold latency increase on
+this prompt. Set `MLXCAT_INKLING_PACKED_PREFILL=0` for staged prefill.

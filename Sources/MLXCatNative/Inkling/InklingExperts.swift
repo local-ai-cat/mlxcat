@@ -14,7 +14,7 @@ struct InklingExperts {
         let format: Format
         private let inputPadding: Int
         private static let usesPackedGroupedPrefill =
-            ProcessInfo.processInfo.environment["MLXCAT_INKLING_PACKED_PREFILL"] == "1"
+            ProcessInfo.processInfo.environment["MLXCAT_INKLING_PACKED_PREFILL"] != "0"
 
         init(weight: MLXArray, scales: MLXArray, format: Format) {
             self.format = format
