@@ -155,6 +155,22 @@ final class InklingLanguageModel: Module, LanguageModel {
     }
 }
 
+extension InklingCheckpoint {
+    func makeModel(
+        config: InklingConfiguration, tokenizer: any MLXLMCommon.Tokenizer
+    ) throws -> (model: InklingLanguageModel, processor: InklingInputProcessor) {
+        let imageID = config.imageTokenID ?? 200054
+        let model = try InklingLanguageModel(
+            textModel: textModel(config: config.text),
+            visionModel: config.vision.map { try visionModel(config: $0) },
+            imageTokenID: imageID)
+        let processor = InklingInputProcessor(
+            tokenizer: tokenizer, imageTokenID: imageID,
+            imagePatchSize: config.vision.map { $0.patchSize * $0.merge })
+        return (model, processor)
+    }
+}
+
 struct InklingInputProcessor: UserInputProcessor {
     enum InputError: Error {
         case unsupportedMedia

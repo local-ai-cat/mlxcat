@@ -937,16 +937,11 @@ public struct NativeModelLoader: EnginePoolModelLoader {
         let tokenizerLoader = #huggingFaceTokenizerLoader()
         let tokenizer = try await tokenizerLoader.load(from: directory)
         let checkpoint = try InklingCheckpoint(directory: directory)
-        let model = try checkpoint.textModel(config: config)
-        let vision = try checkpointConfig.vision.map { try checkpoint.visionModel(config: $0) }
-        let imageTokenID = checkpointConfig.imageTokenID ?? 200054
+        let built = try checkpoint.makeModel(config: checkpointConfig, tokenizer: tokenizer)
         let context = ModelContext(
             configuration: ModelConfiguration(
                 directory: directory, eosTokenIds: [checkpointConfig.eosTokenID ?? 200006]),
-            model: InklingLanguageModel(textModel: model, visionModel: vision, imageTokenID: imageTokenID),
-            processor: InklingInputProcessor(
-                tokenizer: tokenizer, imageTokenID: imageTokenID,
-                imagePatchSize: checkpointConfig.vision.map { $0.patchSize * $0.merge }),
+            model: built.model, processor: built.processor,
             tokenizer: tokenizer)
         return NativeModelEngine(
             context: context, modelID: id, maxContextTokens: try contextWindow(in: directory),
@@ -954,7 +949,7 @@ public struct NativeModelLoader: EnginePoolModelLoader {
             cacheCapabilities: ModelCacheCapabilities(
                 usesWindowedKVCache: true,
                 kvCacheProfile: ModelKVCacheProfile(
-                    hiddenLayerCount: model.loop.visits.count,
+                    hiddenLayerCount: built.model.textModel.loop.visits.count,
                     attentionHeadCount: config.heads,
                     keyValueHeadCount: config.keyValueHeads,
                     headDimension: config.headWidth,
