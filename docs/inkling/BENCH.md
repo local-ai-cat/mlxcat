@@ -34,3 +34,22 @@ visits. Eight global BF16 K/V pairs at 8 heads × 128 dimensions consume
 exceed the M4's 48 GiB before temporary memory, system memory and allocator
 overhead. This is a size calculation. Measurements and optimisation results
 are pending.
+
+## Relative attention mask
+
+Measured on the M4 Pro under the exclusive lease, with warm Metal pipelines
+and 20 synchronous evaluations per arm. A/B/B/A used one synthetic BF16
+global-attention visit with 128 queries, 8,192 keys, 24 heads and relative
+extent 1,024. The peak column is incremental MLX allocation above the retained
+inputs. These are operation measurements.
+
+| Mask | Mean time across the two arms | Incremental peak |
+| --- | ---: | ---: |
+| Composed matmul, gather and concatenate | 4.90 ms | 112.05 MiB |
+| Fused Metal mask and sink | 2.53 ms | 48.02 MiB |
+
+The fused mask follows mlx-vlm's shape-generic Metal band kernel in
+`mlx_vlm/models/inkling/language.py`. It also writes the query-dependent sink
+in the output allocation. The CPU implementation and the strided-input
+differential test retain the composed mask. GPU inference uses the fused
+kernel. End-to-end decode and TTFT impact remain to be measured.
