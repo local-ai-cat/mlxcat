@@ -3,7 +3,7 @@ import MLX
 /// FP32 history for an unpadded sequence. The four histories are indexed by
 /// the execution visit, even when several visits share convolution weights.
 struct InklingConvolution {
-    private var history: MLXArray?
+    var history: MLXArray?
     let taps: Int
 
     init(taps: Int) {

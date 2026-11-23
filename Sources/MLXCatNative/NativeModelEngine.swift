@@ -575,13 +575,26 @@ public final class NativeModelEngine: @unchecked Sendable {
     private func chatMessage(from message: OpenAIChatMessage) throws -> Chat.Message {
         let role = Chat.Message.Role(rawValue: message.role) ?? .user
         let images = try message.imageReferences.map(image)
-        // TODO(M6b): render prior assistant tool_calls once OpenAIChatMessage carries them.
+        let tool: Chat.Message.Tool?
+        if role == .assistant, !message.toolCalls.isEmpty {
+            tool = .calls(try message.toolCalls.map { call in
+                let arguments = try JSONDecoder().decode(
+                    [String: MLXLMCommon.JSONValue].self, from: Data(call.arguments.utf8))
+                return MLXLMCommon.ToolCall(
+                    function: .init(name: call.name, arguments: arguments), id: call.id)
+            })
+        } else if role == .tool, let id = message.toolCallID {
+            tool = .result(id: id, name: message.name)
+        } else {
+            tool = nil
+        }
         return Chat.Message(
             role: role,
             content: message.content,
             images: images,
             videos: try message.videoReferences.map { try media($0, kind: .video) }.map { .url($0) },
-            audios: try message.audioReferences.map { try media($0, kind: .audio) }.map { .url($0) }
+            audios: try message.audioReferences.map { try media($0, kind: .audio) }.map { .url($0) },
+            tool: tool
         )
     }
 
@@ -873,6 +886,9 @@ public struct NativeModelLoader: EnginePoolModelLoader {
     public func loadModel(id: String, modelURL: URL) async throws -> NativeModelEngine {
         let modelConfiguration = try modelConfiguration(in: modelURL)
         let modelType = modelConfiguration.modelType.lowercased()
+        if modelType == "inkling2_loop" {
+            return try await loadInkling(id: id, directory: modelURL)
+        }
         let isVLM = try isVLMModelDirectory(modelURL, modelType: modelType)
         let container =
             if isVLM {
@@ -904,6 +920,40 @@ public struct NativeModelLoader: EnginePoolModelLoader {
                     .fromEnvironment(), modelType: modelType)
             )
         }
+    }
+
+    private func loadInkling(id: String, directory: URL) async throws -> NativeModelEngine {
+        let data = try Data(contentsOf: directory.appending(component: "config.json"))
+        let checkpointConfig = try JSONDecoder().decode(InklingConfiguration.self, from: data)
+        let config = checkpointConfig.text
+        let tokenizerLoader = #huggingFaceTokenizerLoader()
+        let tokenizer = try await tokenizerLoader.load(from: directory)
+        let checkpoint = try InklingCheckpoint(directory: directory)
+        let model = try checkpoint.textModel(config: config)
+        let vision = try checkpointConfig.vision.map { try checkpoint.visionModel(config: $0) }
+        let imageTokenID = checkpointConfig.imageTokenID ?? 200054
+        let context = ModelContext(
+            configuration: ModelConfiguration(
+                directory: directory, eosTokenIds: [checkpointConfig.eosTokenID ?? 200006]),
+            model: InklingLanguageModel(textModel: model, visionModel: vision, imageTokenID: imageTokenID),
+            processor: InklingInputProcessor(
+                tokenizer: tokenizer, imageTokenID: imageTokenID,
+                imagePatchSize: checkpointConfig.vision.map { $0.patchSize * $0.merge }),
+            tokenizer: tokenizer)
+        return NativeModelEngine(
+            context: context, modelID: id, maxContextTokens: try contextWindow(in: directory),
+            maxConcurrentRequests: maxConcurrentRequests,
+            cacheCapabilities: ModelCacheCapabilities(
+                usesWindowedKVCache: true,
+                kvCacheProfile: ModelKVCacheProfile(
+                    hiddenLayerCount: model.loop.visits.count,
+                    attentionHeadCount: config.heads,
+                    keyValueHeadCount: config.keyValueHeads,
+                    headDimension: config.headWidth,
+                    hiddenSize: config.hiddenSize)),
+            serializationPolicy: .always,
+            schedulerManagedTextPrefill: true,
+            chunkIdlePrefill: true)
     }
 
     public func unloadModel(_ engine: NativeModelEngine, id: String) async {

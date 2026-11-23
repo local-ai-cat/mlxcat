@@ -84,6 +84,7 @@ public struct ThinkingParser: Sendable {
     private var closeSeen = false
     private var thinkingAccumulated: [String] = []
     private var contentEmitted = false
+    private var inkling: InklingOutputParser?
     private var harmonyActive = false
     private var harmonyRaw = ""
     private var harmonyReasoningEmittedCount = 0
@@ -99,6 +100,16 @@ public struct ThinkingParser: Sendable {
 
         let text = buffer + text
         buffer = ""
+        if inkling == nil, text.hasPrefix(InklingOutputParser.model) {
+            inkling = InklingOutputParser()
+        }
+        if let result = inkling?.feed(text) {
+            return (result.reasoning, result.content)
+        }
+        if !harmonyActive, InklingOutputParser.model.hasPrefix(text) {
+            buffer = text
+            return ("", "")
+        }
         if harmonyActive || Self.couldBeHarmony(text) {
             return feedHarmony(text)
         }
@@ -147,6 +158,9 @@ public struct ThinkingParser: Sendable {
     }
 
     public mutating func finish() -> (reasoning: String, content: String) {
+        if let result = inkling?.feed("", finished: true) {
+            return (result.reasoning, result.content)
+        }
         if harmonyActive {
             let finalDelta = feedHarmony(buffer)
             buffer = ""

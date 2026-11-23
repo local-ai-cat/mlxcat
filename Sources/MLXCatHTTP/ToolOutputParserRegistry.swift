@@ -16,6 +16,7 @@ public enum ToolCallModelFamily: String, Sendable, Equatable {
     case harmony
     case gemma4
     case deepseek
+    case inkling
 }
 
 /// Reasoning, visible content, and tool calls extracted from one completion.
@@ -44,6 +45,7 @@ public func toolCallModelFamily(forModel model: String, output text: String = ""
     if id.contains("gpt-oss") || id.contains("gpt_oss") { return .harmony }
     if id.contains("gemma-4") || id.contains("gemma4") { return .gemma4 }
     if id.contains("deepseek") { return .deepseek }
+    if id.contains("inkling") || text.contains(InklingOutputParser.model) { return .inkling }
     if id.contains("qwen") { return .qwenXML }
 
     if text.contains(harmonyChannelToken), text.contains(harmonyFunctionsRecipientPrefix) {
@@ -81,6 +83,16 @@ public func parseModelOutput(
         return parseHarmonyOutput(text, includeToolCalls: includeToolCalls, idGenerator: idGenerator)
     }
 
+    if family == .inkling {
+        var parser = InklingOutputParser()
+        let parsed = parser.feed(text, finished: true)
+        let calls = includeToolCalls ? parsed.calls.map {
+            ParsedToolCall(id: idGenerator(), name: $0.name, arguments: $0.arguments)
+        } : []
+        return ModelOutputParseResult(
+            reasoning: parsed.reasoning, content: parsed.content, toolCalls: calls)
+    }
+
     let extracted = extractThinking(text, startInThinking: startInThinking)
     guard includeToolCalls else {
         return ModelOutputParseResult(reasoning: extracted.reasoning, content: extracted.content, toolCalls: [])
@@ -108,7 +120,7 @@ private func extractContentToolCalls(
         if let info = runParser("gemma4", content, idGenerator), info.toolsCalled { return info }
     case .deepseek:
         if let info = runParser("deepseek", content, idGenerator), info.toolsCalled { return info }
-    case .harmony, .generic, .qwenXML:
+    case .harmony, .generic, .qwenXML, .inkling:
         break
     }
     return genericExtract(content, idGenerator: idGenerator)
@@ -165,7 +177,7 @@ public func streamingToolCallParse(
             content: info.toolsCalled ? (info.content ?? "") : bufferedContent,
             toolCalls: info.toolCalls
         )
-    case .harmony, .gemma4, .deepseek:
+    case .harmony, .gemma4, .deepseek, .inkling:
         let result = parseModelOutput(rawText, model: model, includeToolCalls: true, idGenerator: idGenerator)
         return ToolCallParseResult(content: result.content, toolCalls: result.toolCalls)
     }

@@ -45,6 +45,10 @@ extension InklingLoopTests {
     @Test func decodesTheCheckpointVisitSchedule() throws {
         let config = """
             {"text_config":{"hidden_size":2304,"num_hidden_layers":24,"n_layers_per_attn_res_block":6,
+             "rms_norm_eps":0.000001,"num_attention_heads":24,"num_key_value_heads":8,"head_dim":128,
+             "d_rel":16,"qk_l2_clip_threshold":22.6274,"rel_l2_clip_threshold":8,"log_scaling_n_floor":8192,
+             "log_scaling_alpha":0.1,"attn_res_normalize_values":true,"num_experts_per_tok":8,"route_scale":8,
+             "mlp_up_softcap":25,"mlp_gate_softcap":4,"final_logit_softcapping":30,"unpadded_vocab_size":200058,
              "local_layer_ids":[0,1,2,3,4],"sliding_window_size":1024,"sconv_kernel_size":4,
              "loop_config":{"core_start":6,"core_end":18,"num_passes":3,"gate_rank":64}}}
             """
