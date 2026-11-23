@@ -147,6 +147,18 @@ Values show the median and observed range.
 | Inkling 2 Mini MLX 4/8-bit | 3/3 | 436.68 [306.08–446.57] | 15.64 [15.62–15.65] | 17.83 [7.84–28.01] | 25.26 [24.96–25.39] | 14 [10–14] | 4 [3–5] | 14 [11–15] |
 | Qwen3.8-27B-4bit | 3/3 | 278.87 [275.20–327.54] | 13.07 [12.93–13.24] | 4.48 [3.53–5.80] | 21.80 [21.30–23.14] | 15 [14–16] | 0 [0–0] | 12 [10–13] |
 
+## Three-repeat T3 comparison on the fused release
+
+Inkling found the four files in every repeat. Each run tried two Bash calls
+that the fixed auto-edit policy declined, and the checkout remained untouched.
+Qwen completed two renames. Its failed checkout contained duplicate
+`InventoryItem` declarations.
+
+| Model | Passed | Wall s | Decode tok/s | TTFT s | Peak GiB | Tool calls | Failed calls | Rounds |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Inkling 2 Mini MLX 4/8-bit | 0/3 | 160.47 [138.18–181.99] | 16.83 [16.79–16.84] | 10.15 [10.04–10.48] | 24.39 [24.34–24.79] | 12 [11–13] | 2 [2–2] | 9 [8–10] |
+| Qwen3.8-27B-4bit | 2/3 | 401.00 [376.90–589.30] | 13.02 [12.93–13.22] | 5.21 [4.68–6.22] | 22.59 [21.11–22.84] | 17 [17–30] | 2 [1–3] | 9 [9–17] |
+
 ## Grouped NVFP4 prefill cost
 
 Run the 111-token tool fixture over loopback in A/B/B/A order. Each arm starts
