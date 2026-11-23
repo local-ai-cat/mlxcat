@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 
 @testable import MLXCatNative
@@ -37,5 +38,17 @@ struct InklingLoopTests {
         #expect(throws: InklingLoop.ConfigurationError.self) {
             try InklingLoop(layerCount: 24, core: 5..<18, passes: 3, residualBlockSize: 6)
         }
+    }
+}
+
+extension InklingLoopTests {
+    @Test func decodesTheCheckpointVisitSchedule() throws {
+        let config = """
+            {"text_config":{"hidden_size":2304,"num_hidden_layers":24,"n_layers_per_attn_res_block":6,
+             "local_layer_ids":[0,1,2,3,4],"sliding_window_size":1024,"sconv_kernel_size":4,
+             "loop_config":{"core_start":6,"core_end":18,"num_passes":3,"gate_rank":64}}}
+            """
+        let decoded = try JSONDecoder().decode(InklingConfiguration.self, from: Data(config.utf8))
+        #expect(try decoded.text.makeLoop().visits.count == 48)
     }
 }

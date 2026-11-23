@@ -15,7 +15,8 @@ struct InklingLoop: Equatable {
     init(layerCount: Int, core: Range<Int>, passes: Int, residualBlockSize: Int) throws {
         guard residualBlockSize > 0, core.lowerBound > 0, !core.isEmpty,
             core.upperBound <= layerCount, passes > 0,
-            core.lowerBound.isMultiple(of: residualBlockSize)
+            core.lowerBound.isMultiple(of: residualBlockSize),
+            core.upperBound.isMultiple(of: residualBlockSize)
         else {
             throw ConfigurationError.invalidLoop
         }
