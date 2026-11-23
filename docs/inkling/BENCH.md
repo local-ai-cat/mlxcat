@@ -379,3 +379,9 @@ TTFT was 4.05 s, decode was 17.66 tok/s, and wall time was 142.49 s. The
 frozen Bash-enabled T2 baseline had three repeats and a median-turn TTFT
 of 8.15 s. The smoke generated a different number of agent rounds, so
 the matched prompt A/B above isolates the cache effect.
+
+Both native 4-bit attempts with a 16 GiB software memory ceiling
+returned HTTP 507 from memory admission. The ceiling caps the engine
+on the 48 GiB host, and macOS overhead on a 16 GiB machine would further
+reduce the available budget. The fixed 16 GiB configuration did not
+qualify in this test.
