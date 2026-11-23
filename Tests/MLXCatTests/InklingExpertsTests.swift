@@ -4,6 +4,34 @@ import XCTest
 @testable import MLXCatNative
 
 final class InklingExpertsTests: XCTestCase {
+    func testMXFP8VectorGatherMatchesTheAlignedMLXKernel() throws {
+        try MLXMetalRuntime.requireAvailable()
+        let width = 256
+        let channels = 16
+        let input = sin(arange(3 * width).asType(.float32))
+            .reshaped(1, 3, 1, 1, width).asType(.bfloat16)
+        let weights = cos(arange(2 * channels * width).asType(.float32))
+            .reshaped(2, channels, width).asType(.bfloat16)
+        let packed = quantized(weights, groupSize: 32, bits: 8, mode: .mxfp8)
+        let projection = InklingExperts.Projection(
+            weight: packed.wq, scales: packed.scales, format: .mxfp8)
+        let indices = MLXArray([Int32(0), 1, 1, 0, 1, 1]).reshaped(1, 3, 2)
+
+        // Explicitly prepare the zero columns expected by the pinned gather.
+        let paddedInput = concatenated([input, MLXArray.zeros(like: input)], axis: -1)
+        let paddedWeights = concatenated([packed.wq, MLXArray.zeros(like: packed.wq)], axis: -1)
+        let identityScales = MLXArray.ones(like: packed.scales) * UInt8(127)
+        let paddedScales = concatenated([packed.scales, identityScales], axis: -1)
+        let expected = gatherQuantizedMM(
+            paddedInput, paddedWeights, scales: paddedScales, biases: nil, rhsIndices: indices,
+            groupSize: 32, bits: 8, mode: .mxfp8)
+
+        let actual = projection(input, indices: indices)
+        XCTAssertEqual(actual.shape, [1, 3, 2, 1, channels])
+        XCTAssertEqual(actual.asType(.float32).asArray(Float.self),
+                       expected.asType(.float32).asArray(Float.self))
+    }
+
     func testPackedGatherMatchesIndividualPackedProjections() throws {
         try MLXMetalRuntime.requireAvailable()
         let ones = MLXArray.ones([1, 32, 64], dtype: .float32)

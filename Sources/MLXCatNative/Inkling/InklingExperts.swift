@@ -10,14 +10,48 @@ struct InklingExperts {
         let weight: MLXArray
         let scales: MLXArray
         let format: Format
+        private let inputPadding: Int
+
+        init(weight: MLXArray, scales: MLXArray, format: Format) {
+            self.format = format
+            // MLX 0.32 chooses its fast 8-bit vector reduction at multiples
+            // of 256. MLX 0.31.1 requires 512. Extend the packed columns once
+            // so Inkling's 2,304-wide MXFP8 projections use the same reduction.
+            let alignment = 512
+            let valuesPerWord = 4
+            let scaleGroup = 32
+            let width = weight.dim(-1) * valuesPerWord
+            if case .mxfp8 = format, width % alignment == alignment / 2,
+                weight.dim(-2).isMultiple(of: 8)
+            {
+                let padding = alignment / 2
+                inputPadding = padding
+                self.weight = Self.extending(weight, columns: padding / valuesPerWord, fill: 0)
+                // E8M0 exponent bias. The added weights are exactly zero.
+                self.scales = Self.extending(scales, columns: padding / scaleGroup, fill: 127)
+            } else {
+                inputPadding = 0
+                self.weight = weight
+                self.scales = scales
+            }
+        }
+
+        private static func extending(_ array: MLXArray, columns: Int, fill: Int) -> MLXArray {
+            var shape = array.shape
+            shape[shape.count - 1] = columns
+            let extra = broadcast(MLXArray(fill, dtype: array.dtype), to: shape)
+            return concatenated([array, extra], axis: -1)
+        }
 
         func callAsFunction(
             _ input: MLXArray, indices: MLXArray, sorted: Bool = false
         ) -> MLXArray {
             switch format {
             case .mxfp8:
+                let values = inputPadding == 0 ? input
+                    : Self.extending(input, columns: inputPadding, fill: 0)
                 return gatherQuantizedMM(
-                    input, weight, scales: scales, biases: nil, rhsIndices: indices,
+                    values, weight, scales: scales, biases: nil, rhsIndices: indices,
                     groupSize: 32, bits: 8, mode: .mxfp8, sortedIndices: sorted)
             case .nvfp4(let globalScale):
                 // mlx-vlm quantization/nvfp4.py uses this FP32 fallback for
