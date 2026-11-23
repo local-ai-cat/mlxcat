@@ -62,14 +62,13 @@ struct InklingExperts {
                 if grouped, globalScale.size == 1 || globalScale.size == weight.dim(0),
                     Device.defaultDevice().deviceType == .gpu
                 {
-                    let unscaled = dequantized(
-                        weight, scales: scales, biases: nil, groupSize: 16,
-                        bits: 4, mode: .nvfp4, dtype: .float32)
-                    let tensorScale = globalScale.asType(.float32).reshaped(-1, 1, 1)
+                    let tensorScale = globalScale.asType(.float32)
                     let nvfp4Range: Float = 448 * 6
-                    let scaled = unscaled * ((tensorScale * nvfp4Range) / nvfp4Range)
+                    let scaled = InklingNVFP4Unpack.run(
+                        weights: weight, scales: scales, factor: (tensorScale * nvfp4Range) / nvfp4Range,
+                        dtype: input.dtype)
                     let projected = gatherMM(
-                        input, scaled.asType(input.dtype).transposed(0, 2, 1),
+                        input, scaled.transposed(0, 2, 1),
                         rhsIndices: indices, sortedIndices: true)
                     // Finish this projection before building the next one so
                     // the temporary weights never accumulate across visits.
