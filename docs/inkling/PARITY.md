@@ -80,3 +80,31 @@ An isolated candidate used mlx-swift `00afc1d` with its newer MLX core.
 On the code case, enabling the fused outer scale in that build gave the same
 results as its FP32 fallback. Both matched 39 greedy tokens, with maximum
 logit error 2.326. This probe did not justify changing the shipping pin.
+
+## Netprojects run at `60122de`
+
+The Swift residual attention now multiplies by the reciprocal square root
+of the hidden width, in the same order as Python. The code-prompt prefill
+trace matched every element entering visits 0–44. The first difference was
+in physical layer 20's MXFP8 expert projections. The largest gate-projection
+difference was 0.0078125. The final three visit inputs differed.
+
+The complete run matched every fixture's formatted input token IDs. Two
+cases matched the complete greedy continuation through EOS, and each case
+had logits outside the 0.25 tolerance. Values are absolute differences over
+the captured reference top-k entries through the first token mismatch.
+
+| Case | Matching greedy prefix | Maximum | Median |
+| --- | ---: | ---: | ---: |
+| Code | 39 | 3.405 | 0.212 |
+| Fact | 23 | 1.459 | 0.221 |
+| Image | 61 (EOS) | 0.456 | 0.101 |
+| Literal | 55 | 4.176 | 0.291 |
+| Long context | 34 | 4.124 | 0.551 |
+| Multi-turn | 29 | 1.300 | 0.213 |
+| Reasoning | 18 | 0.723 | 0.055 |
+| Short chat | 41 | 1.775 | 0.305 |
+| Structured | 38 | 2.137 | 0.213 |
+| System | 30 | 2.399 | 0.174 |
+| Tool call | 59 (EOS) | 1.818 | 0.262 |
+| Unicode | 7 | 0.979 | 0.169 |
