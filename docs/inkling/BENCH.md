@@ -137,6 +137,16 @@ Inkling reported zero and processed 16,933–38,312 prompt tokens across
 eight to ten turns. The timings include each model's native cache behavior
 and the conversation length produced by its tool choices.
 
+## Three-repeat T2 comparison on the fused release
+
+Both models passed the independent Python checks on release build `45d1209`.
+Values show the median and observed range.
+
+| Model | Passed | Wall s | Decode tok/s | TTFT s | Peak GiB | Tool calls | Failed calls | Rounds |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Inkling 2 Mini MLX 4/8-bit | 3/3 | 436.68 [306.08–446.57] | 15.64 [15.62–15.65] | 17.83 [7.84–28.01] | 25.26 [24.96–25.39] | 14 [10–14] | 4 [3–5] | 14 [11–15] |
+| Qwen3.8-27B-4bit | 3/3 | 278.87 [275.20–327.54] | 13.07 [12.93–13.24] | 4.48 [3.53–5.80] | 21.80 [21.30–23.14] | 15 [14–16] | 0 [0–0] | 12 [10–13] |
+
 ## Grouped NVFP4 prefill cost
 
 Run the 111-token tool fixture over loopback in A/B/B/A order. Each arm starts
