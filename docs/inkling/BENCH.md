@@ -212,3 +212,30 @@ greedy tokens in the solo and concurrent measurements.
 | --- | ---: | ---: | ---: | ---: |
 | Saturn, served second | 0.284 s | 2.208 s | 1.938 s | 3.862 s |
 | Jupiter, served first | 0.285 s | 0.287 s | 1.940 s | 2.209 s |
+
+## Tool outcomes in the archived matrix
+
+The T2 and T3 event streams from `matrix-45d1209` separate the old combined
+failure column into three outcomes. The same independent acceptance checks
+determine done status.
+
+| Model | Task | Done | Declined | Malformed | Tool errors |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Inkling | T2 | 3/3 | 12 | 0 | 0 |
+| Inkling | T3 | 0/3 | 6 | 0 | 0 |
+| Qwen | T2 | 3/3 | 0 | 0 | 0 |
+| Qwen | T3 | 2/3 | 0 | 0 | 6 |
+
+All 18 Inkling outcomes were policy declines of Bash calls. In T3 the
+declined `mv` blocked the actual rename. The six Qwen T3 tool errors came
+from edit calls. The T1 Inkling runs on `a2059f1` had seven Bash declines
+and passed 3/3. Both models passed 3/3 in T4 with no tool failures. The
+stopped T5 cell had zero completed repeats.
+
+The paired rerun uses the same frozen `45d1209` binary and fresh clones of the
+same fixture. Whisker yolo mode and the gateway tool whitelist permit Bash,
+with filesystem writes confined to each run and Whisker's transient atomic
+write files, and network access confined to the loopback gateway. The sandbox
+harness archives raw tool events and per-turn usage per repeat. A decline
+takes precedence in classification. A rejected invocation with malformed
+arguments counts as malformed. Other failed tool events count as tool errors.
