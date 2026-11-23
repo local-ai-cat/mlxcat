@@ -266,3 +266,32 @@ The corrected T3 paired reruns completed six of six checkouts. Inkling
 recovered from five nonzero shell exits, including unquoted glob syntax
 in its grep invocations. The independent acceptance check confirmed the
 rename and the affected Swift test in all six checkouts.
+
+## Native prefill and decode A/B
+
+The release arms ran on the M4 Pro with 48 GiB of RAM and macOS 27.2.1.
+Each arm started a fresh server, warmed up with a short greeting, then ran
+the same 3,541-token chat and 3,558-token follow-up at temperature 0. The
+four arms used one binary and changed one setting at a time. Both 16-token
+outputs matched the control in every arm.
+
+| Arm | Cold TTFT s | Cold prompt tok/s | Follow-up TTFT s | Cached follow-up tokens | Cold peak GiB | Follow-up peak GiB |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Control | 14.57 | 242.98 | 13.93 | 0 | 24.37 | 24.37 |
+| Exact-boundary prefix reuse | 13.87 | 255.29 | 2.48 | 3,072 | 24.45 | 23.35 |
+| Packed grouped NVFP4 | 15.17 | 233.41 | 15.06 | 0 | 23.04 | 23.00 |
+| Mixed-storage vocabulary projection | 14.08 | 251.47 | 13.97 | 0 | 23.87 | 23.52 |
+
+The prefix rematerialized 486 tokens on the follow-up. Its checkpoint
+contains each visit's attention KV and all four convolution histories at
+token 3,072. Packed grouped prefill reduced the cold peak by 1.32 GiB. It
+took 0.60 s more than the staged grouped multiply on the cold prompt.
+
+The control and vocabulary arms also ran a separate 256-token coding
+completion. The mixed-storage kernel read the original BF16 vocabulary
+table in the pinned FP32 GEMV reduction order. All 256 token IDs matched.
+The server reported 18.81 to 19.98 tok/s on that completion. The measured
+peak physical footprint went from 20.35 to 19.41 GiB.
+
+Raw arm JSON, server logs and memory-pressure receipts are in
+`native-prefix-packed-ab-1` under the shared Inkling work directory.
