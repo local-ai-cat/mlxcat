@@ -1,7 +1,8 @@
 # Inkling 2 Mini parity
 
 Both verified checkpoint builds passed the same-Mac Python fixture gate at
-`a2059f1`. Coding results are recorded in [BENCH.md](BENCH.md).
+`a2059f1` and again with fused NVFP4 unpacking at `45d1209`. Coding results
+are recorded in [BENCH.md](BENCH.md).
 
 ## Acceptance
 
@@ -169,3 +170,7 @@ initialization resolved the earlier XCTest-host discrepancy.
 The opt-in XCTest wrapper also passed the code case. The ordinary mlxcat suite
 reported 557 XCTest cases with 66 opt-in skips and zero failures, plus seven
 passing Swift Testing cases.
+
+The same 24 fixture cases passed again at `45d1209`, with identical input
+IDs, greedy output IDs and sampled logits in every case. The ordinary suite
+reported the same passing counts.

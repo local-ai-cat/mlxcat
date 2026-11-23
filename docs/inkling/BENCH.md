@@ -1,13 +1,13 @@
 # Inkling 2 Mini and Qwen3.8 coding benchmark
 
-The latest complete paired results below are from release build `a2059f1`.
-The fused unpack release is under verification. The transport stub is
-excluded from the measurements below.
+T1 is complete on release build `a2059f1`. The T2–T6 cells are running on
+release build `45d1209`, with the same frozen server for both models in
+each task. The transport stub is excluded from the measurements below.
 
 ## Protocol
 
 Run one model at a time on the M4 Pro under the machine's exclusive lease.
-Use the same release build of `mlxcat-http` for both models. Run each of
+Use the same release build of `mlxcat-http` for both models in each task. Run each of
 T1–T6 three times from the same frozen fixture commit `ba6b87d`, with a fresh
 checkout and Whisker thread per run. Use a frozen Whisker 0.1.0 binary in auto-edit mode,
 greedy sampling with seed 42, a shared advertised 32,768-token context limit,
@@ -153,3 +153,15 @@ sampled logits exactly in this case.
 | --- | ---: | ---: |
 | FP32 unpack and scale, then BF16 conversion | 5.756 s | 24.36 GiB |
 | Fused unpack and scale directly to BF16 | 1.906 s | 23.09 GiB |
+
+## Two conversations on one loaded Inkling model
+
+Send two warm 32-token requests separately, then submit both simultaneously
+to one release server at `45d1209`. The native scheduler gives both requests
+independent caches and runs them serially. Each prompt produced identical
+greedy tokens in the solo and concurrent measurements.
+
+| Request | Solo TTFT | Simultaneous submission TTFT | Solo wall | Simultaneous submission wall |
+| --- | ---: | ---: | ---: | ---: |
+| Saturn, served second | 0.284 s | 2.208 s | 1.938 s | 3.862 s |
+| Jupiter, served first | 0.285 s | 0.287 s | 1.940 s | 2.209 s |
