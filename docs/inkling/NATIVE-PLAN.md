@@ -41,7 +41,9 @@ The first native serving path serializes requests and keeps the paired attention
 ## Download metadata
 
 The catalogue identity is [netprojects/Inkling-2-Mini-MLX-4-8bit](https://huggingface.co/netprojects/Inkling-2-Mini-MLX-4-8bit).
-The checkpoint is a separate download. Its source model is
+The checkpoint is a separate download with 19,525,880,832 bytes of tensor
+payload. The runtime supports text and image input, reasoning output, and
+tool calls. Its source model is
 [Thinking Machines Lab's Inkling 2 Mini](https://huggingface.co/thinkingmachines/Inkling-2-Mini)
 under [Apache 2.0](https://www.apache.org/licenses/LICENSE-2.0), with the publisher's
 [Model Acceptable Use Policy](https://thinkingmachines.ai/model-acceptable-use-policy/).
