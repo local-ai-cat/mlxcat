@@ -253,3 +253,9 @@ reports the event as completed.
 | Corrected cell | Done | Median wall s | Median decode tok/s | Median-turn TTFT s | Peak GiB | Declined | Malformed | Tool errors |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Inkling T2 | 3/3 | 135.88 | 15.94 | 8.15 | 25.10 | 0 | 0 | 0 |
+| Qwen T2 | 3/3 | 176.52 | 13.19 | 4.12 | 20.37 | 0 | 0 | 2 |
+
+The outcome columns are totals across the three repeats. Both executed Qwen
+errors in the corrected T2 cell were configuration-file searches where
+`grep` returned 1 for no matches. All three edits and independent acceptance
+checks passed.
