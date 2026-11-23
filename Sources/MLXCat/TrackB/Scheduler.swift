@@ -101,11 +101,9 @@ public actor Scheduler {
         // `.always` keeps every row alone, so that path is unreachable rather
         // than merely unlikely.
         //
-        // The prefix stores are excluded for a milder reason: both require the
-        // 2-array keys/values schema and would throw on every publish, which the
-        // scheduler catches and logs. That is not a crash, it is a cache that
-        // has silently stopped working while filling the log — so it is turned
-        // off explicitly instead.
+        // A rolling cache can only be restored by a snapshot at an exact
+        // prefill boundary. The session store needs the model's decoder for
+        // these layers, and quantized cache is still ineligible.
         let windowedCheckpoints = cacheCapabilities.usesWindowedKVCache
             && (prefixStore as? SessionPrefixKVStore)?.supportsWindowedCheckpoints == true
         self.usesWindowedPrefixCheckpoints = windowedCheckpoints
@@ -120,8 +118,8 @@ public actor Scheduler {
         self.chunkIdlePrefill = chunkIdlePrefill
         self.capturesRecurrentCheckpoints = Self.hybridPrefixReuseEnabled()
         self.reusesFullPromptMatch = Self.fullPromptMatchReuseEnabled()
-        self.prefillsLastTokenAlone = Self.prefillsLastTokenAlone(
-            usesWindowedKVCache: cacheCapabilities.usesWindowedKVCache && !windowedCheckpoints
+        self.prefillsLastTokenAlone = windowedCheckpoints || Self.prefillsLastTokenAlone(
+            usesWindowedKVCache: cacheCapabilities.usesWindowedKVCache
         )
         self.pressurePolicy = pressurePolicy
         self.cacheReleasePolicy = cacheReleasePolicy ?? .fromEnvironment()

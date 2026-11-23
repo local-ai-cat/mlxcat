@@ -7,7 +7,7 @@ enum InklingVocabularyGEMV {
     static func supports(_ input: MLXArray, weight: MLXArray) -> Bool {
         let width = weight.dim(-1)
         let rows = weight.dim(0)
-        return input.size == width && width > 64 && width.isMultiple(of: 128)
+        return input.dtype == .float32 && input.size == width && width > 64 && width.isMultiple(of: 128)
             && rows >= 4096 && rows.isMultiple(of: 4)
             && (weight.dtype == .bfloat16 || weight.dtype == .float16)
             && Device.defaultDevice().deviceType == .gpu

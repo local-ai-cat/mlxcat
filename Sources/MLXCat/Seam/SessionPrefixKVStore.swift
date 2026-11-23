@@ -165,12 +165,10 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
                     return recurrent
                 }
                 // At the exact boundary all arrays, including any rolling state, are valid.
-                guard storage.trimCount > 0 else { return layer }
+                if supportsWindowedCheckpoints, storage.trimCount == 0 { return layer }
                 let cache = try restoreLayer(layer)
-                if storage.trimCount > 0 {
-                    guard cache.trim(storage.trimCount) == storage.trimCount else {
-                        throw PrefixKVStoreError.unsupportedCacheTrim(layer.className)
-                    }
+                if storage.trimCount > 0, cache.trim(storage.trimCount) != storage.trimCount {
+                    throw PrefixKVStoreError.unsupportedCacheTrim(layer.className)
                 }
                 return SerializedKVLayer(
                     state: cache.state,
