@@ -305,3 +305,26 @@ The mixed-storage vocabulary projection is the default for eligible
 one-token calls. All 760 greedy tokens and 960 sampled logits matched
 in its separate fixture run. Set `MLXCAT_INKLING_VOCAB_GEMV=0` to use the
 cached FP32 head.
+
+## MTPLX on this M4 Pro
+
+MTPLX 2.13.2 (`3890be5`, MLX 0.32.2) ran the verified Bare Speed pack
+(`388ab6d`) on the M4 Pro. Each arm generated 128 tokens from a 4,630-token
+coding prompt at temperature 0 with seed 42. DSpark used fixed depth 3.
+The warm arms each reused all 4,630 prompt tokens.
+
+| Method | Cold decode tok/s, two arms | Warm decode tok/s | Greedy match to autoregressive |
+| --- | ---: | ---: | ---: |
+| Autoregressive | 41.82, 42.23 | 41.54 | 128/128 |
+| DSpark | 23.38, 40.88 | 42.66 | 128/128 on each of three arms |
+
+DSpark accepted 77 proposals per arm. This local warm gain was 2.7%.
+The published 128.8 tok/s was a peak for one cached 128-token response
+on an M5 Max using a 2.13 test build through its HTTP server. The tested
+Mac, prompt, and launch route differ from that run.
+[MTPLX benchmark conditions](https://github.com/youssofal/MTPLX/blob/3890be556160af48887d5bfbf5304c4ad5b9417f/README.md)
+
+The native Swift port adopted the mixed-storage vocabulary read. The
+native speculative panel exceeded the exactness tolerance, so Swift uses
+ordinary decoding. Raw MTPLX token IDs and arm metrics are in
+`mtplx-reference-ab.jsonl` in the shared work directory.
