@@ -24,8 +24,8 @@ enum InklingMath {
         let values = stacked(states, axis: -2).asType(.float32)
         let keys = normalized(values, epsilon: 1e-6)
         let width = keys.dim(-1)
-        let scores = matmul(keys, query.asType(.float32).reshaped(-1, width).transposed())
-            / Float(width).squareRoot()
+        let scale = 1 / Float(width).squareRoot()
+        let scores = matmul(keys, query.asType(.float32).reshaped(-1, width).transposed()) * scale
         let weights = softmax(scores, axis: -2).swappedAxes(-1, -2)
         return matmul(weights, normalizeValues ? keys : values)
     }
