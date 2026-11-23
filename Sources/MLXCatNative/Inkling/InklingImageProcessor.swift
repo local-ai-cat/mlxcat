@@ -31,7 +31,7 @@ enum InklingImageProcessor {
         var values = [Float](repeating: -1 - scale, count: rows * patch * paddedWidth * 3)
         for y in 0..<height {
             for x in 0..<width {
-                let source = ((height - y - 1) * width + x) * 4
+                let source = (y * width + x) * 4
                 let target = (y * paddedWidth + x) * 3
                 let background = (y / 8 + x / 8).isMultiple(of: 2) ? 204 : 153
                 let alpha = Int(rgba[source + 3])

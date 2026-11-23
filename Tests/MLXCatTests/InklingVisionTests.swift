@@ -17,3 +17,16 @@ final class InklingVisionTests: XCTestCase {
         XCTAssertEqual(tiles[0, 1, 1, 1].item(Float.self), -1 - 2 / 255, accuracy: 1e-6)
     }
 }
+
+extension InklingVisionTests {
+    func testImageRowsKeepTheBitmapOrder() throws {
+        try MLXMetalRuntime.requireAvailable()
+        let bytes = Data([255, 0, 0, 255, 0, 0, 255, 255])
+        let image = CIImage(
+            bitmapData: bytes, bytesPerRow: 4, size: CGSize(width: 1, height: 2),
+            format: .RGBA8, colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
+        let (tiles, _) = try InklingImageProcessor.prepare(.ciImage(image), patch: 2)
+        XCTAssertEqual(tiles[0, 0, 0, 0...].asArray(Float.self), [1, -1, -1])
+        XCTAssertEqual(tiles[0, 1, 0, 0...].asArray(Float.self), [-1, -1, 1])
+    }
+}
