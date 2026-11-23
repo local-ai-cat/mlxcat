@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import MLX
 import MLXHuggingFace
@@ -43,10 +44,16 @@ final class InklingParityTests: XCTestCase {
         try MLXMetalRuntime.requireAvailable()
         let directory = URL(fileURLWithPath: modelPath, isDirectory: true)
         let fixtures = URL(fileURLWithPath: fixturePath, isDirectory: true)
+        let selectedCase = environment["MLXCAT_INKLING_CASE"]
+        let selectedFile = selectedCase.map { directory.lastPathComponent + "-" + $0 + ".json" }
         let paths = try FileManager.default.contentsOfDirectory(at: fixtures, includingPropertiesForKeys: nil)
-            .filter { $0.lastPathComponent.hasPrefix(directory.lastPathComponent + "-") && $0.pathExtension == "json" }
+            .filter { path in
+                path.lastPathComponent.hasPrefix(directory.lastPathComponent + "-")
+                    && path.pathExtension == "json"
+                    && (selectedFile == nil || path.lastPathComponent == selectedFile)
+            }
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
-        XCTAssertEqual(paths.count, 12, "Expected all twelve fixture cases")
+        XCTAssertEqual(paths.count, selectedCase == nil ? 12 : 1, "Expected reference cases")
         guard !paths.isEmpty else { return }
 
         let decoder = JSONDecoder()
@@ -68,8 +75,16 @@ final class InklingParityTests: XCTestCase {
         for path in paths {
             let fixture = try decoder.decode(Fixture.self, from: Data(contentsOf: path))
             let cache = try model.newCache(parameters: nil)
-            let imageSource: [UserInput.Image] = fixture.imageSHA256 == nil ? []
-                : [.url(fixtures.appending(component: "shapes.png"))]
+            let imageSource: [UserInput.Image]
+            if let expectedDigest = fixture.imageSHA256 {
+                let imageURL = fixtures.appending(component: "shapes.png")
+                let hash = SHA256.hash(data: try Data(contentsOf: imageURL))
+                let digest = hash.map { String(format: "%02x", $0) }.joined()
+                XCTAssertEqual(digest, expectedDigest, "Reference image changed")
+                imageSource = [.url(imageURL)]
+            } else {
+                imageSource = []
+            }
             let settings = fixture.settings.mapValues(Self.sendableValue)
             let tools = settings["tools"] as? [[String: any Sendable]]
             let userInput: UserInput
@@ -93,6 +108,9 @@ final class InklingParityTests: XCTestCase {
             guard case .logits(let output) = result else { return XCTFail("Expected prefill logits") }
             var logits = output.logits
             var errors: [Float] = []
+            var matchingTokens = 0
+            XCTAssertTrue(fixture.generatedIDs.count >= 64
+                || fixture.generatedIDs.last == (config.eosTokenID ?? 200006), "Reference terminated before 64 tokens")
             for (step, reference) in fixture.generatedIDs.prefix(64).enumerated() {
                 let row = logits[0, -1, 0...]
                 if step < fixture.topLogits.count {
@@ -106,11 +124,12 @@ final class InklingParityTests: XCTestCase {
                 let token = argMax(row).item(Int.self)
                 XCTAssertEqual(token, reference, "\(path.lastPathComponent) step \(step)")
                 if token != reference { break }
+                matchingTokens += 1
                 logits = model(MLXArray([token]), cache: cache)
             }
             let sorted = errors.sorted()
             if let maximum = sorted.last {
-                print("Inkling parity \(path.lastPathComponent): max \(maximum), median \(sorted[sorted.count / 2])")
+                print("Inkling parity \(path.lastPathComponent): \(matchingTokens) matching tokens, max \(maximum), median \(sorted[sorted.count / 2])")
             }
         }
     }
