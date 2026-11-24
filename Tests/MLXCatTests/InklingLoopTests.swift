@@ -1,0 +1,58 @@
+import Foundation
+import Testing
+
+@testable import MLXCatNative
+
+struct InklingLoopTests {
+    @Test func miniVisitsEveryCoreLayerThreeTimesWithIndependentSlots() throws {
+        let loop = try InklingLoop(layerCount: 24, core: 6..<18, passes: 3, residualBlockSize: 6)
+        #expect(loop.visits.count == 48)
+        #expect(loop.visits.enumerated().filter { $0.element.layer == 6 }.map(\.offset) == [6, 18, 30])
+        #expect(loop.visits.enumerated().filter { $0.element.layer == 6 }.map(\.element.pass) == [0, 1, 2])
+        #expect(loop.visits.suffix(6).map(\.layer) == Array(18..<24))
+    }
+
+    @Test func eachRestartUsesOnlyThePreviousCorePassAndRestoresThePrelude() throws {
+        let loop = try InklingLoop(layerCount: 4, core: 1..<3, passes: 3, residualBlockSize: 1)
+        var banks: [[Int]] = []
+        let output = loop.forward(embedding: -1) { blocks in
+            banks.append(blocks)
+            return blocks
+        } visitLayer: { slot, visit, bank, stream in
+            if visit.layer == 1 {
+                #expect(stream.partial == 0)
+                #expect(stream.completed == [-1])
+            }
+            if visit.pass == nil || visit.pass == 0 {
+                #expect(bank == nil)
+            }
+            stream.completed.append(stream.partial)
+            stream.partial = slot
+        }
+        #expect(banks == [[1, 2], [3, 4]])
+        #expect(output.completed == [-1, 0, 5, 6])
+        #expect(output.partial == 7)
+    }
+
+    @Test func rejectsCoreStartsWithoutAResidualBoundary() {
+        #expect(throws: InklingLoop.ConfigurationError.self) {
+            try InklingLoop(layerCount: 24, core: 5..<18, passes: 3, residualBlockSize: 6)
+        }
+    }
+}
+
+extension InklingLoopTests {
+    @Test func decodesTheCheckpointVisitSchedule() throws {
+        let config = """
+            {"text_config":{"hidden_size":2304,"num_hidden_layers":24,"n_layers_per_attn_res_block":6,
+             "rms_norm_eps":0.000001,"num_attention_heads":24,"num_key_value_heads":8,"head_dim":128,
+             "d_rel":16,"qk_l2_clip_threshold":22.6274,"rel_l2_clip_threshold":8,"log_scaling_n_floor":8192,
+             "log_scaling_alpha":0.1,"attn_res_normalize_values":true,"num_experts_per_tok":8,"route_scale":8,
+             "mlp_up_softcap":25,"mlp_gate_softcap":4,"final_logit_softcapping":30,"unpadded_vocab_size":200058,
+             "local_layer_ids":[0,1,2,3,4],"sliding_window_size":1024,"sconv_kernel_size":4,
+             "loop_config":{"core_start":6,"core_end":18,"num_passes":3,"gate_rank":64}}}
+            """
+        let decoded = try JSONDecoder().decode(InklingConfiguration.self, from: Data(config.utf8))
+        #expect(try decoded.text.makeLoop().visits.count == 48)
+    }
+}

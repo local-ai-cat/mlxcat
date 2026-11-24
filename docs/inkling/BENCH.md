@@ -1,0 +1,456 @@
+# Inkling 2 Mini and Qwen3.8 coding benchmark
+
+T1 is complete on release build `a2059f1`. The T2–T6 cells are running on
+release build `45d1209`, with the same frozen server for both models in
+each task. The transport stub is excluded from the measurements below.
+
+## Protocol
+
+Run one model at a time on the M4 Pro under the machine's exclusive lease.
+Use the same release build of `mlxcat-http` for both models in each task. Run each of
+T1–T6 three times from the same frozen fixture commit `ba6b87d`, with a fresh
+checkout and Whisker thread per run. Use a frozen Whisker 0.1.0 binary in auto-edit mode,
+greedy sampling with seed 42, a shared advertised 32,768-token context limit,
+and at most 30 model rounds. Evaluate acceptance independently of the answer
+the model reports.
+
+Wall time covers the entire purr turn. Report median per-turn server TTFT for
+each run, and divide generated tokens after the first token of each turn by
+the summed server decode time. Use the peak sampled server physical footprint
+from `proc_pid_rusage` at 50 ms intervals. Count completed, unsuccessful and
+declined tool calls from the purr event log, and count model rounds from server
+usage events. Summarize repeat medians with ranges and task acceptance counts.
+
+| Task | Independent acceptance |
+| --- | --- |
+| T1 | Fix the Swift off-by-one in one implementation file and pass the complete test suite. |
+| T2 | Add the documented Python label counter, pass pytest, and handle duplicate and blank labels. |
+| T3 | Rename the Swift type across sources and tests, build the package, and pass the affected test. |
+| T4 | Retrieve three facts from the operations file and leave the checkout clean. |
+| T5 | Replace three deprecated call sites, retain the wrapper, and build the Swift package. |
+| T6 | Add the CLI uppercase flag with tests and documentation while preserving the default output. |
+
+| Model | T1–T6 acceptance | Wall | Decode tok/s | TTFT | Peak footprint | Tool calls | Failed tool calls | Rounds |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Inkling 2 Mini MLX 4/8-bit | Pending | | | | | | | |
+| Qwen3.8-27B-4bit | Pending | | | | | | | |
+
+## KV memory at the advertised context limit
+
+The Mini schedule contains eight global attention visits and 40 sliding
+visits. Eight global BF16 K/V pairs at 8 heads × 128 dimensions consume
+32 GiB at 1,048,576 tokens. The 1,024-token sliding windows add approximately
+160 MiB. The target shards contain 19.53 GB of tensor data. Together these
+exceed the M4's 48 GiB before temporary memory, system memory and allocator
+overhead. This is a size calculation. Measurements and optimisation results
+are pending.
+
+## Relative attention mask
+
+Measured on the M4 Pro under the exclusive lease, with warm Metal pipelines
+and 20 synchronous evaluations per arm. A/B/B/A used one synthetic BF16
+global-attention visit with 128 queries, 8,192 keys, 24 heads and relative
+extent 1,024. The peak column is incremental MLX allocation above the retained
+inputs. These are operation measurements.
+
+| Mask | Mean time across the two arms | Incremental peak |
+| --- | ---: | ---: |
+| Composed matmul, gather and concatenate | 4.90 ms | 112.05 MiB |
+| Fused Metal mask and sink | 2.53 ms | 48.02 MiB |
+
+The fused mask follows mlx-vlm's shape-generic Metal band kernel in
+`mlx_vlm/models/inkling/language.py`. It also writes the query-dependent sink
+in the output allocation. The CPU implementation and the strided-input
+differential test retain the composed mask. GPU inference uses the fused
+kernel. End-to-end decode and TTFT impact remain to be measured.
+
+## Vocabulary projection
+
+On the same M4 Pro under the exclusive lease, a warmed synthetic single-token
+FP32 projection used Mini's 201,024 × 2,304 vocabulary matrix. Each A/B/B/A
+arm evaluated 12 steps.
+
+| Projection | Mean time across the two arms |
+| --- | ---: |
+| Convert BF16 weights on every step | 21.94 ms |
+| Reuse the converted FP32 weights | 8.40 ms |
+
+This follows the decode projection cache in mlx-vlm
+`models/inkling2/language.py`. The prototype probe kept the BF16 matrix alive
+in both arms and peaked near 2.59 GiB. The Swift model stores the converted FP32
+projection and releases the raw checkpoint dictionary after load. The
+retained weight representation is about 0.86 GiB larger than BF16. Model-level
+resident memory and decode speed remain to be measured.
+
+## Native HTTP functional smoke
+
+On the verified netprojects checkpoint, a 24-token greeting finished in 82
+generated tokens and streamed a friendly answer. Timings below came from
+`mlxcat-http` usage. Decode rate excludes the first generated token.
+
+| Request | TTFT | Decode tok/s |
+| --- | ---: | ---: |
+| Cold greeting including model load | 4.870 s | 18.23 |
+| Warm greeting | 0.287 s | 18.95 |
+| Weather tool invocation | 1.353 s | 18.72 |
+| Reference image | 1.334 s | 18.76 |
+
+The first Whisker smoke hit the server's default 16-token completion cap
+midway through a tool frame. The coding benchmark proxy sets an explicit
+2,048-token cap and supplies the same six local file tools to both models.
+The assessment harness runs acceptance tests outside the model loop.
+
+## First completed Whisker repeat
+
+Both models passed the independent T1 Swift tests with release build
+`70747f1`. T1 fixes an off-by-one in the counting implementation. These
+measurements describe one repeat per model.
+
+| Model | Wall | Decode tok/s | Median TTFT | Peak footprint | Tool calls | Failed tool calls | Rounds |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Inkling 2 Mini MLX 4/8-bit | 126.16 s | 16.80 | 7.06 s | 23.44 GiB | 11 | 1 | 7 |
+| Qwen3.8-27B-4bit | 214.68 s | 12.15 | 6.90 s | 21.68 GiB | 11 | 0 | 6 |
+
+## Three-repeat T1 comparison at `60122de`
+
+Both models passed all three independent T1 checks. Values show the median
+and observed range. The later repeated run includes a warm server between
+repeats and uses a fresh checkout and Whisker thread for every repeat.
+
+| Model | Passed | Wall s | Decode tok/s | TTFT s | Peak GiB | Tool calls | Failed calls | Rounds |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Inkling 2 Mini MLX 4/8-bit | 3/3 | 204.60 [144.93–290.19] | 15.55 [15.28–16.09] | 8.45 [7.61–10.38] | 23.80 [23.75–24.82] | 14 [12–15] | 3 [2–3] | 11 [8–11] |
+| Qwen3.8-27B-4bit | 3/3 | 124.29 [117.00–135.64] | 13.21 [13.13–13.32] | 5.38 [5.25–5.73] | 20.51 [19.73–20.52] | 10 [10–10] | 0 [0–0] | 6 [6–6] |
+
+## Three-repeat T1 comparison on the verified release
+
+Both models passed all T1 repeats on release build `a2059f1`. Values show
+the median and observed range. The remaining task cells are running.
+
+| Model | Passed | Wall s | Decode tok/s | TTFT s | Peak GiB | Tool calls | Failed calls | Rounds |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Inkling 2 Mini MLX 4/8-bit | 3/3 | 412.67 [225.02–434.76] | 16.09 [16.07–16.92] | 21.64 [19.43–22.01] | 26.96 [26.14–26.97] | 14 [11–15] | 2 [2–3] | 9 [8–10] |
+| Qwen3.8-27B-4bit | 3/3 | 140.42 [129.90–143.54] | 13.10 [13.06–13.39] | 5.55 [5.39–6.56] | 20.48 [19.75–20.52] | 11 [10–11] | 0 [0–0] | 6 [6–6] |
+
+Each Qwen repeat reported 9,216 cached prompt tokens across its six turns.
+Inkling reported zero and processed 16,933–38,312 prompt tokens across
+eight to ten turns. The timings include each model's native cache behavior
+and the conversation length produced by its tool choices.
+
+## Three-repeat T2 comparison on the fused release
+
+Both models passed the independent Python checks on release build `45d1209`.
+Values show the median and observed range.
+
+| Model | Passed | Wall s | Decode tok/s | TTFT s | Peak GiB | Tool calls | Failed calls | Rounds |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Inkling 2 Mini MLX 4/8-bit | 3/3 | 436.68 [306.08–446.57] | 15.64 [15.62–15.65] | 17.83 [7.84–28.01] | 25.26 [24.96–25.39] | 14 [10–14] | 4 [3–5] | 14 [11–15] |
+| Qwen3.8-27B-4bit | 3/3 | 278.87 [275.20–327.54] | 13.07 [12.93–13.24] | 4.48 [3.53–5.80] | 21.80 [21.30–23.14] | 15 [14–16] | 0 [0–0] | 12 [10–13] |
+
+## Three-repeat T3 comparison on the fused release
+
+Inkling found the four files in every repeat. Each run tried two Bash calls
+that the fixed auto-edit policy declined, and the checkout remained untouched.
+Qwen completed two renames. Its failed checkout contained duplicate
+`InventoryItem` declarations.
+
+| Model | Passed | Wall s | Decode tok/s | TTFT s | Peak GiB | Tool calls | Failed calls | Rounds |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Inkling 2 Mini MLX 4/8-bit | 0/3 | 160.47 [138.18–181.99] | 16.83 [16.79–16.84] | 10.15 [10.04–10.48] | 24.39 [24.34–24.79] | 12 [11–13] | 2 [2–2] | 9 [8–10] |
+| Qwen3.8-27B-4bit | 2/3 | 401.00 [376.90–589.30] | 13.02 [12.93–13.22] | 5.21 [4.68–6.22] | 22.59 [21.11–22.84] | 17 [17–30] | 2 [1–3] | 9 [9–17] |
+
+## Three-repeat T4 comparison on the fused release
+
+Both models answered all three questions and left the checkouts clean.
+Inkling used one read per repeat and the median end-to-end time was 43.96 s.
+Qwen's median end-to-end time was 83.83 s.
+
+| Model | Passed | Wall s | Decode tok/s | TTFT s | Peak GiB | Tool calls | Failed calls | Rounds |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Inkling 2 Mini MLX 4/8-bit | 3/3 | 43.96 [43.78–44.32] | 16.14 [16.08–16.26] | 16.61 [16.45–18.12] | 24.65 [24.65–24.65] | 1 [1–1] | 0 [0–0] | 2 [2–2] |
+| Qwen3.8-27B-4bit | 3/3 | 83.83 [82.78–108.58] | 13.06 [13.05–13.11] | 25.28 [4.56–29.97] | 21.28 [19.76–21.58] | 2 [1–2] | 0 [0–0] | 3 [2–3] |
+
+## Grouped NVFP4 prefill cost
+
+Run the 111-token tool fixture over loopback in A/B/B/A order. Each arm starts
+a fresh release server and completes a short greeting before timing the tool
+request. TTFT and decode rate come from server usage. Peak physical footprint
+is sampled during the measured request. Values are means across the two arms.
+
+| Release | Warm TTFT | Decode tok/s | Peak footprint |
+| --- | ---: | ---: | ---: |
+| `6b7edf1` with FP32 postscale | 0.579 s | 19.10 | 19.92 GiB |
+| `a2059f1` with reference grouped scaling | 5.455 s | 19.13 | 22.46 GiB |
+
+The pinned-core compatibility path adds prefill time and temporary memory
+when the routes select grouped matrix multiplication. Both arms emitted the
+59-token tool continuation. The native fixture verifier measured maximum
+logit error of 1.018 before the grouped fix and zero after it.
+
+## Fused NVFP4 unpacking
+
+Compare the two grouped implementations in a standalone Swift probe. Each
+arm warms Metal with a short prompt, then evaluates first-token logits for the
+111-token tool fixture. A/B/B/A used the same verified checkpoint and cache
+state. Peak is MLX allocation after resetting its peak counter for each arm.
+Both implementations matched the reference's 59 greedy tokens and all
+sampled logits exactly in this case.
+
+| Grouped projection staging | Mean prefill time | Mean MLX peak |
+| --- | ---: | ---: |
+| FP32 unpack and scale, then BF16 conversion | 5.756 s | 24.36 GiB |
+| Fused unpack and scale directly to BF16 | 1.906 s | 23.09 GiB |
+
+## Two conversations on one loaded Inkling model
+
+Send two warm 32-token requests separately, then submit both simultaneously
+to one release server at `45d1209`. The native scheduler gives both requests
+independent caches and runs them serially. Each prompt produced identical
+greedy tokens in the solo and concurrent measurements.
+
+| Request | Solo TTFT | Simultaneous submission TTFT | Solo wall | Simultaneous submission wall |
+| --- | ---: | ---: | ---: | ---: |
+| Saturn, served second | 0.284 s | 2.208 s | 1.938 s | 3.862 s |
+| Jupiter, served first | 0.285 s | 0.287 s | 1.940 s | 2.209 s |
+
+## Tool outcomes in the archived matrix
+
+The T2 and T3 event streams from `matrix-45d1209` separate the old combined
+failure column into three outcomes. The same independent acceptance checks
+determine done status.
+
+| Model | Task | Done | Declined | Malformed | Tool errors |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Inkling | T2 | 3/3 | 12 | 0 | 0 |
+| Inkling | T3 | 0/3 | 6 | 0 | 0 |
+| Qwen | T2 | 3/3 | 0 | 0 | 0 |
+| Qwen | T3 | 2/3 | 0 | 0 | 6 |
+
+All 18 Inkling outcomes were policy declines of Bash calls. In T3 the
+declined `mv` blocked the actual rename. The six Qwen T3 tool errors came
+from edit calls. The T1 Inkling runs on `a2059f1` had seven Bash declines
+and passed 3/3. Both models passed 3/3 in T4 with no tool failures. The
+stopped T5 cell had zero completed repeats.
+
+The paired rerun uses the same frozen `45d1209` binary and fresh clones of the
+same fixture. Whisker yolo mode and the gateway tool whitelist permit Bash,
+with filesystem writes confined to each run and Whisker's transient atomic
+write files, and network access confined to the loopback gateway. The sandbox
+harness archives raw tool events and per-turn usage per repeat. A decline
+takes precedence in classification. A rejected invocation with malformed
+arguments counts as malformed. Other failed tool events count as tool errors.
+
+The corrected matrix is `matrix-bash-sandbox-45d1209`. The sandbox smoke
+tests exposed two infrastructure issues before this matrix began. The shell
+needed a run-local `TMPPREFIX` for heredocs, and SwiftPM needed to use its
+native driver and skip its inner sandbox while still under the outer
+filesystem sandbox. The earlier smoke artifacts are preserved separately.
+The final tool metric also compares the stream's model-specific tool frame
+markers with Whisker's invocation events to count frames dropped before
+execution. A nonzero Bash exit receipt is a tool error even when Whisker
+reports the event as completed.
+
+| Corrected cell | Done | Median wall s | Median decode tok/s | Median-turn TTFT s | Peak GiB | Declined | Malformed | Tool errors |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Inkling T2 | 3/3 | 135.88 | 15.94 | 8.15 | 25.10 | 0 | 0 | 0 |
+| Qwen T2 | 3/3 | 176.52 | 13.19 | 4.12 | 20.37 | 0 | 0 | 2 |
+| Inkling T3 | 3/3 | 351.07 | 15.87 | 19.35 | 25.12 | 0 | 0 | 5 |
+| Qwen T3 | 3/3 | 192.81 | 13.31 | 6.46 | 20.81 | 0 | 0 | 0 |
+
+The outcome columns are totals across the three repeats. Both executed Qwen
+errors in the corrected T2 cell were configuration-file searches where
+`grep` returned 1 for no matches. All three edits and independent acceptance
+checks passed.
+
+The corrected T3 paired reruns completed six of six checkouts. Inkling
+recovered from five nonzero shell exits, including unquoted glob syntax
+in its grep invocations. The independent acceptance check confirmed the
+rename and the affected Swift test in all six checkouts.
+
+## Native prefill and decode A/B
+
+The release arms ran on the M4 Pro with 48 GiB of RAM and macOS 27.2.1.
+Each arm started a fresh server, warmed up with a short greeting, then ran
+the same 3,541-token chat and 3,558-token follow-up at temperature 0. The
+four arms used one binary and changed one setting at a time. Both 16-token
+outputs matched the control in every arm.
+
+| Arm | Cold TTFT s | Cold prompt tok/s | Follow-up TTFT s | Cached follow-up tokens | Cold peak GiB | Follow-up peak GiB |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Control | 14.57 | 242.98 | 13.93 | 0 | 24.37 | 24.37 |
+| Exact-boundary prefix reuse | 13.87 | 255.29 | 2.48 | 3,072 | 24.45 | 23.35 |
+| Packed grouped NVFP4 | 15.17 | 233.41 | 15.06 | 0 | 23.04 | 23.00 |
+| Mixed-storage vocabulary projection | 14.08 | 251.47 | 13.97 | 0 | 23.87 | 23.52 |
+
+The prefix rematerialized 486 tokens on the follow-up. Its checkpoint
+contains each visit's attention KV and all four convolution histories at
+token 3,072. Packed grouped prefill reduced the cold peak by 1.32 GiB. It
+took 0.60 s more than the staged grouped multiply on the cold prompt.
+
+The control and vocabulary arms also ran a separate 256-token coding
+completion. The mixed-storage kernel read the original BF16 vocabulary
+table in the pinned FP32 GEMV reduction order. All 256 token IDs matched.
+The server reported 18.81 to 19.98 tok/s on that completion. The measured
+peak physical footprint went from 20.35 to 19.41 GiB.
+
+Raw arm JSON, server logs and memory-pressure receipts are in
+`native-prefix-packed-ab-1` under the shared Inkling work directory.
+
+The packed path is the default for eligible prefill after all 760 greedy
+tokens and 960 sampled logits matched the netprojects fixtures. The lower
+peak is the reason for choosing it despite the cold latency increase on
+this prompt. Set `MLXCAT_INKLING_PACKED_PREFILL=0` for staged prefill.
+
+The mixed-storage vocabulary projection is the default for eligible
+one-token calls. All 760 greedy tokens and 960 sampled logits matched
+in its separate fixture run. Set `MLXCAT_INKLING_VOCAB_GEMV=0` to use the
+cached FP32 head.
+
+## MTPLX on this M4 Pro
+
+MTPLX 2.13.2 (`3890be5`, MLX 0.32.2) ran the verified Bare Speed pack
+(`388ab6d`) on the M4 Pro. Each arm generated 128 tokens from a 4,630-token
+coding prompt at temperature 0 with seed 42. DSpark used fixed depth 3.
+The warm arms each reused all 4,630 prompt tokens.
+
+| Method | Cold decode tok/s, two arms | Warm decode tok/s | Greedy match to autoregressive |
+| --- | ---: | ---: | ---: |
+| Autoregressive | 41.82, 42.23 | 41.54 | 128/128 |
+| DSpark | 23.38, 40.88 | 42.66 | 128/128 on each of three arms |
+
+DSpark accepted 77 proposals per arm. This local warm gain was 2.7%.
+The published 128.8 tok/s was a peak for one cached 128-token response
+on an M5 Max using a 2.13 test build through its HTTP server. The tested
+Mac, prompt, and launch route differ from that run.
+[MTPLX benchmark conditions](https://github.com/youssofal/MTPLX/blob/3890be556160af48887d5bfbf5304c4ad5b9417f/README.md)
+
+The native Swift port adopted the mixed-storage vocabulary read. The
+native speculative panel exceeded the exactness tolerance, so Swift uses
+ordinary decoding. Raw MTPLX token IDs and arm metrics are in
+`mtplx-reference-ab.jsonl` in the shared work directory.
+
+The [autoregressive decode profile](DECODE.md) traces the ordinary native
+and MTPLX token paths and records the isolated mlxcat performance trials.
+
+## VisualInference 4-bit context curve
+
+The verified VisualInference pack (`443e30e`) has 15,846,700,032 indexed
+weight bytes. The same M4 ran the publisher's mlx-vlm/MLX 0.32.4 stack
+and native Swift. Each arm used greedy sampling and matching prompts.
+Swift used 256-token prefill chunks. Python used 1,024 for the first two
+points and 256 for the longer points. The 32-token prompt requested 256
+output tokens. The other prompts requested 32 outputs. The Python memory
+counter samples MLX allocations. The native figures come from macOS
+process physical footprint and include additional process allocations.
+
+| Prompt tokens | mlx-vlm MLX peak GiB | Native physical peak GiB | Native TTFT s | Native decode tok/s |
+| ---: | ---: | ---: | ---: | ---: |
+| 32 | 14.93 | 15.85 | 0.29 | 23.70 |
+| 224 | 15.47 | 15.62 | 1.28 | 23.59 |
+| 4,364 | 16.26 | 16.66 | 19.36 | 20.68 |
+| 8,824 | 16.53 | 17.94 | 39.54 | 19.15 |
+| 17,684 | 17.05 | 19.65 | 81.32 | 16.61 |
+
+At 224 prompt tokens the measured MLX peak was 15.47 GiB, within 0.03 GiB
+of the published 15.5 GiB. The 32-token coding prompt decoded at 27.86
+tok/s in mlx-vlm versus the published 31.1 tok/s on its 28-token prompt.
+The same local mlx-vlm prompt with DSpark decoded at 17.37 tok/s and
+agreed with its autoregressive arm for the first 90 of 256 tokens.
+The native 224-token point left 0.38 GiB below 16 GiB before accounting
+for macOS and other processes. The native 4,364-token point exceeded
+16 GiB on its own. These measurements were on the 48 GiB M4.
+[VisualInference benchmark conditions](https://huggingface.co/VisualInference/Inkling-2-Mini-MLX-4bit/blob/443e30e1ddbb05b711975a6b549ffe209755edc6/README.md)
+
+The initial Swift run of this checkpoint diverged from its own Python
+reference. Its 256-token coding completion matched the first 84 IDs.
+The separately captured code fixture matched 33/64 IDs. The image and
+tool fixtures matched all 61 and 59 greedy IDs, with maximum sampled
+FP32 errors of 2.51 and 3.33. The original netprojects and baytizzel
+reference results above use their own unchanged weights.
+
+An affine alignment trial padded the 8-bit dense input width to select
+the newer MLX reduction layout on the pinned core. The code fixture
+still matched 33/64 tokens after padding, and all three fixture maximum
+logit errors exceeded 0.25. The alignment trial was removed.
+
+Both native 4-bit attempts with a 16 GiB software memory ceiling
+returned HTTP 507 from memory admission. The ceiling caps the engine
+on the 48 GiB host, and macOS overhead on a 16 GiB machine would further
+reduce the available budget. The fixed 16 GiB configuration did not
+qualify in this test.
+
+The same checkpoint and prompts were rerun with graph overlap and reserved
+global KV enabled, using an unseeded temperature-0 request. All 384 greedy
+IDs matched the corresponding earlier native runs.
+
+| Prompt tokens | Output tokens | Native physical peak GiB | Native TTFT s | Native decode tok/s |
+| ---: | ---: | ---: | ---: | ---: |
+| 32 | 256 | 16.65 | 0.28 | 24.54 |
+| 224 | 32 | 15.72 | 1.04 | 24.72 |
+| 4,364 | 32 | 17.31 | 19.38 | 21.86 |
+| 8,824 | 32 | 17.22 | 39.61 | 21.40 |
+| 17,684 | 32 | 18.04 | 82.19 | 19.40 |
+
+Both capped requests returned HTTP 507 again at 224 and 4,364 prompt
+tokens. The 16 GiB result remains a software-cap test on the 48 GiB M4 Pro.
+Receipts are `ar-4bit-curve.jsonl` and `ar-4bit-cap.jsonl` in the shared
+work directory.
+
+The complete pack fails the **model-load** admission check. Model discovery
+counts all top-level safetensors, including the optional 635,801,416-byte
+`mtp.safetensors`, and adds 5% (`ModelDiscovery.swift:63–86`). That
+produces a 16.12 GiB estimate, above the 16 GiB cap
+(`EnginePool.swift:484–494`). The API's error spells its binary units “GB.”
+
+A separate directory linked only the indexed weight shards and supporting
+files, leaving the original download intact. Under the same lease and cap,
+224 prompt tokens completed at **15.63 GiB** process peak. At 8,824 prompt
+tokens the request then failed the **generation** admission check. The
+watchdog observed 14.45 GiB resident, allowed 14.72 GiB at its 92% hard
+watermark, and adds 1.62 GiB of projected KV for 8,824 prompt plus 32 output
+tokens (`MemoryWatchdog.swift:215–239`, `NativeModelEngine.swift:958–965`).
+The estimate reserves all 48 visits at full length and is conservative for
+local layers. The uncapped run nevertheless peaked at **17.22 GiB** at the
+same context. That exceeds a 16 GiB machine's entire physical memory before
+macOS and other processes. The short capped completion on the 48 GiB host
+does not qualify a physical 16 GiB host.
+
+Receipts are `overnight-cap-16.jsonl` and
+`overnight-cap-indexed-16.jsonl`.
+
+## Whisker with the combined defaults
+
+One additional Inkling T2 smoke on the final release passed independent
+acceptance with zero tool failures. The cold turn had zero cached tokens
+and its eight follow-ups reused 1,024 to 4,096 tokens each. Median-turn
+TTFT was 4.05 s, decode was 17.66 tok/s, and wall time was 142.49 s. The
+frozen Bash-enabled T2 baseline had three repeats and a median-turn TTFT
+of 8.15 s. The smoke generated a different number of agent rounds, so
+the matched prompt A/B above isolates the cache effect.
+
+## Remaining fixed Whisker tasks
+
+The T5/T6 tail used the frozen `45d1209` release, Bash enabled, and the
+same fixture revision. A stopped T5 attempt exposed an atomic-write
+permission gap specific to the Swift build driver. That attempt is
+preserved in the previous run's transcript. The corrected sandbox was
+verified with `swift build`, the affected `swift test`, and `swift run`
+before starting fresh T5/T6 cells in `matrix-bash-swiftpm-45d1209`.
+
+| Corrected cell | Done | Median wall s | Median decode tok/s | Median-turn TTFT s | Peak GiB | Declined | Malformed | Tool errors | Median turns |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Inkling T5 | 3/3 | 144.05 | 16.80 | 10.03 | 24.44 | 0 | 0 | 3 | 7 |
+| Qwen T5 | 3/3 | 119.96 | 13.33 | 5.92 | 20.14 | 0 | 0 | 0 | 5 |
+| Inkling T6 | 3/3 | 764.94 | 16.20 | 15.57 | 25.20 | 0 | 0 | 0 | 17 |
+| Qwen T6 | 1/3 | 395.06 | 13.08 | 5.42 | 21.56 | 0 | 1 | 0 | 8 |
+
+All six T5 checkouts changed the three expected call-site files and kept
+the wrapper. The completed T6 checkouts added tests for the production
+helper, and the harness independently ran both CLI modes. Qwen's first
+two T6 attempts left their checkouts untouched after reaching the shared
+2,048-token per-turn cap. One generated an incomplete tool frame before
+the cap. The T6 time statistics include all attempted repeats.
+
+The fixed set finished at 18/18 for Inkling and 16/18 for Qwen. These
+totals retain the earlier successful T1 and T4 cells and use the
+Bash-enabled repeats for T2, T3, T5 and T6.

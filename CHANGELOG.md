@@ -32,6 +32,26 @@ are tags on `main`.
   runs the reclaim ladder with the lever off and on.
 
 ### Added
+- **Native Inkling 2 Mini engine** (`Sources/MLXCatNative/Inkling/`). The
+  native loader serves Inkling 2 Mini checkpoints, NVFP4/MXFP8 and affine
+  packs, through the existing embedder and `mlxcat-http`:
+  - the 24-layer, 48-visit loop with per-visit attention and convolution
+    caches, routed experts, the vision encoder and the publisher's chat
+    template ported to Swift;
+  - grouped NVFP4 prefill with fused unpacking and expert scaling, a compiled
+    singleton expert graph and a mixed-storage vocabulary GEMV, each checked
+    for exact output against the unfused path;
+  - typed reasoning, text and tool-call framing in `InklingOutputParser`;
+  - exact prefill checkpoints reused across turns, and declared affine
+    layouts validated before loading.
+
+  `mlxcat-inkling-parity` is the same-Mac reference verifier against
+  mlx-vlm (`docs/inkling/PARITY.md`). Plans, parity, decode and benchmark
+  records are in `docs/inkling/`.
+- **Named text session prefixes persist on SSD**, and rolling text prefix
+  snapshots restore at exact boundaries (`SessionPrefixDiskStore`).
+- `Qwen3_5Tokenizer` loads through the existing Qwen BPE, so Qwen3.5-family
+  survey checkpoints that declare that class no longer fail to load.
 - **Cat inference benchmark results, all four models**, in `bench/cat/`
   (M4 Pro, default configuration). Hybrid prefix reuse takes Qwen3.5-4B's 8k
   replay TTFT from 15.1 s to 0.58 s. Non-hybrid exact replays get no reuse with

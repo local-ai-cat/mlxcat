@@ -43,6 +43,10 @@ let package = Package(
             targets: ["MLXCatBench"]
         ),
         .executable(
+            name: "mlxcat-inkling-parity",
+            targets: ["InklingReferenceProbe"]
+        ),
+        .executable(
             name: "mlxcat-baseline",
             targets: ["MLXCatBaseline"]
         ),
@@ -168,6 +172,7 @@ let package = Package(
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
                 .product(name: "MLXLLM", package: "mlx-swift-lm"),
                 .product(name: "MLXVLM", package: "mlx-swift-lm"),
+                .product(name: "Hub", package: "swift-transformers"),
                 .product(name: "Tokenizers", package: "swift-transformers"),
             ]
         ),
@@ -198,6 +203,17 @@ let package = Package(
                 .product(name: "MLXVLM", package: "mlx-swift-lm"),
                 .product(name: "Tokenizers", package: "swift-transformers"),
             ]
+        ),
+        .executableTarget(
+            name: "InklingReferenceProbe",
+            dependencies: [
+                "MLXCatNative",
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXHuggingFace", package: "mlx-swift-lm"),
+                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
+                .product(name: "Tokenizers", package: "swift-transformers"),
+            ],
+            path: "Tests/InklingReferenceProbe"
         ),
         .testTarget(
             name: "MLXCatTests",

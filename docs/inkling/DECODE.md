@@ -1,0 +1,293 @@
+# Inkling autoregressive decode on M4 Pro
+
+The earlier warm MTPLX run measured 41.54 tokens/s on this M4 Pro with speculation disabled. A new run with Metal command counting measured 42.18 tokens/s by the runtime clock and 41.85 tokens/s between token callbacks, with a 4,630-token cached prompt. All 128 greedy IDs match the prior warm run on the verified MTPLX Bare Speed checkpoint. The mlxcat profile uses the verified netprojects NVFP4/MXFP8 release. The Bare Speed pack also uses 4-bit affine attention projections, embeddings and vocabulary. The models therefore move different amounts of weight data per token and the comparison does not establish how much speed a same-checkpoint port can recover.
+
+## What one token does
+
+| Difference | mlxcat | MTPLX 2.13.2 at `3890be556160af48887d5bfbf5304c4ad5b9417f` |
+| --- | --- | --- |
+| Runtime submission | The Swift probe builds a fresh lazy graph and submits it with `asyncEval` before reading the greedy ID. The pinned MLX runtime commits as it hits its operation or memory thresholds. | `mtplx/models/inkling/fast/engine_site.py:251–298` records Metal launches and checks the replay bitwise before using the native executor. `native/engine/executor.mm:1272–1310` encodes the recorded passes into one command buffer per chunk and signals completion through a semaphore. |
+| Routed expert execution | `Sources/MLXCatNative/Inkling/InklingExperts.swift:120–148` selects the top eight of 128 experts and runs separate gathered quantized up, gate and down GEMVs per visit. Routing weights and the output reduction use FP32. | `mtplx/models/inkling/fast/experts.py:1437–1521` picks the own-kernel path for a singleton. It fuses input normalization and the router, performs top-eight selection and both gate/up dot products in one stage, then dispatches down projection. `experts.py:1523+` combines the weighted expert output, short convolution and residual. Its native NVFP4 path quantizes activations, which changes the arithmetic relative to mlxcat’s release reference. |
+| Loop cache | `Sources/MLXCatNative/Inkling/InklingDecoderAttention.swift:15–24,91–108` appends chronological keys and values, slices the local window and appends a zero sink for attention. The per-visit cache also holds four short convolution histories. | `mtplx/models/inkling/fast/state.py:131–296` uses fixed local banks and growable global storage. It writes accepted KV rows and all four convolution histories together. `mtplx/models/inkling/fast/decoder.py:172–188` evaluates the replay outputs before committing those rows. |
+
+For 128 warm native code-fixture steps, mean graph construction was 4.63 ms, time inside `asyncEval` was 38.55 ms and token readback took 5.25 ms. These are host intervals. GPU work can begin while `asyncEval` is still walking and submitting the graph. An eight-step diagnostic that forced evaluation at five boundaries across all 48 visits assigned 28.05 ms/token to attention and KV, 21.88 to MoE, 13.94 to the controller and input norm, 13.07 to attention convolution and MLP input, 7.07 to MLP convolution, and 4.25 to the final residual and vocabulary. The diagnostic inserted barriers and took 88.26 ms/token before sampling, so the stage figures show where work accumulates and cannot be summed to estimate production latency.
+
+| Runtime and mode | Measured tokens after warm-up | Metal command-buffer commits/token | Public Metal wait calls/token |
+| --- | ---: | ---: | ---: |
+| mlxcat, default | 128 | 467.33 | 0 |
+| mlxcat, 200 ops and 500 MB per buffer | 128 | 96.73 | 0 |
+| mlxcat, MTPLX prompt at 4,630 tokens | 128 | 398.05 | 0 |
+| MTPLX, ordinary decoding | 127 | 9.11 | 0 |
+
+On the same 4,630-token prompt text, the direct native probe decoded at 16.99 tokens/s. Graph construction took 5.00 ms, submission 47.90 ms and readback 5.95 ms per token. This measures the native model without HTTP's graph overlap. The two packs produce different token sequences.
+
+The Metal count wraps `commit`, `waitUntilCompleted`, and `waitUntilScheduled` on the concrete Metal command-buffer class in the process. It includes uploads and cache work committed within the marked interval. A second capture also wrapped Metal shared-event waits and main-thread dispatch semaphore waits. mlxcat recorded exactly one shared-event wait per token on a worker thread (5.34 ms total per token), with no main-thread semaphore waits. MTPLX recorded 2.06 shared-event waits (0.57 ms total) and 10.11 main-thread semaphore calls (21.58 ms total) per token. Counts include calls that return immediately.
+
+The native probe reads one greedy ID and pinned MLX waits through its event path (`transforms.cpp:296–325`, `backend/metal/event.cpp:23–28`). MTPLX also waits on native engine semaphore completion (`executor.mm:1682–1720`), evaluates the single-token logits and cache deltas (`fast/decoder.py:172–188`), and evaluates the greedy reduction and finite-check together once before reading both scalars (`mtplx/generation.py:7992–8022`).
+
+## Isolated exact-greedy trials
+
+| Change | Baseline tok/s | Trial tok/s | Greedy |
+| --- | --- | --- | --- |
+| Increase the pinned MLX command-buffer budget | 20.19–20.37 | 20.59–20.66 | 128/128 in each trial |
+| Fuse the gate activation after the separate quantized GEMVs | 20.19–20.37 | 20.49–20.58 | 128/128 in each trial |
+| Fuse controller pointwise math after the existing projections | 19.92–20.39 | 19.92–20.36 | 128/128 in each trial |
+| Append the KV row and the sink in a single concatenation per tensor | 20.22–20.32 | 20.24–20.30 | 128/128 in each trial |
+| Reserve global KV rows at a short context | 20.23–20.34 | 20.22–20.28 | 128/128 in each trial |
+| Reserve global KV rows at an 8,225-token context | 16.34–16.35 | 17.74–17.86 | 128/128 in each trial |
+
+The buffer budget removed about 79% of Metal commits and moved time from submission into final readback. The gain was under 2.4% and the knobs apply to the entire MLX process. The gate trial covered just the pointwise activation with separate GEMVs, so it tests one small part of MTPLX’s fused path. Production retains the prior buffer budget, gate path and sink concatenation for appends.
+
+The global KV capacity trial gained about 8.9% at an 8,225-token prompt. The change uses amortized growth from MTPLX's global bank design. From offset 8,192, singleton decode writes the new row into a buffer that grows in 256-row increments and uses the following untouched row as the sink. The published prefix cache keeps only the active rows. Attention reads chronological keys and values. Local visits and short contexts use the existing append path.
+
+## Adopted HTTP decode change
+
+The scheduler now builds the next eligible singleton Inkling graph while the GPU finishes the pending token. Building on shallow copies lets the scheduler discard a step at EOS and export a snapshot at the last emitted token. The approach follows the overlap used by mlx-swift-lm's `TokenIterator` and retains the Swift scheduler's existing sampling eligibility checks.
+
+The release HTTP A/B used temperature 0, no seed, a 32-token coding prompt and a 256-token output. After adding the pending-cache snapshot safeguard, repeated controls ran at 20.18–20.19 tokens/s and repeated copy-prebuild runs at 21.93–22.03 tokens/s, about 8.9% faster by the paired medians. Both arms matched all 256 output IDs. Each cached follow-up reused 3,072 tokens and matched the control output. Physical peak on the coding request was 21.32–21.46 GiB in controls and 21.75 GiB with the optimization. The comparison used `MLXCAT_INKLING_COPY_PREBUILD=0` for the controls.
+
+An 8,225-token HTTP A/B enabled graph overlap in both arms and varied only `MLXCAT_INKLING_RESERVED_GLOBAL_KV`. The runs finished at natural EOS after 85 tokens. Controls ran at 17.05–17.36 tokens/s and peaked at 24.66–24.70 GiB. Reserved KV ran at 18.32–18.54 tokens/s and peaked at 22.94 GiB. Every generated ID matched across all four runs.
+
+The reference probe with reserved KV enabled matched 760/760 greedy IDs and all 960 sampled logits for each of the netprojects and baytizzel checkpoints. The maximum observed absolute logit error was 0.0, including each 8,225-token fixture.
+
+The raw benchmark receipts were retained locally and are unpublished. Each measured run held the exclusive machine lease.
+
+## Paired NVFP4 projection trial
+
+One shared gathered matrix-vector multiply projected the same routed inputs
+through packed up and gate weights. It kept the pinned core's FP32
+accumulation and applied the original per-projection scales and BF16
+rounding separately. This tested a larger part of MTPLX's gate/up fusion
+without adopting its activation quantization.
+
+On the short code fixture, controls ran at 20.24–20.33 tok/s and the paired
+projection ran at 20.58–20.60 tok/s. Each run matched all 128 greedy IDs.
+The trial retained another packed copy for decode alongside the prefill
+weights. A gain of about 1.5% did not justify that memory cost. The trial is
+recorded in `overnight-paired-expert-ab` and was removed from the engine.
+
+## Same-checkpoint MTPLX ablation
+
+The MTPLX Bare Speed ablation used the same verified weights, 4,630 cached
+prompt tokens and 128 generated tokens for every arm. All five arms
+produced identical greedy output.
+
+| MTPLX autoregressive arm | Decode tok/s |
+| --- | ---: |
+| Default, bookended controls | 41.20, 41.23 |
+| Metal replay off, same fast stages | 29.24 |
+| Expert stage E off, replay and stages A/BC/D enabled | 33.12 |
+| Entire fast decoder off | 23.57 |
+
+`mtplx/engine/runtime.py:57–68` controls replay availability.
+`mtplx/models/inkling/fast/decoder.py:38–56,107–117` selects the fast route
+and stage set. `fast/step.py:637–655,677–687` binds the expert stage or
+its reference implementation. The last arm changes both execution and
+cache route. These cuts are independent comparisons with the default and
+their deltas cannot be added.
+
+Replay was the largest isolated contributor on this pack. Changes limited
+to Swift graph construction or to MLX buffer size do not reproduce this
+execution path. MTPLX records launch bindings through its compute-encoder
+hooks (`native/engine/recorder.mm:1–39`), then its executor reconstructs
+command buffers with the recorded barriers and binds live inputs. The
+existing mlxcat schedule still evaluates an MLX graph for each token.
+Receipts are in `overnight-mtplx-ab`.
+
+## Compiled singleton expert graph
+
+mlxcat now keeps a compiled MLX graph for the routed expert stage at the
+singleton decode shape. It compiles the existing router, gathered projections,
+activation and reduction, preserving the checkpoint's accumulation and
+rounding. This reuses graph work at a fixed shape and leaves Metal submission
+to MLX.
+
+The direct probe improved from 20.16–20.31 to 21.02–21.06 tok/s, with all 128
+greedy IDs matching. With graph overlap enabled in every HTTP arm, the
+32-token prompt and 256-token completion improved from 21.96–22.06 to
+22.71–22.76 tok/s, about 3.3%. All 256 IDs and the cached follow-up matched.
+TTFT was 0.33 s in each arm. Peak physical footprint ranged from 21.70 to
+21.81 GiB across the four arms. Both original checkpoints matched 760/760
+greedy IDs and 960/960 sampled logits per checkpoint with a maximum error
+of 0.0 in the weighted verifier.
+
+Set `MLXCAT_INKLING_COMPILED_EXPERTS=0` for the comparison path. Receipts
+are in `overnight-compiled-expert-ab`, `overnight-compiled-http` and
+`overnight-compiled-Inkling-*.txt`.
+
+On the same 4,630-token prompt used by MTPLX, an HTTP pair improved from
+18.56 to 19.05 tok/s with all 128 IDs matching between the native arms.
+Peak was 24.32–24.33 GiB. This is a matched prompt and output budget across
+runtimes, with different checkpoint layouts and with MTPLX's prompt restored
+from cache. The turn's prefill is excluded from decode throughput. The
+remaining gap is still roughly 2.2×. Receipt: `overnight-matched-http`.
+
+## Replay boundary in the pinned MLX core
+
+The fixed-shape Swift compiler is a graph-tape cache. The public
+`Transforms+Compile.swift:142–159` entry exposes fixed or shapeless
+tracing. In the pinned core, `compile.cpp:1019–1069,1116–1153` rebuilds
+lazy arrays and rebinds primitives from that tape on every invocation.
+The Metal backend still obtains a command buffer and calls
+`eval_gpu` for each primitive (`backend/metal/eval.cpp:27–43,57–82`).
+This differs from MTPLX's replay of recorded Metal bindings and barriers.
+
+The reserved global KV buffer can stay at one allocation capacity for
+256 positions, but the padded view presented to attention still changes
+length every token. The local window has a fixed bound after filling.
+The query-dependent sink and global position scale also depend on the
+active offset. The existing custom attention mask places the sink at the
+end of the active view, so moving it to the end of a capacity bucket
+would change the SDPA reduction inputs. Fixed-shape tracing cannot by
+itself preserve those inputs while reusing the whole token graph.
+Shapeless tracing still reconstructs primitives and recalculates their
+shapes, and cannot make Swift branches on offset into runtime graph inputs.
+
+Compiling the shape-stable attention inputs alone was the first fallback
+trial. The netprojects reference matched only 534/760 greedy tokens and
+had a maximum sampled-logit error of 7.1949, so the run stopped before
+performance testing and the trial was removed. The already-verified
+singleton expert compiler remains the exact graph-tape path.
+
+A source check of MLX 0.32.4 (`36969c09`) shows the same distinction.
+Its `compile.cpp:1043–1099,1180–1182` still replaces a traced tape with
+new arrays. Its `backend/metal/eval.cpp:27–45` still calls `eval_gpu`
+to encode a primitive.
+
+A native Metal replay implementation would need a recorder or an explicit
+encoder for these primitives, an input binding plan for live KV and short
+convolution state, and an exactness gate at cache allocation, wrap and
+snapshot boundaries. A version bump alone is not evidence that this
+interface exists. An evaluator that records and replays Metal launches
+would need its own bitwise proof against the release path.
+
+## Running the same packed text weights in both runtimes
+
+For this comparison, the MTPLX Bare Speed text tensors were reindexed
+for the native loader. The conversion preserved packed codes and group
+scale bytes, split the interleaved gate/up rows, resolved the existing
+FP4 outer-scale ratios and transposed convolution storage. It did not
+requantize. Both runs used the same tokenizer and 4,630-token prompt.
+The converted checkpoint was used only for a local text benchmark.
+
+| Runtime on Bare Speed text weights | Decode tok/s over 128 output tokens |
+| --- | ---: |
+| Native mlxcat HTTP, compiled expert graph off | 22.40 |
+| Native mlxcat HTTP, default expert graph | 22.89 |
+| Native mlxcat HTTP, shared gate/up pair | 23.69 |
+| MTPLX AR, cold prompt controls | 41.82–42.23 |
+| MTPLX AR, cached prompt controls | 41.20–41.23 |
+
+Both native arms in the final pair matched all 128 IDs. Each native
+sequence agreed with MTPLX through token 79, then diverged.
+The comparison controls the weight pack and prompt. It does not prove
+cross-runtime parity, since the two implementations use different
+activation arithmetic. With the shared pair enabled, the same-pack
+runtime gap was about 1.8× in the cold-prompt comparison, which excludes
+prefill time.
+
+## Top-eight NVFP4 decode with a shared gate/up bank
+
+`MLXCAT_INKLING_PAIRED_EXPERTS=1` combines the selected gate and up
+projections into one FP32-accumulating gathered GEMV. It uses the pinned
+MLX top-eight router and its ordering. Per-projection scales, BF16 rounds,
+activation and reduction stay in their reference order. The prefill path
+reads separate views of a shared packed bank so it does not retain a
+second set of projection weights.
+
+| Native HTTP prompt | Separate projections | Shared pair | Exact output |
+| --- | ---: | ---: | --- |
+| 32 tokens, 256 output | 22.71–22.80 tok/s | 22.91–23.15 tok/s | 256/256 |
+| 4,630 tokens, 128 output | 18.91 tok/s | 19.24 tok/s | 128/128 |
+
+Both original checkpoints matched 760/760 greedy IDs and 960/960 sampled
+logits, with zero observed logit error. A synthetic test compares the paired
+singleton and separate prefill paths. The longer prompt's TTFT rose from
+19.60 to 20.58 s. The paired path is opt-in because its decode gain is
+small and the prefill views can require contiguous copies.
+
+A stride-aware prefill trial preserved both checkpoints' exact outputs,
+but its common prefill kernel was slower in both A/B arms. In that trial
+the 4,630-token decode moved from 19.02 to 19.11 tok/s. The stride change
+was removed. Two handwritten Metal gate/up trials also failed the code
+fixture (39/64 greedy IDs, 1.2505 maximum sampled-logit error), including
+a variant that retained the reference activation. A single kernel that
+also computes top-eight routing remains unqualified for exact release
+output. The raw trial receipts are local and unpublished.
+
+## Fixed-bucket Metal replay trial
+
+MTPLX records Metal encoder state and dispatches in
+`native/engine/recorder.mm` (lines 697–715 include buffer mutation checks).
+Its executor encodes the recorded commands into a concurrent encoder
+(`native/engine/executor.mm:1280–1314`). Before admitting a recording,
+it compares ordinary outputs bitwise and checks the written KV rows
+byte for byte and the remaining bank regions by digest
+(`mtplx/engine/site.py:2194–2240`). The native trial borrowed the
+command recorder and used independent writable buffers for a shadow run.
+
+The first experiment held the input width of scaled dot-product attention
+constant within a 256-position bucket. It kept the reference sink position
+and masked every padded position. Both release packs matched 760/760
+greedy IDs and 960/960 sampled logits with a maximum error of zero.
+Twelve adjacent short-prompt decode steps still issued 10,571 launches
+per token, up from 10,187. At least 576 dispatch signatures changed
+between adjacent tokens, compared with 240 on the normal path. The first
+difference appeared at launch 59 in both cases. A fixed attention width
+alone therefore cannot replay a step by updating the token and KV
+position.
+
+| HTTP checkpoint and prompt | Reference decode | Padded attention | Exact IDs |
+| --- | ---: | ---: | ---: |
+| Release, 32 tokens | 22.61–22.78 tok/s | 22.32 tok/s | 256/256 |
+| Release, 4,630 tokens | 18.96 tok/s | 18.45 tok/s | 128/128 |
+| Bare Speed text weights in mlxcat, 4,630 tokens | 23.15 tok/s | 22.49 tok/s | 128/128 |
+
+The matched long-prompt arms used a bucket ending at 4,864. All rates are
+from exclusive-lease runs and exclude prefill. The same-pack MTPLX
+plain AR rate was 41.20–41.23 tok/s with its cached prompt, as recorded
+above.
+
+A second experiment reserved the actual K/V backing arrays across the
+first bucket, passed the write and sink position as a tensor, and used
+the normal path for offsets at or past 255. Across 12 adjacent steps
+on each release pack, all 9,851 launch signatures per step and all
+24,636 inline argument bindings matched. The first adjacent pair still
+differed at 789 and 955 buffer bindings, respectively, by allocation
+length or offset. The fixed-KV MLX path passed 760/760 greedy IDs
+and 960/960 sampled logits on each pack at zero maximum logit error.
+
+The first recorder attempt rejected a buffer that could be read before
+it was written because the initial bytes had not been saved. A retrial
+expanded the bounded snapshots and re-issued all 9,851 recorded
+dispatches with an independent writable arena. The re-encoding and GPU
+completion took 51.27 ms on the 4/8-bit release and 51.21 ms on the M5
+Pro release, excluding snapshotting, arena allocation and comparison.
+Each used about 72 MiB of shadow GPU buffers. For context, the
+unmodified short HTTP generation loop averaged 43.9–44.2 ms/token.
+These rates are an isolated one-step cost and an HTTP reference,
+respectively. There was no live replay HTTP arm.
+
+The fixed-KV path alone decoded at 22.87 tok/s on the 32-token HTTP
+prompt, compared with 22.63–22.72 tok/s across the bracketing controls.
+All 256 output IDs matched, including after the bucket exit. This
+short-run result measures the KV layout while MLX still builds and
+evaluates each decode graph.
+
+Binding reuse, adapted from `native/engine/executor.mm:1010–1065`,
+reduced the shadow cost to 49.52 and 49.26 ms. On both packs the
+full logits and the compared active cache spans were byte-identical.
+The recorder could not map the four-byte sampled token output to any
+captured Metal buffer. That leaves the admission check incomplete,
+and no replayed state advanced the stock scheduler. The 760/960
+fixture results above apply to the bucket layouts running ordinary MLX.
+
+The replay prototype was removed. A live version needs a recording
+boundary inside MLX or an explicit Metal decode path that owns its
+buffers. The pinned Swift `MLXArray+Metal.swift:21–33` accessor evaluates
+an array and wraps its bytes or copies them. A replay boundary would
+need original buffer identity, ownership of returned outputs, a
+stable scratch plan, and fewer binding and barrier calls per step.
+Qualification would compare complete KV banks, including untouched
+rows, and run consecutive replayed steps on both sides of a bucket
+exit. The raw trial receipts are local and unpublished.

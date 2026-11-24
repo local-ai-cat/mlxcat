@@ -1,7 +1,6 @@
 import CoreImage
 import Foundation
 import MLX
-import MLXHuggingFace
 import MLXLLM
 import MLXLMCommon
 import MLXCat
@@ -33,14 +32,18 @@ public final class NativeModelEngine: @unchecked Sendable {
         serializationPolicy: SerializationPolicy,
         schedulerManagedTextPrefill: Bool,
         chunkIdlePrefill: Bool,
-        kvQuantization: KVQuantizationPolicy = .off
+        kvQuantization: KVQuantizationPolicy = .off,
+        windowedLayerDecoder: (@Sendable (SerializedKVLayer) throws -> any KVCache)? = nil,
+        diskPrefixStore: SessionPrefixDiskStore? = nil,
+        prefill: PrefillParameters = .init()
     ) {
         self.context = context
         self.modelID = modelID
         self.maxContextTokens = maxContextTokens
-        self.parameters = GenerateParameters(maxTokens: 16, temperature: 0)
+        self.parameters = GenerateParameters(maxTokens: 16, temperature: 0, prefill: prefill)
         self.cacheCapabilities = cacheCapabilities
-        self.prefixStore = SessionPrefixKVStore(maxBytes: Self.prefixCacheMaxBytes())
+        self.prefixStore = SessionPrefixKVStore(
+            maxBytes: Self.prefixCacheMaxBytes(), windowedLayerDecoder: windowedLayerDecoder, disk: diskPrefixStore)
         self.engine = MLXCatEngine(
             model: context.model,
             parameters: parameters,
@@ -575,13 +578,26 @@ public final class NativeModelEngine: @unchecked Sendable {
     private func chatMessage(from message: OpenAIChatMessage) throws -> Chat.Message {
         let role = Chat.Message.Role(rawValue: message.role) ?? .user
         let images = try message.imageReferences.map(image)
-        // TODO(M6b): render prior assistant tool_calls once OpenAIChatMessage carries them.
+        let tool: Chat.Message.Tool?
+        if role == .assistant, !message.toolCalls.isEmpty {
+            tool = .calls(try message.toolCalls.map { call in
+                let arguments = try JSONDecoder().decode(
+                    [String: MLXLMCommon.JSONValue].self, from: Data(call.arguments.utf8))
+                return MLXLMCommon.ToolCall(
+                    function: .init(name: call.name, arguments: arguments), id: call.id)
+            })
+        } else if role == .tool, let id = message.toolCallID {
+            tool = .result(id: id, name: message.name)
+        } else {
+            tool = nil
+        }
         return Chat.Message(
             role: role,
             content: message.content,
             images: images,
             videos: try message.videoReferences.map { try media($0, kind: .video) }.map { .url($0) },
-            audios: try message.audioReferences.map { try media($0, kind: .audio) }.map { .url($0) }
+            audios: try message.audioReferences.map { try media($0, kind: .audio) }.map { .url($0) },
+            tool: tool
         )
     }
 
@@ -712,6 +728,14 @@ public final class NativeModelEngine: @unchecked Sendable {
         }
         if case .value(let value) = reasoningEffort {
             context["reasoning_effort"] = sendableValue(from: value)
+        }
+        if context["reasoning_effort"] == nil, request.enableThinking == false,
+            self.context.model is InklingLanguageModel
+        {
+            context["reasoning_effort"] = "none"
+        }
+        if self.context.model is InklingLanguageModel {
+            context["inkling_reasoning_history"] = request.messages.map { $0.reasoningContent ?? "" }
         }
         if let enableThinking = request.enableThinking {
             context["enable_thinking"] = enableThinking
@@ -873,37 +897,90 @@ public struct NativeModelLoader: EnginePoolModelLoader {
     public func loadModel(id: String, modelURL: URL) async throws -> NativeModelEngine {
         let modelConfiguration = try modelConfiguration(in: modelURL)
         let modelType = modelConfiguration.modelType.lowercased()
+        if modelType == "inkling2_loop" {
+            return try await loadInkling(id: id, directory: modelURL)
+        }
         let isVLM = try isVLMModelDirectory(modelURL, modelType: modelType)
         let container =
             if isVLM {
                 try await VLMModelFactory.shared.loadContainer(
                     from: modelURL,
-                    using: #huggingFaceTokenizerLoader()
+                    using: NativeTokenizerLoader()
                 )
             } else {
                 try await LLMModelFactory.shared.loadContainer(
                     from: modelURL,
-                    using: #huggingFaceTokenizerLoader()
+                    using: NativeTokenizerLoader()
                 )
             }
         return await container.perform { context in
-            NativeModelEngine(
+            let capabilities = Self.cacheCapabilities(for: modelConfiguration)
+            let reuse = Scheduler.hybridPrefixReuseEnabled()
+            let reuseRollingCache = ProcessInfo.processInfo.environment["MLXCAT_ROLLING_PREFIX_REUSE"] == "1"
+            return NativeModelEngine(
                 context: context,
                 modelID: id,
                 maxContextTokens: try? contextWindow(in: modelURL),
                 maxConcurrentRequests: maxConcurrentRequests,
-                cacheCapabilities: Self.cacheCapabilities(for: modelConfiguration),
+                cacheCapabilities: capabilities,
                 serializationPolicy: Self.serializationPolicy(modelType: modelType, isVLM: isVLM),
                 // Text-only requests on a VLM take the scheduler path (and so the prefix
                 // cache) when hybrid prefix reuse is on; images still go through `prepare`.
-                schedulerManagedTextPrefill: !isVLM || Scheduler.hybridPrefixReuseEnabled(),
+                schedulerManagedTextPrefill: !isVLM || reuse,
                 chunkIdlePrefill: Self.chunksIdlePrefill(modelType: modelType),
                 // Resolved per model, not per process: `gpt_oss` is excluded
                 // because its quantized attention route drops attention sinks.
                 kvQuantization: KVQuantizationPolicy.resolved(
-                    .fromEnvironment(), modelType: modelType)
+                    .fromEnvironment(), modelType: modelType),
+                windowedLayerDecoder: capabilities.usesWindowedKVCache && reuse && reuseRollingCache
+                    ? BlockAwarePrefixKVStore.cache(from:) : nil,
+                diskPrefixStore: Self.diskPrefixStore(for: modelURL)
             )
         }
+    }
+
+    private func loadInkling(id: String, directory: URL) async throws -> NativeModelEngine {
+        let data = try Data(contentsOf: directory.appending(component: "config.json"))
+        let checkpointConfig = try JSONDecoder().decode(InklingConfiguration.self, from: data)
+        let config = checkpointConfig.text
+        let tokenizerLoader = NativeTokenizerLoader()
+        let tokenizer = try await tokenizerLoader.load(from: directory)
+        let checkpoint = try InklingCheckpoint(directory: directory)
+        let built = try checkpoint.makeModel(config: checkpointConfig, tokenizer: tokenizer)
+        let context = ModelContext(
+            configuration: ModelConfiguration(
+                directory: directory, eosTokenIds: [checkpointConfig.eosTokenID ?? 200006]),
+            model: built.model, processor: built.processor,
+            tokenizer: tokenizer)
+        let defaultPrefillStep = checkpoint.usesPackedVocabulary ? 256 : InklingLanguageModel.prefillStep
+        let prefillStep = ProcessInfo.processInfo.environment["MLXCAT_INKLING_PREFILL_STEP"]
+            .flatMap(Int.init).flatMap { $0 > 0 ? $0 : nil } ?? defaultPrefillStep
+        let usesPrefixReuse = Scheduler.hybridPrefixReuseEnabled()
+        let cacheDecoder: (@Sendable (SerializedKVLayer) throws -> any KVCache)? =
+            usesPrefixReuse ? InklingVisitCache.restore : nil
+        return NativeModelEngine(
+            context: context, modelID: id, maxContextTokens: try contextWindow(in: directory),
+            maxConcurrentRequests: maxConcurrentRequests,
+            cacheCapabilities: ModelCacheCapabilities(
+                usesWindowedKVCache: true,
+                kvCacheProfile: ModelKVCacheProfile(
+                    hiddenLayerCount: built.model.textModel.loop.visits.count,
+                    attentionHeadCount: config.heads,
+                    keyValueHeadCount: config.keyValueHeads,
+                    headDimension: config.headWidth,
+                    hiddenSize: config.hiddenSize)),
+            serializationPolicy: .always,
+            schedulerManagedTextPrefill: usesPrefixReuse,
+            chunkIdlePrefill: true,
+            windowedLayerDecoder: cacheDecoder,
+            diskPrefixStore: Self.diskPrefixStore(for: directory),
+            prefill: .init(stepSize: prefillStep))
+    }
+
+    private static func diskPrefixStore(for modelURL: URL) -> SessionPrefixDiskStore? {
+        guard let path = ProcessInfo.processInfo.environment["MLXCAT_PREFIX_DISK_DIRECTORY"], !path.isEmpty
+        else { return nil }
+        return SessionPrefixDiskStore(root: URL(fileURLWithPath: path, isDirectory: true), modelDirectory: modelURL)
     }
 
     public func unloadModel(_ engine: NativeModelEngine, id: String) async {

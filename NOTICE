@@ -38,6 +38,12 @@ projects' pull requests (ideas only; no code was copied):
   * MLXCAT_PREFIX_FULL_MATCH_REUSE — reusing at most N-1 tokens of a prompt
     that is fully cached, as described in Trans-N-ai/swama#123  (MIT)
 
+Inkling 2 model support follows the decoder, vision tower and relative attention
+mask in mlx-vlm (https://github.com/Blaizzy/mlx-vlm). Its Inkling 2 implementation
+is Copyright 2026 the HuggingFace Team and licensed under the Apache License,
+Version 2.0. The typed output parser also takes its framing approach from
+Ollama (https://github.com/ollama/ollama).
+
 Built on:
 
   * MLX / mlx-swift — https://github.com/ml-explore/mlx-swift  (MIT)

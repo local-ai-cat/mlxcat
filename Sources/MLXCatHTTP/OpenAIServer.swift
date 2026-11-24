@@ -50,6 +50,9 @@ public struct OpenAIChatMessage: Sendable {
     public let role: String
     public let content: String
     public let reasoningContent: String?
+    public let toolCalls: [ParsedToolCall]
+    public let toolCallID: String?
+    public let name: String?
     public let imageReferences: [OpenAIChatImageReference]
     /// Audio the model consumes. Audio/video-capable models (gemma-4) use them; models
     /// without those towers ignore them. There is deliberately NO text-description
@@ -62,6 +65,9 @@ public struct OpenAIChatMessage: Sendable {
         role: String,
         content: String,
         reasoningContent: String? = nil,
+        toolCalls: [ParsedToolCall] = [],
+        toolCallID: String? = nil,
+        name: String? = nil,
         imageReferences: [OpenAIChatImageReference] = [],
         audioReferences: [OpenAIChatMediaReference] = [],
         videoReferences: [OpenAIChatMediaReference] = []
@@ -69,6 +75,9 @@ public struct OpenAIChatMessage: Sendable {
         self.role = role
         self.content = content
         self.reasoningContent = reasoningContent
+        self.toolCalls = toolCalls
+        self.toolCallID = toolCallID
+        self.name = name
         self.imageReferences = imageReferences
         self.audioReferences = audioReferences
         self.videoReferences = videoReferences
@@ -852,6 +861,8 @@ public final class OpenAIServer: @unchecked Sendable {
         var cachedPromptTokens = 0
         var finishReason = "length"
         var text = ""
+        var inklingParser = toolCallModelFamily(forModel: request.model) == .inkling
+            ? ThinkingParser() : nil
         // Raw generated token ids captured before the thinking parser reshapes text,
         // flushed on the terminal chunk delta for the migration-gate parity oracle.
         var streamTokenIDs: [Int] = []
@@ -892,6 +903,10 @@ public final class OpenAIServer: @unchecked Sendable {
                 }
                 let stopMatch = stopMatcher.feed(chunk.text)
                 text += stopMatch.text
+                if let delta = inklingParser?.feed(stopMatch.text) {
+                    try await sendParserDelta(
+                        delta, id: id, created: created, model: request.model, connection: connection)
+                }
                 if stopMatch.stopped {
                     finishReason = "stop"
                     stoppedByTextStop = true
@@ -918,6 +933,10 @@ public final class OpenAIServer: @unchecked Sendable {
         if !stoppedByTextStop {
             let stopMatch = stopMatcher.finish()
             text += stopMatch.text
+            if let delta = inklingParser?.feed(stopMatch.text) {
+                try await sendParserDelta(
+                    delta, id: id, created: created, model: request.model, connection: connection)
+            }
             if stopMatch.stopped {
                 finishReason = "stop"
             }
@@ -929,33 +948,10 @@ public final class OpenAIServer: @unchecked Sendable {
             startInThinking: request.startInThinking
         )
         let parsed = ToolCallParseResult(content: result.content, toolCalls: result.toolCalls)
-        if parsed.toolCalls.isEmpty {
-            try await sendParserDelta(
-                (result.reasoning, result.content),
-                id: id,
-                created: created,
-                model: request.model,
-                connection: connection
-            )
-        } else {
-            if !result.reasoning.isEmpty {
-                try await sendParserDelta(
-                    (result.reasoning, ""),
-                    id: id,
-                    created: created,
-                    model: request.model,
-                    connection: connection
-                )
-            }
-            if !parsed.content.isEmpty {
-                try await sendParserDelta(
-                    ("", parsed.content),
-                    id: id,
-                    created: created,
-                    model: request.model,
-                    connection: connection
-                )
-            }
+        let delta = inklingParser?.finish() ?? (result.reasoning, result.content)
+        try await sendParserDelta(
+            delta, id: id, created: created, model: request.model, connection: connection)
+        if !parsed.toolCalls.isEmpty {
             try await sendSSE(
                 [
                     "id": id,
@@ -1580,8 +1576,22 @@ public extension OpenAIChatRequest {
         let messages = rawMessages.compactMap { raw -> OpenAIChatMessage? in
             guard let role = raw["role"] as? String else { return nil }
             let reasoningContent = raw["reasoning_content"] as? String
+            let toolCalls = (raw["tool_calls"] as? [[String: Any]] ?? []).compactMap { item -> ParsedToolCall? in
+                guard let id = item["id"] as? String, let function = item["function"] as? [String: Any],
+                    let name = function["name"] as? String, let arguments = function["arguments"] as? String
+                else { return nil }
+                return ParsedToolCall(id: id, name: name, arguments: arguments)
+            }
+            let toolCallID = raw["tool_call_id"] as? String
+            let name = raw["name"] as? String
             if let content = raw["content"] as? String {
-                return OpenAIChatMessage(role: role, content: content, reasoningContent: reasoningContent)
+                return OpenAIChatMessage(
+                    role: role, content: content, reasoningContent: reasoningContent,
+                    toolCalls: toolCalls, toolCallID: toolCallID, name: name)
+            }
+            if role == "assistant", raw["content"] == nil || raw["content"] is NSNull, !toolCalls.isEmpty {
+                return OpenAIChatMessage(
+                    role: role, content: "", reasoningContent: reasoningContent, toolCalls: toolCalls, name: name)
             }
             if let parts = raw["content"] as? [[String: Any]] {
                 let text = parts.compactMap { part in
@@ -1592,6 +1602,7 @@ public extension OpenAIChatRequest {
                     role: role,
                     content: text,
                     reasoningContent: reasoningContent,
+                    toolCalls: toolCalls, toolCallID: toolCallID, name: name,
                     imageReferences: imageReferences,
                     audioReferences: parts.compactMap { Self.mediaReference(from: $0, kind: .audio) },
                     videoReferences: parts.compactMap { Self.mediaReference(from: $0, kind: .video) }
