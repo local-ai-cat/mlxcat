@@ -51,3 +51,17 @@ An 8,225-token HTTP A/B enabled graph overlap in both arms and varied only `MLXC
 The reference probe with reserved KV enabled matched 760/760 greedy IDs and all 960 sampled logits for each of the netprojects and baytizzel checkpoints. The maximum observed absolute logit error was 0.0, including each 8,225-token fixture.
 
 Raw receipts are under `/Volumes/scratch/lac-dd-1121/inkling/` in `ar-decode-profile`, `ar-count`, `ar-sync-count`, `ar-matched-prompt`, `ar-stages`, `ar-native-variants`, `ar-native-controller-ab`, `ar-native-kv-ab`, `ar-native-global-ab`, `ar-native-global-long`, `ar-reserved-http`, `ar-copy-final`, and `ar-final-Inkling-*.txt`. Each measured run held the exclusive machine lease.
+
+## Paired NVFP4 projection trial
+
+One shared gathered matrix-vector multiply projected the same routed inputs
+through packed up and gate weights. It kept the pinned core's FP32
+accumulation and applied the original per-projection scales and BF16
+rounding separately. This tested a larger part of MTPLX's gate/up fusion
+without adopting its activation quantization.
+
+On the short code fixture, controls ran at 20.24–20.33 tok/s and the paired
+projection ran at 20.58–20.60 tok/s. Each run matched all 128 greedy IDs.
+The trial retained another packed copy for decode alongside the prefill
+weights. A gain of about 1.5% did not justify that memory cost. The trial is
+recorded in `overnight-paired-expert-ab` and was removed from the engine.
