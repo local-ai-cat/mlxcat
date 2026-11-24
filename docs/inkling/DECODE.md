@@ -31,6 +31,7 @@ The native probe reads one greedy ID and pinned MLX waits through its event path
 | --- | --- | --- | --- |
 | Increase the pinned MLX command-buffer budget | 20.19–20.37 | 20.59–20.66 | 128/128 in each trial |
 | Fuse the gate activation after the separate quantized GEMVs | 20.19–20.37 | 20.49–20.58 | 128/128 in each trial |
+| Fuse controller pointwise math after the existing projections | 19.92–20.39 | 19.92–20.36 | 128/128 in each trial |
 | Append the KV row and the sink in a single concatenation per tensor | 20.22–20.32 | 20.24–20.30 | 128/128 in each trial |
 | Reserve global KV rows at a short context | 20.23–20.34 | 20.22–20.28 | 128/128 in each trial |
 | Reserve global KV rows at an 8,225-token context | 16.34–16.35 | 17.74–17.86 | 128/128 in each trial |
@@ -45,4 +46,8 @@ The scheduler now builds the next eligible singleton Inkling graph while the GPU
 
 The release HTTP A/B used temperature 0, no seed, a 32-token coding prompt and a 256-token output. After adding the pending-cache snapshot safeguard, repeated controls ran at 20.18–20.19 tokens/s and repeated copy-prebuild runs at 21.93–22.03 tokens/s, about 8.9% faster by the paired medians. Both arms matched all 256 output IDs. Each cached follow-up reused 3,072 tokens and matched the control output. Physical peak on the coding request was 21.32–21.46 GiB in controls and 21.75 GiB with the optimization. The comparison used `MLXCAT_INKLING_COPY_PREBUILD=0` for the controls.
 
-Raw receipts are under `/Volumes/scratch/lac-dd-1121/inkling/` in `ar-decode-profile`, `ar-count`, `ar-sync-count`, `ar-matched-prompt`, `ar-stages`, `ar-native-variants`, `ar-native-kv-ab`, `ar-native-global-ab`, `ar-native-global-long`, and `ar-copy-final`. Each measured run held the exclusive machine lease.
+An 8,225-token HTTP A/B enabled graph overlap in both arms and varied only `MLXCAT_INKLING_RESERVED_GLOBAL_KV`. The runs finished at natural EOS after 85 tokens. Controls ran at 17.05–17.36 tokens/s and peaked at 24.66–24.70 GiB. Reserved KV ran at 18.32–18.54 tokens/s and peaked at 22.94 GiB. Every generated ID matched across all four runs.
+
+The reference probe with reserved KV enabled matched 760/760 greedy IDs and all 960 sampled logits for each of the netprojects and baytizzel checkpoints. The maximum observed absolute logit error was 0.0, including each 8,225-token fixture.
+
+Raw receipts are under `/Volumes/scratch/lac-dd-1121/inkling/` in `ar-decode-profile`, `ar-count`, `ar-sync-count`, `ar-matched-prompt`, `ar-stages`, `ar-native-variants`, `ar-native-controller-ab`, `ar-native-kv-ab`, `ar-native-global-ab`, `ar-native-global-long`, `ar-reserved-http`, `ar-copy-final`, and `ar-final-Inkling-*.txt`. Each measured run held the exclusive machine lease.
