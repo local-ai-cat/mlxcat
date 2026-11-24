@@ -269,7 +269,12 @@ public enum TokenSampler {
         }
 
         let scaled = logprobs / MLXArray(sharedParameters.temperature)
-        return MLXRandom.categorical(scaled, axis: -1).asType(.int32).reshaped([parameters.count])
+        // A singleton row must consume randomness the same way as scalar sampling.
+        // MLX 0.32.4 uses inverse-CDF for a one-distribution batch, while a scalar
+        // categorical result still uses Gumbel-max.
+        let distributions = parameters.count == 1 ? scaled.reshaped([scaled.dim(-1)]) : scaled
+        return MLXRandom.categorical(distributions, axis: -1)
+            .asType(.int32).reshaped([parameters.count])
     }
 
     /// Samples from raw pre-softmax logits; penalties must be applied in logit space.

@@ -4,7 +4,7 @@
 # `swift build` does not produce the Metal library that mlx-swift's Cmlx needs
 # at runtime (Xcode builds do; the app's sidecar script copies it out of
 # DerivedData). Without it every MLX call dies with
-# "Failed to load the default metallib". This compiles the same kernel subset the
+# "Failed to load the default metallib". This compiles the generated kernel translation units the
 # test support (Tests/MLXCatTests/Support/MLXMetalRuntime.swift) compiles from
 # the mlx-swift checkout and installs it beside the binaries; MLX JIT-compiles
 # the rest from source at runtime.
@@ -24,12 +24,11 @@ if (( $# )); then DESTS=("$@"); else DESTS=("$REPO_ROOT/.build/release" "$REPO_R
 [[ -d "$SRC" ]] || { echo "mlx-swift Metal sources not found at $SRC — run 'swift build' first" >&2; exit 1; }
 mkdir -p "$AIR"
 
-SOURCES=(
-  arg_reduce.metal conv.metal layer_norm.metal random.metal rms_norm.metal rope.metal
-  scaled_dot_product_attention.metal steel/attn/kernels/steel_attention.metal
-)
+SOURCES=("$SRC"/**/*.metal(.N))
+(( ${#SOURCES} )) || { echo "no generated Metal translation units under $SRC" >&2; exit 1; }
 typeset -a AIRS
-for rel in $SOURCES; do
+for source in $SOURCES; do
+  rel="${source#$SRC/}"
   air="$AIR/${${rel//\//_}%.metal}.air"
   if [[ ! -f "$air" || "$SRC/$rel" -nt "$air" ]]; then
     xcrun -sdk macosx metal -x metal -Wall -Wextra -fno-fast-math -Wno-c++17-extensions -Wno-c++20-extensions \

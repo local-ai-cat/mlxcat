@@ -98,16 +98,10 @@ enum MLXMetalRuntime {
         metalSourceDirectory: URL,
         airDirectory: URL
     ) throws -> [URL] {
-        let sources = [
-            "arg_reduce.metal",
-            "conv.metal",
-            "layer_norm.metal",
-            "random.metal",
-            "rms_norm.metal",
-            "rope.metal",
-            "scaled_dot_product_attention.metal",
-            "steel/attn/kernels/steel_attention.metal",
-        ]
+        let sources = try FileManager.default.subpathsOfDirectory(atPath: metalSourceDirectory.path)
+            .filter { $0.hasSuffix(".metal") }
+            .sorted()
+        XCTAssertFalse(sources.isEmpty, "Expected generated Metal translation units")
 
         return try sources.map { relativePath in
             let source = metalSourceDirectory.appendingPathComponent(relativePath)
