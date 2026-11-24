@@ -53,6 +53,9 @@ Native serving combines the tokenizer and model EOS IDs
 
 ### DaisyRose load gate
 
+The results below predate the native tokenizer alias. The later loader and
+cross-version kernel results are in [Affine projection parity](AFFINE-PARITY.md).
+
 The unmodified checkpoint failed the Swift load and returned HTTP 500.
 Its `Qwen3_5Tokenizer` class reaches the strict unknown-class check in
 swift-transformers `Sources/Tokenizers/Tokenizer.swift:183–199`.
