@@ -370,6 +370,12 @@ the newer MLX reduction layout on the pinned core. The code fixture
 still matched 33/64 tokens after padding, and all three fixture maximum
 logit errors exceeded 0.25. The alignment trial was removed.
 
+Both native 4-bit attempts with a 16 GiB software memory ceiling
+returned HTTP 507 from memory admission. The ceiling caps the engine
+on the 48 GiB host, and macOS overhead on a 16 GiB machine would further
+reduce the available budget. The fixed 16 GiB configuration did not
+qualify in this test.
+
 ## Whisker with the combined defaults
 
 One additional Inkling T2 smoke on the final release passed independent
@@ -380,8 +386,16 @@ frozen Bash-enabled T2 baseline had three repeats and a median-turn TTFT
 of 8.15 s. The smoke generated a different number of agent rounds, so
 the matched prompt A/B above isolates the cache effect.
 
-Both native 4-bit attempts with a 16 GiB software memory ceiling
-returned HTTP 507 from memory admission. The ceiling caps the engine
-on the 48 GiB host, and macOS overhead on a 16 GiB machine would further
-reduce the available budget. The fixed 16 GiB configuration did not
-qualify in this test.
+## Remaining fixed Whisker tasks
+
+The T5/T6 tail used the frozen `45d1209` release, Bash enabled, and the
+same fixture revision. A stopped T5 attempt exposed an atomic-write
+permission gap specific to the Swift build driver. That attempt is
+preserved in the previous run's transcript. The corrected sandbox was
+verified with `swift build`, the affected `swift test`, and `swift run`
+before starting fresh T5/T6 cells in `matrix-bash-swiftpm-45d1209`.
+
+| Corrected cell | Done | Median wall s | Median decode tok/s | Median-turn TTFT s | Peak GiB | Declined | Malformed | Tool errors |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Inkling T5 | 3/3 | 144.05 | 16.80 | 10.03 | 24.44 | 0 | 0 | 3 |
+| Qwen T5 | 3/3 | 119.96 | 13.33 | 5.92 | 20.14 | 0 | 0 | 0 |
