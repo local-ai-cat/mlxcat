@@ -1,9 +1,8 @@
 import Foundation
 import MLX
-import MLXHuggingFace
+import MLXCatNative
 import MLXLMCommon
 @testable import MLXVLM
-import Tokenizers
 import XCTest
 
 final class SurveyModelParityTests: XCTestCase {
@@ -30,7 +29,7 @@ final class SurveyModelParityTests: XCTestCase {
         let cases = try JSONDecoder().decode([Case].self, from: Data(contentsOf: URL(fileURLWithPath: fixtures)))
         XCTAssertEqual(cases.count, 11)
         let model = try await VLMModelFactory.shared.loadContainer(
-            from: URL(fileURLWithPath: directory), using: #huggingFaceTokenizerLoader())
+            from: URL(fileURLWithPath: directory), using: NativeTokenizerLoader())
         try await model.perform { context in
             for fixture in cases {
                 if fixture.name == "code",

@@ -1,7 +1,6 @@
 import CoreImage
 import Foundation
 import MLX
-import MLXHuggingFace
 import MLXLLM
 import MLXLMCommon
 import MLXCat
@@ -906,12 +905,12 @@ public struct NativeModelLoader: EnginePoolModelLoader {
             if isVLM {
                 try await VLMModelFactory.shared.loadContainer(
                     from: modelURL,
-                    using: #huggingFaceTokenizerLoader()
+                    using: NativeTokenizerLoader()
                 )
             } else {
                 try await LLMModelFactory.shared.loadContainer(
                     from: modelURL,
-                    using: #huggingFaceTokenizerLoader()
+                    using: NativeTokenizerLoader()
                 )
             }
         return await container.perform { context in
@@ -944,7 +943,7 @@ public struct NativeModelLoader: EnginePoolModelLoader {
         let data = try Data(contentsOf: directory.appending(component: "config.json"))
         let checkpointConfig = try JSONDecoder().decode(InklingConfiguration.self, from: data)
         let config = checkpointConfig.text
-        let tokenizerLoader = #huggingFaceTokenizerLoader()
+        let tokenizerLoader = NativeTokenizerLoader()
         let tokenizer = try await tokenizerLoader.load(from: directory)
         let checkpoint = try InklingCheckpoint(directory: directory)
         let built = try checkpoint.makeModel(config: checkpointConfig, tokenizer: tokenizer)
