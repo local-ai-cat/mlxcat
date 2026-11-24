@@ -91,6 +91,7 @@ let package = Package(
         // an error in future versions). Moved off the atlas-open-sources fork to
         // upstream 3.31.4 (2026-07-19): upstream now ships gemma4_unified natively.
         .package(url: "https://github.com/atlas-open-sources/swift-transformers", revision: "089cb3f02a1718b2943c7e7c4553876cd51a75d1"),
+        .package(url: "https://github.com/huggingface/swift-jinja.git", from: "2.0.0"),
         // Pinned to main by revision: tagged releases (≤0.17) pin swift-transformers
         // <1.2 which conflicts with mlx-swift-lm's ≥1.3; main dropped the dep.
         .package(
@@ -163,6 +164,7 @@ let package = Package(
                 .product(name: "MLXVLM", package: "mlx-swift-lm"),
                 .product(name: "Hub", package: "swift-transformers"),
                 .product(name: "Tokenizers", package: "swift-transformers"),
+                .product(name: "Jinja", package: "swift-jinja"),
             ]
         ),
         .target(
@@ -219,6 +221,7 @@ let package = Package(
                 .product(name: "MLXLLM", package: "mlx-swift-lm"),
                 .product(name: "MLXVLM", package: "mlx-swift-lm"),
                 .product(name: "Tokenizers", package: "swift-transformers"),
+                .product(name: "Jinja", package: "swift-jinja"),
             ],
             resources: [
                 .process("Fixtures")
