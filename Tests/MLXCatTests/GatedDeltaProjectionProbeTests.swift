@@ -6,12 +6,13 @@ import MLXLMCommon
 import XCTest
 
 final class GatedDeltaProjectionProbeTests: XCTestCase {
-    func testReferenceArithmeticOnCapturedLayerZero() async throws {
+    func testReferenceArithmeticOnCapturedLayer() async throws {
         let environment = ProcessInfo.processInfo.environment
         guard let capture = environment["MLXCAT_GDN_INPUT"],
               let checkpoint = environment["MLXCAT_GDN_MODEL"] else {
-            throw XCTSkip("Set the layer-zero capture and verified model paths.")
+            throw XCTSkip("Set the gated-delta capture and verified model paths.")
         }
+        let index = environment["MLXCAT_GDN_LAYER"].flatMap(Int.init) ?? 0
         try MLXMetalRuntime.requireAvailable()
         let model = try await VLMModelFactory.shared.loadContainer(
             from: URL(fileURLWithPath: checkpoint), using: NativeTokenizerLoader())
@@ -28,9 +29,26 @@ final class GatedDeltaProjectionProbeTests: XCTestCase {
             try Self.assertExact(state, read("state"), label: "recurrent state")
 
             let qwen = try XCTUnwrap(context.model as? Qwen35)
-            let layer = try XCTUnwrap(qwen.loraLayers.first as? Qwen35Language.DecoderLayer)
+            let layers = qwen.loraLayers
+            let layer = try XCTUnwrap(
+                layers.indices.contains(index) ? layers[index] as? Qwen35Language.DecoderLayer : nil)
             let attention = try XCTUnwrap(layer.linearAttn)
-            try Self.assertExact(attention(read("x")), read("attention"), label: "layer-zero attention output")
+            let x = try read("x")
+            for (name, value) in [
+                ("in_proj_qkv", attention.inProjQKV(x)),
+                ("in_proj_z", attention.inProjZ(x)),
+                ("in_proj_b", attention.inProjB(x)),
+                ("in_proj_a", attention.inProjA(x)),
+            ] {
+                if let expected = arrays[name] {
+                    Self.assertExact(value, expected, label: name)
+                }
+            }
+            try Self.assertExact(attention(x), read("attention"), label: "layer \(index) attention output")
+            if let postNorm = arrays["post_norm"], let mlp = arrays["mlp"] {
+                let block = try XCTUnwrap(layer.mlp as? Qwen35Language.MLP)
+                Self.assertExact(block(postNorm), mlp, label: "layer \(index) MLP")
+            }
         }
     }
 
