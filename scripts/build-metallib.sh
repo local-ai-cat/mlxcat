@@ -25,7 +25,7 @@ if (( $# )); then DESTS=("$@"); else DESTS=("$REPO_ROOT/.build/release" "$REPO_R
 mkdir -p "$AIR"
 
 SOURCES=(
-  arg_reduce.metal conv.metal gemv.metal layer_norm.metal random.metal rms_norm.metal rope.metal
+  arg_reduce.metal conv.metal layer_norm.metal random.metal rms_norm.metal rope.metal
   scaled_dot_product_attention.metal steel/attn/kernels/steel_attention.metal
 )
 typeset -a AIRS
