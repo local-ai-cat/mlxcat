@@ -168,7 +168,7 @@ extension InklingCheckpoint {
         } else {
             controllers = []
         }
-        return try InklingTextModel.Layer(
+        var layer = try InklingTextModel.Layer(
             attention: attentionModule, experts: experts, inputNorms: norms,
             postAttentionNorm: required("\(prefix).post_attention_layernorm.weight"),
             attentionQuery: tensors["\(prefix).attention_input.query"],
@@ -176,6 +176,10 @@ extension InklingCheckpoint {
             attentionConvolution: required("\(prefix).attn_sconv.conv.weight"),
             mlpConvolution: required("\(prefix).mlp_sconv.conv.weight"),
             controllers: controllers)
+        if ProcessInfo.processInfo.environment["MLXCAT_INKLING_COMPILED_EXPERTS"] != "0" {
+            layer.compiledExperts = compile { (input: MLXArray) in experts(input) }
+        }
+        return layer
     }
 }
 

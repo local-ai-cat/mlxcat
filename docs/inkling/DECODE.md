@@ -93,3 +93,24 @@ hooks (`native/engine/recorder.mm:1–39`), then its executor reconstructs
 command buffers with the recorded barriers and binds live inputs. The
 existing mlxcat schedule still evaluates an MLX graph for each token.
 Receipts are in `overnight-mtplx-ab`.
+
+## Compiled singleton expert graph
+
+mlxcat now keeps a compiled MLX graph for the routed expert stage at the
+singleton decode shape. It compiles the existing router, gathered projections,
+activation and reduction, preserving the checkpoint's accumulation and
+rounding. This reuses graph work at a fixed shape and leaves Metal submission
+to MLX.
+
+The direct probe improved from 20.16–20.31 to 21.02–21.06 tok/s, with all 128
+greedy IDs matching. With graph overlap enabled in every HTTP arm, the
+32-token prompt and 256-token completion improved from 21.96–22.06 to
+22.71–22.76 tok/s, about 3.3%. All 256 IDs and the cached follow-up matched.
+TTFT was 0.33 s in each arm. Peak physical footprint ranged from 21.70 to
+21.81 GiB across the four arms. Both original checkpoints matched 760/760
+greedy IDs and 960/960 sampled logits per checkpoint with a maximum error
+of 0.0 in the weighted verifier.
+
+Set `MLXCAT_INKLING_COMPILED_EXPERTS=0` for the comparison path. Receipts
+are in `overnight-compiled-expert-ab`, `overnight-compiled-http` and
+`overnight-compiled-Inkling-*.txt`.

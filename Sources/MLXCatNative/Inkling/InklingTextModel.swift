@@ -39,6 +39,8 @@ struct InklingTextModel {
         let attentionConvolution: MLXArray
         let mlpConvolution: MLXArray
         let controllers: [Controller]
+        /// Reuses the compiled expert graph at the fixed singleton decode shape.
+        var compiledExperts: (@Sendable (MLXArray) -> MLXArray)? = nil
 
         func callAsFunction(
             _ stream: inout InklingLoop.ResidualStream<MLXArray>,
@@ -83,7 +85,12 @@ struct InklingTextModel {
             let normalized = MLXFast.rmsNorm(hidden, weight: postAttentionNorm, eps: epsilon)
                 .asType(input.dtype)
             observe?("attention convolution and MLP input", normalized)
-            let projected = experts(normalized)
+            let projected: MLXArray
+            if let compiledExperts, normalized.size == normalized.dim(-1) {
+                projected = compiledExperts(normalized)
+            } else {
+                projected = experts(normalized)
+            }
             observe?("MoE", projected)
             stream.partial = state.mlpOutput.apply(
                 projected, weight: mlpConvolution, residual: residual, outputType: input.dtype)

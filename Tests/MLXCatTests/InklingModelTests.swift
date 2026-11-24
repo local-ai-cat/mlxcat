@@ -33,6 +33,22 @@ final class InklingModelTests: XCTestCase {
         XCTAssertEqual(copy.state[0].dim(2), 3)
     }
 
+    func testCompiledExpertsPreserveSingletonLogitsAcrossLoopVisits() throws {
+        try MLXMetalRuntime.requireAvailable()
+        let plain = try makeModel()
+        let compiled = try makeModel(compileExperts: true)
+        let plainCache = try plain.newCache(parameters: nil)
+        let compiledCache = try compiled.newCache(parameters: nil)
+        let prefix = MLXArray([Int32(1), 3, 2, 4])
+        eval(plain(prefix, cache: plainCache), compiled(prefix, cache: compiledCache))
+        for id: Int32 in [5, 4, 1, 6] {
+            let token = MLXArray([id])
+            XCTAssertEqual(
+                plain(token, cache: plainCache).asArray(Float.self),
+                compiled(token, cache: compiledCache).asArray(Float.self))
+        }
+    }
+
     func testNativeChatStreamsTokensFromTheLoopedModel() async throws {
         try MLXMetalRuntime.requireAvailable()
         let model = try makeModel()
@@ -100,7 +116,7 @@ final class InklingModelTests: XCTestCase {
         ) throws -> [Int] { encode(text: "", addSpecialTokens: false) }
     }
 
-    private func makeModel() throws -> InklingLanguageModel {
+    private func makeModel(compileExperts: Bool = false) throws -> InklingLanguageModel {
         let json = """
             {"hidden_size":64,"num_hidden_layers":4,"n_layers_per_attn_res_block":1,
              "rms_norm_eps":0.000001,"num_attention_heads":2,"num_key_value_heads":1,"head_dim":32,
@@ -137,7 +153,7 @@ final class InklingModelTests: XCTestCase {
                 relativeProjection: signal(4, 4), queryScale: MLXArray.ones([2, 32]),
                 relativeScale: MLXArray.ones([2, 4]), keyConvolution: convolution,
                 valueConvolution: convolution)
-            return InklingTextModel.Layer(
+            var layer = InklingTextModel.Layer(
                 attention: attention,
                 experts: .init(router: signal(2, width), routingBias: MLXArray.zeros([2]),
                                up: projection, gate: projection, down: projection,
@@ -148,6 +164,11 @@ final class InklingModelTests: XCTestCase {
                 attentionConvolution: MLXArray.zeros([width, 2, 1], dtype: .bfloat16),
                 mlpConvolution: MLXArray.zeros([width, 2, 1], dtype: .bfloat16),
                 controllers: [controller, controller, controller, controller])
+            if compileExperts {
+                let experts = layer.experts
+                layer.compiledExperts = compile { (input: MLXArray) in experts(input) }
+            }
+            return layer
         }
         let model = try InklingTextModel(
             config: config, loop: config.makeLoop(), layers: layers,
