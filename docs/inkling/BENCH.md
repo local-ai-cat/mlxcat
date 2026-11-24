@@ -399,3 +399,16 @@ before starting fresh T5/T6 cells in `matrix-bash-swiftpm-45d1209`.
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Inkling T5 | 3/3 | 144.05 | 16.80 | 10.03 | 24.44 | 0 | 0 | 3 |
 | Qwen T5 | 3/3 | 119.96 | 13.33 | 5.92 | 20.14 | 0 | 0 | 0 |
+| Inkling T6 | 3/3 | 764.94 | 16.20 | 15.57 | 25.20 | 0 | 0 | 0 |
+| Qwen T6 | 1/3 | 395.06 | 13.08 | 5.42 | 21.56 | 0 | 1 | 0 |
+
+All six T5 checkouts changed the three expected call-site files and kept
+the wrapper. The completed T6 checkouts added tests for the production
+helper, and the harness independently ran both CLI modes. Qwen's first
+two T6 attempts left their checkouts untouched after reaching the shared
+2,048-token per-turn cap. One generated an incomplete tool frame before
+the cap. The T6 time statistics include all attempted repeats.
+
+The fixed set finished at 18/18 for Inkling and 16/18 for Qwen. These
+totals retain the earlier successful T1 and T4 cells and use the
+Bash-enabled repeats for T2, T3, T5 and T6.
