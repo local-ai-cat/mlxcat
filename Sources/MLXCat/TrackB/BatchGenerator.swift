@@ -2,6 +2,11 @@ import Foundation
 import MLX
 import MLXLMCommon
 
+/// A singleton cache whose copy can build a decode graph without changing the source cache.
+package protocol CopyPrebuildKVCache: KVCache {
+    var supportsCopyPrebuild: Bool { get }
+}
+
 public struct BatchDecodeStep {
     public let tokenIds: [Int]
     public let logits: MLXArray
@@ -171,6 +176,7 @@ public final class ContinuousBatchGenerator {
     }
 
     private var cacheStorage: CacheStorage = .empty
+    private var cacheBeforePendingSingletonDecode: [any KVCache]?
     private var currentTokens = MLXArray([Int32]())
     private var rowUIDs: [String] = []
     private var samplers: [SamplingParameters] = []
@@ -368,6 +374,7 @@ public final class ContinuousBatchGenerator {
 
         switch cacheStorage {
         case .empty:
+            cacheBeforePendingSingletonDecode = nil
             cacheStorage = .singleton(rowCache)
             currentTokens = lastToken.reshaped([1])
         case .singleton(let existingCache):
@@ -384,6 +391,7 @@ public final class ContinuousBatchGenerator {
                 try mergedLayer.extend(rowLayer)
                 return mergedLayer
             })
+            cacheBeforePendingSingletonDecode = nil
             currentTokens = concatenated([currentTokens, lastToken.reshaped([1])], axis: 0)
         case .batched(let cache):
             guard cache.count == rowCache.count else {
@@ -481,6 +489,9 @@ public final class ContinuousBatchGenerator {
 
     public func extractCache(uid: String) -> [any KVCache]? {
         guard let row = rowUIDs.firstIndex(of: uid) else { return nil }
+        if row == 0, pendingEmission.first == true, let cache = cacheBeforePendingSingletonDecode {
+            return cache.map { $0.copy() }
+        }
 
         let extracted: [any KVCache]
         switch cacheStorage {
@@ -504,6 +515,7 @@ public final class ContinuousBatchGenerator {
     public func filter(keeping rows: [Int]) {
         guard !rows.isEmpty else {
             cacheStorage = .empty
+            cacheBeforePendingSingletonDecode = nil
             rowUIDs.removeAll()
             pendingEmission.removeAll()
             samplers.removeAll()
@@ -534,6 +546,7 @@ public final class ContinuousBatchGenerator {
         case .singleton:
             guard rows == [0] else {
                 cacheStorage = .empty
+                cacheBeforePendingSingletonDecode = nil
                 break
             }
         case .batched(let cache):
@@ -693,13 +706,9 @@ public final class ContinuousBatchGenerator {
     /// Steady-state pipelined step: the tokens were computed by the previous
     /// call's launch-ahead, so this usually returns without waiting on the GPU.
     ///
-    /// The next step's graph is BUILT before waiting on the in-flight step —
-    /// graph construction is per-layer CPU work that would otherwise happen
-    /// while the GPU sits idle after draining the in-flight step (the ordering
-    /// the upstream `TokenIterator` gets for free by never blocking before its
-    /// `step()` call). The build targets shallow cache copies, so nothing is
-    /// adopted until the EOS/limit check passes; a discarded build costs one
-    /// graph construction per finished request.
+    /// Build the next step's graph before waiting for readback. As in the
+    /// upstream `TokenIterator`, this overlaps CPU graph construction with
+    /// GPU work. Commit a copied cache only after passing the EOS/limit check.
     private func emitPendingStep() -> [Response] {
         let t0 = Self.phaseTimingEnabled ? DispatchTime.now().uptimeNanoseconds : 0
         let prebuilt = prebuildNextStepIfSafe()
@@ -713,8 +722,13 @@ public final class ContinuousBatchGenerator {
             responses.append(Response(uid: rowUIDs[row], token: tokenIds[row]))
         }
         pendingEmission = Array(repeating: false, count: rowUIDs.count)
+        cacheBeforePendingSingletonDecode = nil
         if let prebuilt {
             if launchIsSafe(latestTokenIds: tokenIds) {
+                if let cache = prebuilt.replacementCache {
+                    cacheBeforePendingSingletonDecode = cacheStorage.cacheForModel
+                    cacheStorage = .singleton(cache)
+                }
                 let t3 = Self.phaseTimingEnabled ? DispatchTime.now().uptimeNanoseconds : 0
                 asyncEval(prebuilt.tokens, prebuilt.logits)
                 if Self.phaseTimingEnabled {
@@ -728,7 +742,7 @@ public final class ContinuousBatchGenerator {
                 state = prebuilt.state
                 currentTokens = prebuilt.tokens
                 pendingEmission = Array(repeating: true, count: rowUIDs.count)
-            } else {
+            } else if prebuilt.replacementCache == nil {
                 for kvCache in cacheStorage.cacheForModel {
                     _ = kvCache.trim(1)
                 }
@@ -743,17 +757,14 @@ public final class ContinuousBatchGenerator {
         let tokens: MLXArray
         let logits: MLXArray
         let state: LMOutput.State?
+        let replacementCache: [any KVCache]?
     }
 
     /// Sampling that reads per-row history or RNG state cannot be built one
     /// token early: penalties/minTokens would see a history missing the
     /// pending token, and a discarded build would advance seeded RNG streams.
     /// Temperature-0 and unseeded filter-free sampling are history-free.
-    /// Restricted to cache layers whose one-step discard (`trim(1)`) is exact:
-    /// `KVCacheSimple` always, `RotatingKVCache` only while the built step
-    /// stays in the pre-rotation growth phase — a rotated ring overwrites its
-    /// oldest slot, which a trim cannot restore. Width ≥2 batches merge into
-    /// `BatchKVCache`/batch-state layouts and fall out of the gate naturally.
+    /// Cache rollback is checked separately before building.
     private var canPrebuildNextStep: Bool {
         canPipelineDecode
             && randomStates.allSatisfy { $0 == nil }
@@ -762,7 +773,6 @@ public final class ContinuousBatchGenerator {
                     && sampler.minTokens == 0
                     && sampler.allowedSequences == nil
             }
-            && cacheStorage.cacheForModel.allSatisfy { Self.discardOneStepIsExact($0) }
     }
 
     private static func discardOneStepIsExact(_ kvCache: any KVCache) -> Bool {
@@ -773,13 +783,15 @@ public final class ContinuousBatchGenerator {
         return kvCache is KVCacheSimple
     }
 
-    /// Build the next decode step against the LIVE cache handles while the
-    /// launched-ahead step is still on the GPU, so the graph-construction CPU
-    /// work overlaps the in-flight compute instead of serializing after it —
-    /// the ordering the upstream `TokenIterator` gets by never blocking before
-    /// its `step()` call. Building on the live handles keeps MLX buffer
-    /// donation intact (a shallow cache copy would pin a second reference to
-    /// every KV buffer and force copy-on-write in the slice assignment).
+    private var canCopySingletonDecodeCache: Bool {
+        cacheStorage.isSingleton && cacheStorage.cacheForModel.allSatisfy {
+            ($0 as? CopyPrebuildKVCache)?.supportsCopyPrebuild == true
+        }
+    }
+
+    /// Caches with exact trim build on live handles to preserve buffer
+    /// donation. A singleton cache that replaces its arrays can opt into
+    /// building on a disposable copy when trim cannot undo a step.
     /// The pending `currentTokens` feed the graph as lazy handles — no
     /// materialization is needed to build.
     private func prebuildNextStepIfSafe() -> PrebuiltStep? {
@@ -791,10 +803,20 @@ public final class ContinuousBatchGenerator {
                 return nil
             }
         }
-        let (tokens, logits, nextState) = autoreleasepool {
-            computeNextTokens(cacheForModel: cacheStorage.cacheForModel, state: stepState)
+        let cache = cacheStorage.cacheForModel
+        let replacementCache: [any KVCache]?
+        if cache.allSatisfy({ Self.discardOneStepIsExact($0) }) {
+            replacementCache = nil
+        } else if canCopySingletonDecodeCache {
+            replacementCache = cache.map { $0.copy() }
+        } else {
+            return nil
         }
-        return PrebuiltStep(tokens: tokens, logits: logits, state: nextState)
+        let (tokens, logits, nextState) = autoreleasepool {
+            computeNextTokens(cacheForModel: replacementCache ?? cache, state: stepState)
+        }
+        return PrebuiltStep(
+            tokens: tokens, logits: logits, state: nextState, replacementCache: replacementCache)
     }
 
     private func launchIsSafe(latestTokenIds: [Int]) -> Bool {
@@ -818,6 +840,11 @@ public final class ContinuousBatchGenerator {
             return
         }
 
+        if canCopySingletonDecodeCache {
+            let cache = cacheStorage.cacheForModel
+            cacheBeforePendingSingletonDecode = cache
+            cacheStorage = .singleton(cache.map { $0.copy() })
+        }
         let (nextTokens, logits, nextState) = autoreleasepool {
             computeNextTokens(cacheForModel: cacheStorage.cacheForModel, state: stepState)
         }

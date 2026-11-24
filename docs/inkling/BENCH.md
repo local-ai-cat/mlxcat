@@ -329,6 +329,9 @@ native speculative panel exceeded the exactness tolerance, so Swift uses
 ordinary decoding. Raw MTPLX token IDs and arm metrics are in
 `mtplx-reference-ab.jsonl` in the shared work directory.
 
+The [autoregressive decode profile](DECODE.md) traces the ordinary native
+and MTPLX token paths and records the isolated mlxcat performance trials.
+
 ## VisualInference 4-bit context curve
 
 The verified VisualInference pack (`443e30e`) has 15,846,700,032 indexed

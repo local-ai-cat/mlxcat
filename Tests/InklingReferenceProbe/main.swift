@@ -67,7 +67,17 @@ struct InklingReferenceProbe {
             if let rawSteps = environment["MLXCAT_INKLING_PROFILE_STEPS"],
                 let steps = Int(rawSteps), steps > 0
             {
-                let profile = try runtime.profileDecode(in: input, chunk: fixture.prefillChunk, steps: steps)
+                let profileInput: LMInput
+                if let promptPath = environment["MLXCAT_INKLING_PROFILE_PROMPT_FILE"] {
+                    let prompt = try String(contentsOfFile: promptPath, encoding: .utf8)
+                    profileInput = try runtime.prepare(UserInput(
+                        chat: [.user(prompt)], additionalContext: ["reasoning_effort": "none"]))
+                } else {
+                    profileInput = input
+                }
+                print("Inkling decode probe input tokens \(profileInput.text.tokens.size)")
+                let profile = try runtime.profileDecode(
+                    in: profileInput, chunk: fixture.prefillChunk, steps: steps)
                 print("\(name) decode over \(steps) tokens: graph \(profile.buildMs) ms, submit "
                     + "\(profile.submitMs) ms, readback \(profile.readMs) ms")
                 print("Token IDs: \(profile.tokens)")

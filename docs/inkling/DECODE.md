@@ -18,7 +18,9 @@ For 128 warm native code-fixture steps, mean graph construction was 4.63 ms, tim
 | mlxcat, 200 ops and 500 MB per buffer | 128 | 96.73 | 0 |
 | MTPLX, ordinary decoding | 127 | 9.11 | 0 |
 
-The Metal count wraps `commit`, `waitUntilCompleted`, and `waitUntilScheduled` on the concrete Metal command-buffer class in the process. It counts uploads and cache work when they are committed within the marked interval. Zero public wait calls still allows CPU blocking. Native sampling reads the result once per profiled token and MLX waits through its event path (`transforms.cpp:296–325` in the pinned core). MTPLX also waits on native engine semaphore completion (`executor.mm:1682–1720`), evaluates the single-token logits and cache deltas (`fast/decoder.py:172–188`), and evaluates the greedy reduction and finite-check together once before reading both scalars (`mtplx/generation.py:7992–8022`). These are source-level synchronization sites. The interposer does not count semaphore or MLX event waits.
+The Metal count wraps `commit`, `waitUntilCompleted`, and `waitUntilScheduled` on the concrete Metal command-buffer class in the process. It includes uploads and cache work committed within the marked interval. A second capture also wrapped Metal shared-event waits and main-thread dispatch semaphore waits. mlxcat recorded exactly one shared-event wait per token on a worker thread (5.34 ms total per token), with no main-thread semaphore waits. MTPLX recorded 2.06 shared-event waits (0.57 ms total) and 10.11 main-thread semaphore calls (21.58 ms total) per token. Counts include calls that return immediately.
+
+The native probe reads one greedy ID and pinned MLX waits through its event path (`transforms.cpp:296–325`, `backend/metal/event.cpp:23–28`). MTPLX also waits on native engine semaphore completion (`executor.mm:1682–1720`), evaluates the single-token logits and cache deltas (`fast/decoder.py:172–188`), and evaluates the greedy reduction and finite-check together once before reading both scalars (`mtplx/generation.py:7992–8022`).
 
 ## Isolated exact-greedy trials
 
@@ -27,7 +29,14 @@ The Metal count wraps `commit`, `waitUntilCompleted`, and `waitUntilScheduled` o
 | Increase the pinned MLX command-buffer budget | 20.19–20.37 | 20.59–20.66 | 128/128 in each trial |
 | Fuse the gate activation after the separate quantized GEMVs | 20.19–20.37 | 20.49–20.58 | 128/128 in each trial |
 | Append the KV row and the sink in a single concatenation per tensor | 20.22–20.32 | 20.24–20.30 | 128/128 in each trial |
+| Reserve global KV capacity in blocks of 256 rows and write new entries by slice | 20.23–20.34 | 20.22–20.28 | 128/128 in each trial |
 
-The buffer budget removed about 79% of Metal commits and moved time from submission into final readback. The gain was under 2.4% and the knobs apply to the entire MLX process. The gate trial covered just the pointwise activation with separate GEMVs, so it tests one small part of MTPLX’s fused path. The KV trial retained the chronological layout and tested one fewer copy. None of these three changes are enabled by default.
+The buffer budget removed about 79% of Metal commits and moved time from submission into final readback. The gain was under 2.4% and the knobs apply to the entire MLX process. The gate trial covered just the pointwise activation with separate GEMVs, so it tests one small part of MTPLX’s fused path. The KV trials retain the chronological layout. These changes are off in the production path.
 
-Raw receipts are under `/Volumes/scratch/lac-dd-1121/inkling/` in `ar-decode-profile`, `ar-count`, `ar-stages`, `ar-native-variants`, and `ar-native-kv-ab`. Each measured run held the exclusive machine lease.
+## Adopted HTTP decode change
+
+The scheduler now builds the next eligible singleton Inkling graph while the GPU finishes the pending token. Building on shallow copies lets the scheduler discard a step at EOS and export a snapshot at the last emitted token. The approach follows the overlap used by mlx-swift-lm's `TokenIterator` and retains the Swift scheduler's existing sampling eligibility checks.
+
+The release HTTP A/B used temperature 0, no seed, a 32-token coding prompt and a 256-token output. After adding the pending-cache snapshot safeguard, repeated controls ran at 20.18–20.19 tokens/s and repeated copy-prebuild runs at 21.93–22.03 tokens/s, about 8.9% faster by the paired medians. Both arms matched all 256 output IDs. Each cached follow-up reused 3,072 tokens and matched the control output. Physical peak on the coding request was 21.32–21.46 GiB in controls and 21.75 GiB with the optimization. The comparison used `MLXCAT_INKLING_COPY_PREBUILD=0` for the controls.
+
+Raw receipts are under `/Volumes/scratch/lac-dd-1121/inkling/` in `ar-decode-profile`, `ar-count`, `ar-sync-count`, `ar-stages`, `ar-native-variants`, `ar-native-kv-ab`, `ar-native-global-ab`, and `ar-copy-final`. Each measured run held the exclusive machine lease.

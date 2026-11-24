@@ -6,7 +6,11 @@ import MLXNN
 
 /// One cache object per execution visit couples the KV timeline with the four
 /// convolution histories that must advance at the same rate.
-final class InklingVisitCache: KVCache {
+final class InklingVisitCache: CopyPrebuildKVCache {
+    private static let copyPrebuildEnabled =
+        ProcessInfo.processInfo.environment["MLXCAT_INKLING_COPY_PREBUILD"] != "0"
+    var supportsCopyPrebuild: Bool { Self.copyPrebuildEnabled }
+
     var visit: InklingTextModel.VisitState
     let taps: Int
     let maxSize: Int?
@@ -157,12 +161,14 @@ final class InklingLanguageModel: Module, LanguageModel {
         return forward(textModel.embed(tokens), cache: cache)
     }
 
-    private func forward(
-        _ embeddings: MLXArray, cache: [any KVCache]?, projectLogits: Bool = true
+    func forward(
+        _ embeddings: MLXArray, cache: [any KVCache]?, projectLogits: Bool = true,
+        observe: InklingTextModel.DecodeStageObserver? = nil
     ) -> MLXArray {
         let caches = cache?.map { $0 as! InklingVisitCache }
         var visits = caches?.map(\.visit) ?? textModel.makeCache()
-        let result = textModel.forward(embeddings: embeddings, cache: &visits, projectLogits: projectLogits)
+        let result = textModel.forward(
+            embeddings: embeddings, cache: &visits, projectLogits: projectLogits, observe: observe)
         if let caches {
             for (cache, visit) in zip(caches, visits) { cache.visit = visit }
         }

@@ -93,17 +93,14 @@ package struct InklingReferenceRuntime {
             let logits = autoreleasepool {
                 guard measureStages else { return model(token.reshaped(1), cache: cache) }
                 var previous = start
-                let visits = cache.map { $0 as! InklingVisitCache }
-                var state = visits.map(\.visit)
-                let result = model.textModel.forward(
-                    embeddings: model.textModel.embed(token.reshaped(1, 1)), cache: &state
+                let result = model.forward(
+                    model.textModel.embed(token.reshaped(1, 1)), cache: cache
                 ) { stage, array in
                     eval(array)
                     let now = DispatchTime.now().uptimeNanoseconds
                     stageElapsed[stage, default: 0] += now - previous
                     previous = now
                 }
-                for (visit, updated) in zip(visits, state) { visit.visit = updated }
                 eval(result)
                 stageElapsed["final residual and vocabulary", default: 0] +=
                     DispatchTime.now().uptimeNanoseconds - previous
