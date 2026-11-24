@@ -149,6 +149,11 @@ had a maximum sampled-logit error of 7.1949, so the run stopped before
 performance testing and the trial was removed. The already-verified
 singleton expert compiler remains the exact graph-tape path.
 
+A source check of MLX 0.32.4 (`36969c09`) shows the same distinction.
+Its `compile.cpp:1043–1099,1180–1182` still replaces a traced tape with
+new arrays. Its `backend/metal/eval.cpp:27–45` still calls `eval_gpu`
+to encode a primitive.
+
 A native Metal replay implementation would need a recorder or an explicit
 encoder for these primitives, an input binding plan for live KV and short
 convolution state, and an exactness gate at cache allocation, wrap and
