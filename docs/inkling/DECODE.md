@@ -121,3 +121,37 @@ Peak was 24.32–24.33 GiB. This is a matched prompt and output budget across
 runtimes, with different checkpoint layouts and with MTPLX's prompt restored
 from cache. The turn's prefill is excluded from decode throughput. The
 remaining gap is still roughly 2.2×. Receipt: `overnight-matched-http`.
+
+## Replay boundary in the pinned MLX core
+
+The fixed-shape Swift compiler is a graph-tape cache. The public
+`Transforms+Compile.swift:142–159` entry exposes fixed or shapeless
+tracing. In the pinned core, `compile.cpp:1019–1069,1116–1153` rebuilds
+lazy arrays and rebinds primitives from that tape on every invocation.
+The Metal backend still obtains a command buffer and calls
+`eval_gpu` for each primitive (`backend/metal/eval.cpp:27–43,57–82`).
+This differs from MTPLX's replay of recorded Metal bindings and barriers.
+
+The reserved global KV buffer can stay at one allocation capacity for
+256 positions, but the padded view presented to attention still changes
+length every token. The local window has a fixed bound after filling.
+The query-dependent sink and global position scale also depend on the
+active offset. The existing custom attention mask places the sink at the
+end of the active view, so moving it to the end of a capacity bucket
+would change the SDPA reduction inputs. Fixed-shape tracing cannot by
+itself preserve those inputs while reusing the whole token graph.
+Shapeless tracing still reconstructs primitives and recalculates their
+shapes, and cannot make Swift branches on offset into runtime graph inputs.
+
+Compiling the shape-stable attention inputs alone was the first fallback
+trial. The netprojects reference matched only 534/760 greedy tokens and
+had a maximum sampled-logit error of 7.1949, so the run stopped before
+performance testing and the trial was removed. The already-verified
+singleton expert compiler remains the exact graph-tape path.
+
+A native Metal replay implementation would need a recorder or an explicit
+encoder for these primitives, an input binding plan for live KV and short
+convolution state, and an exactness gate at cache allocation, wrap and
+snapshot boundaries. A version bump alone is not evidence that this
+interface exists. An evaluator that records and replays Metal launches
+would need its own bitwise proof against the release path.
