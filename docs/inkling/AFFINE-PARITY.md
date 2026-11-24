@@ -106,7 +106,13 @@ and dispatch. A core move needs a separate parity and performance run.
 ## Tokenizer alias
 
 DaisyRose now loads from the original pack through the native tokenizer
-loader. Only its `Qwen3_5Tokenizer` class name is normalized in memory to
+loader. A native HTTP completion from that pack returned 200 and emitted
+eight tokens. Only its `Qwen3_5Tokenizer` class name is normalized in memory to
 `Qwen2Tokenizer`. The loader reads the original vocabulary and chat
 template and keeps strict class validation. The tokenizer tests exercise
 the Qwen BPE merge and template and rejection of an unknown class.
+
+Both Inkling checkpoints passed their full reference gate on this build.
+Each matched 760/760 greedy IDs and 960/960 sampled logits with zero
+absolute logit error. XCTest reported 571 cases with zero failures and
+68 opt-in skips. All 10 Swift Testing cases passed.
