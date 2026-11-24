@@ -214,3 +214,80 @@ fixture (39/64 greedy IDs, 1.2505 maximum sampled-logit error), including
 a variant that retained the reference activation. A single kernel that
 also computes top-eight routing remains unqualified for exact release
 output. The raw trial receipts are local and unpublished.
+
+## Fixed-bucket Metal replay trial
+
+MTPLX records Metal encoder state and dispatches in
+`native/engine/recorder.mm` (lines 697–715 include buffer mutation checks).
+Its executor encodes the recorded commands into a concurrent encoder
+(`native/engine/executor.mm:1280–1314`). Before admitting a recording,
+it compares ordinary outputs bitwise and checks the written KV rows
+byte for byte and the remaining bank regions by digest
+(`mtplx/engine/site.py:2194–2240`). The native trial borrowed the
+command recorder and used independent writable buffers for a shadow run.
+
+The first experiment held the input width of scaled dot-product attention
+constant within a 256-position bucket. It kept the reference sink position
+and masked every padded position. Both release packs matched 760/760
+greedy IDs and 960/960 sampled logits with a maximum error of zero.
+Twelve adjacent short-prompt decode steps still issued 10,571 launches
+per token, up from 10,187. At least 576 dispatch signatures changed
+between adjacent tokens, compared with 240 on the normal path. The first
+difference appeared at launch 59 in both cases. A fixed attention width
+alone therefore cannot replay a step by updating the token and KV
+position.
+
+| HTTP checkpoint and prompt | Reference decode | Padded attention | Exact IDs |
+| --- | ---: | ---: | ---: |
+| Release, 32 tokens | 22.61–22.78 tok/s | 22.32 tok/s | 256/256 |
+| Release, 4,630 tokens | 18.96 tok/s | 18.45 tok/s | 128/128 |
+| Bare Speed text weights in mlxcat, 4,630 tokens | 23.15 tok/s | 22.49 tok/s | 128/128 |
+
+The matched long-prompt arms used a bucket ending at 4,864. All rates are
+from exclusive-lease runs and exclude prefill. The same-pack MTPLX
+plain AR rate was 41.20–41.23 tok/s with its cached prompt, as recorded
+above.
+
+A second experiment reserved the actual K/V backing arrays across the
+first bucket, passed the write and sink position as a tensor, and used
+the normal path for offsets at or past 255. Across 12 adjacent steps
+on each release pack, all 9,851 launch signatures per step and all
+24,636 inline argument bindings matched. The first adjacent pair still
+differed at 789 and 955 buffer bindings, respectively, by allocation
+length or offset. The fixed-KV MLX path passed 760/760 greedy IDs
+and 960/960 sampled logits on each pack at zero maximum logit error.
+
+The first recorder attempt rejected a buffer that could be read before
+it was written because the initial bytes had not been saved. A retrial
+expanded the bounded snapshots and re-issued all 9,851 recorded
+dispatches with an independent writable arena. The re-encoding and GPU
+completion took 51.27 ms on the 4/8-bit release and 51.21 ms on the M5
+Pro release, excluding snapshotting, arena allocation and comparison.
+Each used about 72 MiB of shadow GPU buffers. For context, the
+unmodified short HTTP generation loop averaged 43.9–44.2 ms/token.
+These rates are an isolated one-step cost and an HTTP reference,
+respectively. There was no live replay HTTP arm.
+
+The fixed-KV path alone decoded at 22.87 tok/s on the 32-token HTTP
+prompt, compared with 22.63–22.72 tok/s across the bracketing controls.
+All 256 output IDs matched, including after the bucket exit. This
+short-run result measures the KV layout while MLX still builds and
+evaluates each decode graph.
+
+Binding reuse, adapted from `native/engine/executor.mm:1010–1065`,
+reduced the shadow cost to 49.52 and 49.26 ms. On both packs the
+full logits and the compared active cache spans were byte-identical.
+The recorder could not map the four-byte sampled token output to any
+captured Metal buffer. That leaves the admission check incomplete,
+and no replayed state advanced the stock scheduler. The 760/960
+fixture results above apply to the bucket layouts running ordinary MLX.
+
+The replay prototype was removed. A live version needs a recording
+boundary inside MLX or an explicit Metal decode path that owns its
+buffers. The pinned Swift `MLXArray+Metal.swift:21–33` accessor evaluates
+an array and wraps its bytes or copies them. A replay boundary would
+need original buffer identity, ownership of returned outputs, a
+stable scratch plan, and fewer binding and barrier calls per step.
+Qualification would compare complete KV banks, including untouched
+rows, and run consecutive replayed steps on both sides of a bucket
+exit. The raw trial receipts are local and unpublished.
