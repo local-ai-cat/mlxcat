@@ -40,9 +40,14 @@ enum MLXMetalRuntime {
             file: file,
             line: line
         )
-        // A metallib colocated with the binary wins MLX's search; nothing to do.
+        // Swift Build embeds the macOS resource in the test bundle. The
+        // native loader resolves it from the test executable directory.
         let colocatedLibrary = executableDirectory.appendingPathComponent("mlx.metallib")
-        if FileManager.default.fileExists(atPath: colocatedLibrary.path) {
+        let packagedLibrary = executableDirectory.deletingLastPathComponent().appending(
+            path: "Resources/mlx-swift_CmlxMacMetal.bundle/Contents/Resources/default.metallib")
+        if FileManager.default.fileExists(atPath: colocatedLibrary.path)
+            || FileManager.default.fileExists(atPath: packagedLibrary.path)
+        {
             return
         }
 

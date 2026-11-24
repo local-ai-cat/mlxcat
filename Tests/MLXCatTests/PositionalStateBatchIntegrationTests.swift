@@ -1,7 +1,7 @@
 import MLX
 import MLXHuggingFace
 import MLXLMCommon
-import MLXVLM
+@testable import MLXVLM
 @testable import MLXCat
 import Tokenizers
 import XCTest
@@ -111,11 +111,41 @@ final class PositionalStateBatchIntegrationTests: XCTestCase {
         }
     }
 
+    private static func traceFirstDecodeProjection(_ model: Qwen35, tokens: [[Int]]) throws {
+        let ids = try tokens.map { Int32(try XCTUnwrap($0.first)) }
+        let layer = try XCTUnwrap(model.loraLayers.first as? Qwen35Language.DecoderLayer)
+        let attention = try XCTUnwrap(layer.linearAttn)
+        let embed = model.languageModel.model.embedTokens
+        let batch = embed(MLXArray(ids).reshaped(ids.count, 1))
+        let normalized = layer.inputLayerNorm(batch)
+        let projected = attention.projectInputs(normalized, batch: ids.count, sequence: 1)
+
+        func report(_ name: String, _ batch: MLXArray, _ singletons: [MLXArray]) {
+            let reference = concatenated(singletons, axis: 0)
+            let delta = abs(batch.asType(.float32) - reference.asType(.float32))
+            print("WIDTH8 \(name) max \(delta.max().item(Float.self))"
+                + " changed \((delta .!= 0).sum().item(Int.self))/\(delta.size)")
+        }
+
+        let singles = ids.map { embed(MLXArray([$0]).reshaped(1, 1)) }
+        let norms = singles.map { layer.inputLayerNorm($0) }
+        let projections = norms.map { attention.projectInputs($0, batch: 1, sequence: 1) }
+        report("embedding", batch, singles)
+        report("input layernorm", normalized, norms)
+        report("gated delta QKV", projected.qkv, projections.map(\.qkv))
+        report("gated delta Z", projected.z, projections.map(\.z))
+        report("gated delta B", projected.b, projections.map(\.b))
+        report("gated delta A", projected.a, projections.map(\.a))
+    }
+
     /// The width the benchmark died at, driven straight through the engine —
     /// and held to token equality, not merely to surviving. Eight rows is where
     /// the server process died, and it is the width the concurrency claim rests
     /// on, so "it generated something" is not the bar.
     func testEightRowsAreTokenExactAgainstSerial() async throws {
+        if let library = ProcessInfo.processInfo.environment["MLXCAT_WIDTH8_METALLIB"] {
+            GPU.metallib = URL(fileURLWithPath: library)
+        }
         try MLXMetalRuntime.requireAvailable()
         let url = try Self.modelURL()
 
@@ -141,6 +171,18 @@ final class PositionalStateBatchIntegrationTests: XCTestCase {
                 try SerialGreedyTokenHelper.tokens(
                     model: context.model, input: $0, parameters: parameters, steps: tokenCount)
             }
+            if ProcessInfo.processInfo.environment["MLXCAT_WIDTH8_OP_TRACE"] == "1",
+                let qwen = context.model as? Qwen35
+            {
+                try Self.traceFirstDecodeProjection(qwen, tokens: serial)
+                try Self.traceHeldPrefix(qwen, inputs: inputs, tokens: serial, parameters: parameters)
+                let input = try XCTUnwrap(inputs.first)
+                let control = try await BatchRowDivergenceProbe.identicalRowSplit(
+                    model: context.model, input: input, width: 8, generated: tokenCount)
+                print("WIDTH8 identical rows vs singleton \(control.vsSerial)/8"
+                    + " vs each other \(control.vsEachOther)/8")
+                XCTAssertEqual(control.vsEachOther, 0)
+            }
             let batched = try await engine.generate(
                 inputs.enumerated().map { index, input in
                     Request(
@@ -161,6 +203,58 @@ final class PositionalStateBatchIntegrationTests: XCTestCase {
                     "row \(index) diverged from serial at width 8")
             }
         }
+    }
+
+    private static func traceHeldPrefix(
+        _ model: Qwen35, inputs: [LMInput], tokens: [[Int]], parameters: GenerateParameters
+    ) throws {
+        let rowCaches = try inputs.map { _ in try model.newCache(parameters: parameters) }
+        var serialStates = try zip(inputs, rowCaches).map { input, cache in
+            guard case .logits(let output) = try model.prepare(
+                input, cache: cache, state: nil, prefill: parameters.prefill)
+            else { throw XCTSkip("The width probe requires Qwen prefill logits.") }
+            return output.state
+        }
+        let anchors = try serialStates.map { try XCTUnwrap(BatchPositionalState.delta(in: $0)) }
+        let layers = try (0..<rowCaches[0].count).map { index in
+            try BatchLayerCache.merge(rowCaches.map { $0[index] }).kvCache
+        }
+        let attentionCache = try XCTUnwrap(layers.compactMap { $0 as? BatchKVCache }.first)
+        let batchState = BatchPositionalState.stepState(
+            key: anchors[0].key,
+            prefillDeltas: anchors.map(\.delta),
+            leftPadding: attentionCache.leftPadding.asArray(Int32.self))
+
+        let steps = tokens.map(\.count).min() ?? 0
+        var maximum: Float = 0
+        var flips = 0
+        var wideFlips = 0
+        for step in 0..<steps {
+            let ids = tokens.map { Int32($0[step]) }
+            let batch = model(
+                LMInput.Text(tokens: MLXArray(ids).reshaped(ids.count, 1)),
+                cache: layers, state: batchState).logits
+            for row in ids.indices {
+                let serial = model(
+                    LMInput.Text(tokens: MLXArray([ids[row]]).reshaped(1, 1)),
+                    cache: rowCaches[row], state: serialStates[row])
+                serialStates[row] = serial.state
+                let reference = serial.logits[0, -1].asType(.float32)
+                let comparison = batch[row, -1].asType(.float32)
+                let error = abs(reference - comparison).max().item(Float.self)
+                maximum = max(maximum, error)
+                if argMax(reference).item(Int.self) != argMax(comparison).item(Int.self) {
+                    let topTwo = top(reference, k: 2).asArray(Float.self)
+                    let margin = abs(topTwo[0] - topTwo[1])
+                    flips += 1
+                    if margin > 4 * error + 0.001 {
+                        wideFlips += 1
+                    }
+                    print("WIDTH8 flip row \(row) step \(step + 1) margin \(margin) max \(error)")
+                }
+            }
+        }
+        print("WIDTH8 held prefix max logit error \(maximum) flips \(flips) wide-margin \(wideFlips)")
     }
 
     /// The second place the same trap could fire: a prefix-cache HIT resumes on

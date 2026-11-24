@@ -1,42 +1,26 @@
 #!/bin/zsh
-# build-metallib.sh — put mlx.metallib next to the `swift build` products.
+# Install the same macOS Metal library that the embedded package builds,
+# beside standalone binaries for distribution without SwiftPM resources.
 #
-# `swift build` does not produce the Metal library that mlx-swift's Cmlx needs
-# at runtime (Xcode builds do; the app's sidecar script copies it out of
-# DerivedData). Without it every MLX call dies with
-# "Failed to load the default metallib". This compiles the generated kernel translation units the
-# test support (Tests/MLXCatTests/Support/MLXMetalRuntime.swift) compiles from
-# the mlx-swift checkout and installs it beside the binaries; MLX JIT-compiles
-# the rest from source at runtime.
-#
-#   scripts/build-metallib.sh                 # → .build/release/mlx.metallib (+ debug)
-#   scripts/build-metallib.sh .build/release  # explicit product dir(s)
+#   scripts/build-metallib.sh                 # .build/release and .build/debug
+#   scripts/build-metallib.sh .build/release  # explicit destination
 
 set -euo pipefail
 SCRIPT_DIR="${0:A:h}"
 REPO_ROOT="${SCRIPT_DIR:h}"
-SRC="$REPO_ROOT/.build/checkouts/mlx-swift/Source/Cmlx/mlx-generated/metal"
-AIR="$REPO_ROOT/.build/mlxcat-metal-air"
-OUT="$AIR/mlx.metallib"
+CHECKOUT="$REPO_ROOT/.build/checkouts/mlx-swift"
+SRC="$CHECKOUT/Source/Cmlx/mlx-generated/metal"
+BUILDER="$CHECKOUT/tools/build-macos-metallib.sh"
+OUT="$REPO_ROOT/.build/mlxcat-metal-air/mlx.metallib"
 typeset -a DESTS
 if (( $# )); then DESTS=("$@"); else DESTS=("$REPO_ROOT/.build/release" "$REPO_ROOT/.build/debug"); fi
 
-[[ -d "$SRC" ]] || { echo "mlx-swift Metal sources not found at $SRC — run 'swift build' first" >&2; exit 1; }
-mkdir -p "$AIR"
-
-SOURCES=("$SRC"/**/*.metal(.N))
-(( ${#SOURCES} )) || { echo "no generated Metal translation units under $SRC" >&2; exit 1; }
-typeset -a AIRS
-for source in $SOURCES; do
-  rel="${source#$SRC/}"
-  air="$AIR/${${rel//\//_}%.metal}.air"
-  if [[ ! -f "$air" || "$SRC/$rel" -nt "$air" ]]; then
-    xcrun -sdk macosx metal -x metal -Wall -Wextra -fno-fast-math -Wno-c++17-extensions -Wno-c++20-extensions \
-      -mmacosx-version-min=14.0 -c "$SRC/$rel" -I "$SRC" -o "$air"
-  fi
-  AIRS+=("$air")
-done
-xcrun -sdk macosx metallib "${AIRS[@]}" -o "$OUT"
+[[ -f "$BUILDER" && -d "$SRC" ]] || {
+  echo "Missing the pinned mlx-swift Metal builder. Run swift build first." >&2
+  exit 1
+}
+mkdir -p "${OUT:h}"
+/bin/zsh "$BUILDER" "$SRC" "$OUT"
 
 for dest in $DESTS; do
   [[ -d "$dest" ]] || continue
