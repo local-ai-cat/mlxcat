@@ -396,6 +396,28 @@ tokens. The 16 GiB result remains a software-cap test on the 48 GiB M4 Pro.
 Receipts are `ar-4bit-curve.jsonl` and `ar-4bit-cap.jsonl` in the shared
 work directory.
 
+The complete pack fails the **model-load** admission check. Model discovery
+counts all top-level safetensors, including the optional 635,801,416-byte
+`mtp.safetensors`, and adds 5% (`ModelDiscovery.swift:63–86`). That
+produces a 16.12 GiB estimate, above the 16 GiB cap
+(`EnginePool.swift:484–494`). The API's error spells its binary units “GB.”
+
+A separate directory linked only the indexed weight shards and supporting
+files, leaving the original download intact. Under the same lease and cap,
+224 prompt tokens completed at **15.63 GiB** process peak. At 8,824 prompt
+tokens the request then failed the **generation** admission check. The
+watchdog observed 14.45 GiB resident, allowed 14.72 GiB at its 92% hard
+watermark, and adds 1.62 GiB of projected KV for 8,824 prompt plus 32 output
+tokens (`MemoryWatchdog.swift:215–239`, `NativeModelEngine.swift:958–965`).
+The estimate reserves all 48 visits at full length and is conservative for
+local layers. The uncapped run nevertheless peaked at **17.22 GiB** at the
+same context. That exceeds a 16 GiB machine's entire physical memory before
+macOS and other processes. The short capped completion on the 48 GiB host
+does not qualify a physical 16 GiB host.
+
+Receipts are `overnight-cap-16.jsonl` and
+`overnight-cap-indexed-16.jsonl`.
+
 ## Whisker with the combined defaults
 
 One additional Inkling T2 smoke on the final release passed independent
@@ -415,12 +437,12 @@ preserved in the previous run's transcript. The corrected sandbox was
 verified with `swift build`, the affected `swift test`, and `swift run`
 before starting fresh T5/T6 cells in `matrix-bash-swiftpm-45d1209`.
 
-| Corrected cell | Done | Median wall s | Median decode tok/s | Median-turn TTFT s | Peak GiB | Declined | Malformed | Tool errors |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Inkling T5 | 3/3 | 144.05 | 16.80 | 10.03 | 24.44 | 0 | 0 | 3 |
-| Qwen T5 | 3/3 | 119.96 | 13.33 | 5.92 | 20.14 | 0 | 0 | 0 |
-| Inkling T6 | 3/3 | 764.94 | 16.20 | 15.57 | 25.20 | 0 | 0 | 0 |
-| Qwen T6 | 1/3 | 395.06 | 13.08 | 5.42 | 21.56 | 0 | 1 | 0 |
+| Corrected cell | Done | Median wall s | Median decode tok/s | Median-turn TTFT s | Peak GiB | Declined | Malformed | Tool errors | Median turns |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Inkling T5 | 3/3 | 144.05 | 16.80 | 10.03 | 24.44 | 0 | 0 | 3 | 7 |
+| Qwen T5 | 3/3 | 119.96 | 13.33 | 5.92 | 20.14 | 0 | 0 | 0 | 5 |
+| Inkling T6 | 3/3 | 764.94 | 16.20 | 15.57 | 25.20 | 0 | 0 | 0 | 17 |
+| Qwen T6 | 1/3 | 395.06 | 13.08 | 5.42 | 21.56 | 0 | 1 | 0 | 8 |
 
 All six T5 checkouts changed the three expected call-site files and kept
 the wrapper. The completed T6 checkouts added tests for the production
