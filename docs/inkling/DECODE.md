@@ -65,3 +65,31 @@ projection ran at 20.58–20.60 tok/s. Each run matched all 128 greedy IDs.
 The trial retained another packed copy for decode alongside the prefill
 weights. A gain of about 1.5% did not justify that memory cost. The trial is
 recorded in `overnight-paired-expert-ab` and was removed from the engine.
+
+## Same-checkpoint MTPLX ablation
+
+The MTPLX Bare Speed ablation used the same verified weights, 4,630 cached
+prompt tokens and 128 generated tokens for every arm. All five arms
+produced identical greedy output.
+
+| MTPLX autoregressive arm | Decode tok/s |
+| --- | ---: |
+| Default, bookended controls | 41.20, 41.23 |
+| Metal replay off, same fast stages | 29.24 |
+| Expert stage E off, replay and stages A/BC/D enabled | 33.12 |
+| Entire fast decoder off | 23.57 |
+
+`mtplx/engine/runtime.py:57–68` controls replay availability.
+`mtplx/models/inkling/fast/decoder.py:38–56,107–117` selects the fast route
+and stage set. `fast/step.py:637–655,677–687` binds the expert stage or
+its reference implementation. The last arm changes both execution and
+cache route. These cuts are independent comparisons with the default and
+their deltas cannot be added.
+
+Replay was the largest isolated contributor on this pack. Changes limited
+to Swift graph construction or to MLX buffer size do not reproduce this
+execution path. MTPLX records launch bindings through its compute-encoder
+hooks (`native/engine/recorder.mm:1–39`), then its executor reconstructs
+command buffers with the recorded barriers and binds live inputs. The
+existing mlxcat schedule still evaluates an MLX graph for each token.
+Receipts are in `overnight-mtplx-ab`.
