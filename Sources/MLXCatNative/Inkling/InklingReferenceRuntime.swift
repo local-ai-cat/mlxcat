@@ -68,5 +68,42 @@ package struct InklingReferenceRuntime {
         return (maximum, differentTokens)
     }
 
+    package func profileDecode(
+        in input: LMInput, chunk: Int, steps: Int
+    ) throws -> (tokens: [Int], buildMs: Double, submitMs: Double, readMs: Double) {
+        let cache = try model.newCache(parameters: nil)
+        let prepared = try model.prepare(input, cache: cache, state: nil, prefill: .init(stepSize: chunk))
+        guard case .logits(let initial) = prepared else { throw ProbeError.missingLogits }
+        func sample(_ logits: MLXArray) -> MLXArray { argMax(logits[0, -1, 0...]) }
+        var token = sample(initial.logits)
+        for _ in 0..<16 {
+            token = sample(model(token.reshaped(1), cache: cache))
+            eval(token)
+        }
+
+        print("Inkling decode probe start \(DispatchTime.now().uptimeNanoseconds)")
+        var tokens: [Int] = []
+        var build: UInt64 = 0
+        var submit: UInt64 = 0
+        var read: UInt64 = 0
+        for _ in 0..<steps {
+            let start = DispatchTime.now().uptimeNanoseconds
+            let logits = autoreleasepool { model(token.reshaped(1), cache: cache) }
+            let next = sample(logits)
+            let built = DispatchTime.now().uptimeNanoseconds
+            asyncEval(next, logits)
+            let submitted = DispatchTime.now().uptimeNanoseconds
+            tokens.append(next.item(Int.self))
+            let finished = DispatchTime.now().uptimeNanoseconds
+            build += built - start
+            submit += submitted - built
+            read += finished - submitted
+            token = next
+        }
+        print("Inkling decode probe end \(DispatchTime.now().uptimeNanoseconds)")
+        func milliseconds(_ ticks: UInt64) -> Double { Double(ticks) / Double(steps) / 1_000_000 }
+        return (tokens, milliseconds(build), milliseconds(submit), milliseconds(read))
+    }
+
     private enum ProbeError: Error { case missingLogits }
 }

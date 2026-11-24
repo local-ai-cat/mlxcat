@@ -64,6 +64,15 @@ struct InklingReferenceProbe {
                 passed = false
                 continue
             }
+            if let rawSteps = environment["MLXCAT_INKLING_PROFILE_STEPS"],
+                let steps = Int(rawSteps), steps > 0
+            {
+                let profile = try runtime.profileDecode(in: input, chunk: fixture.prefillChunk, steps: steps)
+                print("\(name) decode over \(steps) tokens: graph \(profile.buildMs) ms, submit "
+                    + "\(profile.submitMs) ms, readback \(profile.readMs) ms")
+                print("Token IDs: \(profile.tokens)")
+                continue
+            }
             let expected = Array(fixture.generatedIDs.prefix(64))
             guard expected.count == 64 || expected.last == runtime.endToken else {
                 print("\(name): the reference terminated before 64 tokens without EOS")
