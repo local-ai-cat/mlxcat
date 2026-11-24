@@ -57,8 +57,7 @@ final class InklingVisitCache: CopyPrebuildKVCache {
                 return
             }
             precondition(newValue.count == 6)
-            visit.attention.keys = newValue[0]
-            visit.attention.values = newValue[1]
+            visit.attention.restore(keys: newValue[0], values: newValue[1])
             visit.attention.key.history = newValue[2]
             visit.attention.value.history = newValue[3]
             visit.attentionOutput.history = newValue[4]

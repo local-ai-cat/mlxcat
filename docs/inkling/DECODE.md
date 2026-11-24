@@ -1,6 +1,6 @@
 # Inkling autoregressive decode on M4 Pro
 
-The earlier warm MTPLX run measured 41.54 tokens/s on this M4 Pro with speculation disabled. A new run with Metal command counting measured 42.18 tokens/s by the runtime clock and 41.85 tokens/s between token callbacks, with a 4,630-token cached prompt. Its 128-token output uses the verified MTPLX Bare Speed checkpoint. The mlxcat profile uses the verified netprojects NVFP4/MXFP8 release. The Bare Speed pack also uses 4-bit affine attention projections, embeddings and vocabulary. The models therefore move different amounts of weight data per token and the comparison does not establish how much speed a same-checkpoint port can recover.
+The earlier warm MTPLX run measured 41.54 tokens/s on this M4 Pro with speculation disabled. A new run with Metal command counting measured 42.18 tokens/s by the runtime clock and 41.85 tokens/s between token callbacks, with a 4,630-token cached prompt. All 128 greedy IDs match the prior warm run on the verified MTPLX Bare Speed checkpoint. The mlxcat profile uses the verified netprojects NVFP4/MXFP8 release. The Bare Speed pack also uses 4-bit affine attention projections, embeddings and vocabulary. The models therefore move different amounts of weight data per token and the comparison does not establish how much speed a same-checkpoint port can recover.
 
 ## What one token does
 
@@ -16,7 +16,10 @@ For 128 warm native code-fixture steps, mean graph construction was 4.63 ms, tim
 | --- | ---: | ---: | ---: |
 | mlxcat, default | 128 | 467.33 | 0 |
 | mlxcat, 200 ops and 500 MB per buffer | 128 | 96.73 | 0 |
+| mlxcat, MTPLX prompt at 4,630 tokens | 128 | 398.05 | 0 |
 | MTPLX, ordinary decoding | 127 | 9.11 | 0 |
+
+On the same 4,630-token prompt text, the direct native probe decoded at 16.99 tokens/s. Graph construction took 5.00 ms, submission 47.90 ms and readback 5.95 ms per token. This measures the native model without HTTP's graph overlap. The two packs produce different token sequences.
 
 The Metal count wraps `commit`, `waitUntilCompleted`, and `waitUntilScheduled` on the concrete Metal command-buffer class in the process. It includes uploads and cache work committed within the marked interval. A second capture also wrapped Metal shared-event waits and main-thread dispatch semaphore waits. mlxcat recorded exactly one shared-event wait per token on a worker thread (5.34 ms total per token), with no main-thread semaphore waits. MTPLX recorded 2.06 shared-event waits (0.57 ms total) and 10.11 main-thread semaphore calls (21.58 ms total) per token. Counts include calls that return immediately.
 
@@ -29,9 +32,12 @@ The native probe reads one greedy ID and pinned MLX waits through its event path
 | Increase the pinned MLX command-buffer budget | 20.19–20.37 | 20.59–20.66 | 128/128 in each trial |
 | Fuse the gate activation after the separate quantized GEMVs | 20.19–20.37 | 20.49–20.58 | 128/128 in each trial |
 | Append the KV row and the sink in a single concatenation per tensor | 20.22–20.32 | 20.24–20.30 | 128/128 in each trial |
-| Reserve global KV capacity in blocks of 256 rows and write new entries by slice | 20.23–20.34 | 20.22–20.28 | 128/128 in each trial |
+| Reserve global KV rows at a short context | 20.23–20.34 | 20.22–20.28 | 128/128 in each trial |
+| Reserve global KV rows at an 8,225-token context | 16.34–16.35 | 17.74–17.86 | 128/128 in each trial |
 
-The buffer budget removed about 79% of Metal commits and moved time from submission into final readback. The gain was under 2.4% and the knobs apply to the entire MLX process. The gate trial covered just the pointwise activation with separate GEMVs, so it tests one small part of MTPLX’s fused path. The KV trials retain the chronological layout. These changes are off in the production path.
+The buffer budget removed about 79% of Metal commits and moved time from submission into final readback. The gain was under 2.4% and the knobs apply to the entire MLX process. The gate trial covered just the pointwise activation with separate GEMVs, so it tests one small part of MTPLX’s fused path. Production retains the prior buffer budget, gate path and sink concatenation for appends.
+
+The global KV capacity trial gained about 8.9% at an 8,225-token prompt. The change uses amortized growth from MTPLX's global bank design. From offset 8,192, singleton decode writes the new row into a buffer that grows in 256-row increments and uses the following untouched row as the sink. The published prefix cache keeps only the active rows. Attention reads chronological keys and values. Local visits and short contexts use the existing append path.
 
 ## Adopted HTTP decode change
 
@@ -39,4 +45,4 @@ The scheduler now builds the next eligible singleton Inkling graph while the GPU
 
 The release HTTP A/B used temperature 0, no seed, a 32-token coding prompt and a 256-token output. After adding the pending-cache snapshot safeguard, repeated controls ran at 20.18–20.19 tokens/s and repeated copy-prebuild runs at 21.93–22.03 tokens/s, about 8.9% faster by the paired medians. Both arms matched all 256 output IDs. Each cached follow-up reused 3,072 tokens and matched the control output. Physical peak on the coding request was 21.32–21.46 GiB in controls and 21.75 GiB with the optimization. The comparison used `MLXCAT_INKLING_COPY_PREBUILD=0` for the controls.
 
-Raw receipts are under `/Volumes/scratch/lac-dd-1121/inkling/` in `ar-decode-profile`, `ar-count`, `ar-sync-count`, `ar-stages`, `ar-native-variants`, `ar-native-kv-ab`, `ar-native-global-ab`, and `ar-copy-final`. Each measured run held the exclusive machine lease.
+Raw receipts are under `/Volumes/scratch/lac-dd-1121/inkling/` in `ar-decode-profile`, `ar-count`, `ar-sync-count`, `ar-matched-prompt`, `ar-stages`, `ar-native-variants`, `ar-native-kv-ab`, `ar-native-global-ab`, `ar-native-global-long`, and `ar-copy-final`. Each measured run held the exclusive machine lease.

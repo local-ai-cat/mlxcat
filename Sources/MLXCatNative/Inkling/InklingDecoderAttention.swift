@@ -1,3 +1,4 @@
+import Foundation
 import MLX
 
 struct InklingAttentionState {
@@ -6,6 +7,8 @@ struct InklingAttentionState {
     var keys: MLXArray?
     var values: MLXArray?
     var offset = 0
+    private var globalKeys: MLXArray?
+    private var globalValues: MLXArray?
 
     init(taps: Int) {
         key = InklingConvolution(taps: taps)
@@ -15,6 +18,8 @@ struct InklingAttentionState {
     mutating func append(
         keys incomingKeys: MLXArray, values incomingValues: MLXArray, window: Int?
     ) -> (MLXArray, MLXArray) {
+        globalKeys = nil
+        globalValues = nil
         let updatedKeys = keys.map { concatenated([$0, incomingKeys], axis: 2) } ?? incomingKeys
         let updatedValues = values.map { concatenated([$0, incomingValues], axis: 2) } ?? incomingValues
         let start = window.map { max(0, updatedKeys.dim(2) - $0 + 1) } ?? 0
@@ -23,9 +28,52 @@ struct InklingAttentionState {
         offset += incomingKeys.dim(2)
         return (updatedKeys, updatedValues)
     }
+
+    mutating func restore(keys: MLXArray, values: MLXArray) {
+        self.keys = keys
+        self.values = values
+        globalKeys = nil
+        globalValues = nil
+    }
+
+    mutating func appendGlobalDecode(
+        keys incomingKeys: MLXArray, values incomingValues: MLXArray
+    ) -> (MLXArray, MLXArray) {
+        let position = offset
+        func appendRow(_ row: MLXArray, active: MLXArray?, reserved: MLXArray?) -> MLXArray {
+            let backing: MLXArray
+            if let reserved, reserved.dim(2) >= position + 2 {
+                // Index assignment replaces this wrapper's graph. Pending
+                // snapshots may still hold the original array.
+                backing = reserved.reshaped(reserved.shape)
+            } else {
+                let reserveIncrement = 256
+                let capacity = (position + 2 + reserveIncrement - 1) / reserveIncrement * reserveIncrement
+                let zeros = MLXArray.zeros(
+                    [row.dim(0), row.dim(1), capacity - position, row.dim(3)], dtype: row.dtype)
+                backing = active.map { concatenated([$0, zeros], axis: 2) } ?? zeros
+            }
+            backing[0..., 0..., position ..< (position + 1), 0...] = row
+            return backing
+        }
+
+        let nextKeys = appendRow(incomingKeys, active: keys, reserved: globalKeys)
+        let nextValues = appendRow(incomingValues, active: values, reserved: globalValues)
+        globalKeys = nextKeys
+        globalValues = nextValues
+        offset += 1
+        keys = nextKeys[0..., 0..., ..<offset, 0...]
+        values = nextValues[0..., 0..., ..<offset, 0...]
+        // The next untouched row is the zero attention sink.
+        return (nextKeys[0..., 0..., ..<(offset + 1), 0...], nextValues[0..., 0..., ..<(offset + 1), 0...])
+    }
 }
 
 struct InklingDecoderAttention {
+    private static let reservesGlobalDecodeKV =
+        ProcessInfo.processInfo.environment["MLXCAT_INKLING_RESERVED_GLOBAL_KV"] != "0"
+    private static let reservedGlobalStart = 8192
+
     enum ShortWeights {
         case fixed(MLXArray)
         case dynamic(staticWeight: MLXArray, projection: MLXArray)
@@ -88,18 +136,28 @@ struct InklingDecoderAttention {
         let values = InklingMath.normalized(
             v.reshaped(batch, length, kvHeads, headWidth), epsilon: config.rmsEpsilon)
             .asType(query.dtype)
-        let (cachedKeys, cachedValues) = state.append(
-            keys: keys.transposed(0, 2, 1, 3), values: values.transposed(0, 2, 1, 3),
-            window: window)
+        let paddedKeys: MLXArray
+        let paddedValues: MLXArray
+        let incomingKeys = keys.transposed(0, 2, 1, 3)
+        let incomingValues = values.transposed(0, 2, 1, 3)
+        if Self.reservesGlobalDecodeKV, window == nil, length == 1,
+            state.offset >= Self.reservedGlobalStart
+        {
+            (paddedKeys, paddedValues) = state.appendGlobalDecode(keys: incomingKeys, values: incomingValues)
+        } else {
+            let (cachedKeys, cachedValues) = state.append(
+                keys: incomingKeys, values: incomingValues, window: window)
+            let zero = MLXArray.zeros([batch, kvHeads, 1, headWidth], dtype: query.dtype)
+            paddedKeys = concatenated([cachedKeys, zero], axis: 2)
+            paddedValues = concatenated([cachedValues, zero], axis: 2)
+        }
         let sink = sinkWeight(query)
         let mask = InklingAttention.mask(
             relative: relative, projection: relativeProjection.asType(query.dtype),
-            sink: sink, keyCount: cachedKeys.dim(2), window: window)
-        let zero = MLXArray.zeros([batch, kvHeads, 1, headWidth], dtype: query.dtype)
+            sink: sink, keyCount: paddedKeys.dim(2) - 1, window: window)
         let output = MLXFast.scaledDotProductAttention(
             queries: queries.transposed(0, 2, 1, 3),
-            keys: concatenated([cachedKeys, zero], axis: 2),
-            values: concatenated([cachedValues, zero], axis: 2),
+            keys: paddedKeys, values: paddedValues,
             scale: 1 / Float(headWidth).squareRoot(), mask: .array(mask))
         let merged = output.transposed(0, 2, 1, 3).reshaped(batch, length, heads * headWidth)
         let gate = sigmoid(gateWeight(query).asType(.float32))

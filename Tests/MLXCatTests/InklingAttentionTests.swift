@@ -4,6 +4,31 @@ import XCTest
 @testable import MLXCatNative
 
 final class InklingAttentionTests: XCTestCase {
+    func testReservedGlobalCacheKeepsTheSinkAndPreservesSnapshotsAcrossGrowth() throws {
+        try MLXMetalRuntime.requireAvailable()
+        let keys = arange(254).asType(.float32).reshaped(1, 1, 254, 1)
+        var cache = InklingAttentionState(taps: 4)
+        _ = cache.append(keys: keys, values: -keys, window: nil)
+        func row(_ value: Float) -> MLXArray {
+            MLXArray(value).reshaped(1, 1, 1, 1)
+        }
+        let first = cache.appendGlobalDecode(keys: row(254), values: row(-254))
+        eval(first.0, first.1)
+        var snapshot = cache
+
+        let subsequent = cache.appendGlobalDecode(keys: row(255), values: row(-255))
+        let continued = cache.appendGlobalDecode(keys: row(256), values: row(-256))
+        let branch = snapshot.appendGlobalDecode(keys: row(777), values: row(-777))
+
+        XCTAssertEqual(Array(first.0.asArray(Float.self).suffix(2)), [254, 0])
+        XCTAssertEqual(Array(subsequent.0.asArray(Float.self).suffix(3)), [254, 255, 0])
+        XCTAssertEqual(Array(continued.0.asArray(Float.self).suffix(4)), [254, 255, 256, 0])
+        XCTAssertEqual(Array(continued.1.asArray(Float.self).suffix(4)), [-254, -255, -256, 0])
+        XCTAssertEqual(Array(branch.0.asArray(Float.self).suffix(3)), [254, 777, 0])
+        XCTAssertEqual(cache.keys?.dim(2), 257)
+        XCTAssertEqual(snapshot.offset, 256)
+    }
+
     func testRelativeMaskUsesBackwardDistanceAndAppendsTheSink() throws {
         try MLXMetalRuntime.requireAvailable()
         let relative = MLXArray.ones([1, 2, 1, 1])
