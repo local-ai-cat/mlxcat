@@ -84,7 +84,7 @@ let package = Package(
         // attention compilation in the source, generated and JIT forms.
         .package(
             url: "https://github.com/atlas-open-sources/mlx-swift",
-            revision: "603209460c5fed217427846dc9e40bdab55d3f5f"
+            revision: "15405f9642a6da7877c9964a688c807a641c100e"
         ),
         // Same URL+version as the Local AI Chat app pins — one URL per package
         // identity across the combined graph (SwiftPM escalates the mismatch to
