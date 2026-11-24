@@ -332,8 +332,8 @@ stock standalone artifact gave the same result without that kernel
 patch. The retained model change uses the existing fused operator and
 the supported deployment target.
 
-The full standalone fixture run on macOS 14 matched all greedy IDs on
-the reference prompts. All sampled logits outside the 8,225-token
+Before aligning the prefill schedule, the standalone fixture run on
+macOS 14 matched all greedy IDs on the reference prompts. All sampled logits outside the 8,225-token
 fixture were exact, including the tool case when its input IDs were
 held fixed.
 
@@ -346,9 +346,7 @@ held fixed.
 The macOS 26.2 and precise sine/cosine controls produced the same
 fixture results. A minimal Swift Build shader package kept its fast-math
 flags when given an `XCODE_XCCONFIG_FILE` override. Closing the embedded
-gap requires control over package shader compilation. The standalone
-run also needs a separate numerical correction in the long-context
-path for Qwen3.8 and DaisyRose.
+gap requires control over package shader compilation.
 
 The 1,024-row prefill also differs before full attention with the bundled
 library. The first nonzero boundary is layer 1 on all three packs. The
@@ -375,3 +373,33 @@ The standalone fixture run can be reproduced by pointing
 `scripts/build-metallib.sh`. The full-attention probe takes the same
 override through `MLXCAT_ATTN_METALLIB`. Use a separate process for
 each artifact because MLX opens the device library once per process.
+
+### Match long-prefill shapes
+
+The sampled-logit difference on the standalone build came from comparing
+different prefill schedules. The Python fixture reserved the final token
+and used eight 1,024-row windows and a 32-row remainder. The Swift
+fixture passed the same ceiling but inherited balanced chunking, which
+used eight 914-row windows and a 912-row remainder. Both then used a
+one-row forward for the reserved token. Quantized prefill can round
+differently when the number of rows in an individual forward changes.
+
+Replaying the fixed schedule with the standalone metallib matched every
+layer's row fingerprints on the 8,225-token Qwen3.8 and DaisyRose
+prompts. The benchmark now records its chunking mode and the Swift
+fixture reproduces it. Existing fixtures encode the Python fixed
+windows by default. Use `Benchmarks/survey_reference.py --chunking balanced`
+to regenerate the production-default schedule. [Swift prefill strategy](https://github.com/atlas-open-sources/mlx-swift-lm/blob/b984a96fa056a837b1c7b7f79615d4203e6ab191/Libraries/MLXLMCommon/PrefillParameters.swift#L40-L104).
+
+| Model | Fixed windows greedy | Fixed windows sampled logits | Balanced windows greedy | Balanced windows sampled logits |
+|---|---:|---:|---:|---:|
+| Qwen3.8-27B-4bit | 307/307 | 808/808 exact | 307/307 | 808/808 exact |
+| Kestrel-4B-Coder-4bit | 330/330 | 856/856 exact | 330/330 | 856/856 exact |
+| DaisyRose-27B-4bit | 307/307 | 808/808 exact | 307/307 | 808/808 exact |
+
+The six standalone runs all had zero maximum logit delta. The sole
+failed assertion in each opt-in fixture run was the pre-existing
+tool-schema key order, first differing at prompt token 20. These
+numerical results use the Python prompt IDs for that case. The two
+official Inkling packs each retained exact greedy IDs and sampled
+logits. The standard Swift suite stayed green after the fixture change.
