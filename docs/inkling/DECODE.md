@@ -155,3 +155,24 @@ convolution state, and an exactness gate at cache allocation, wrap and
 snapshot boundaries. A version bump alone is not evidence that this
 interface exists. An evaluator that records and replays Metal launches
 would need its own bitwise proof against the release path.
+
+## Running the same packed text weights in both runtimes
+
+For this comparison, the MTPLX Bare Speed text tensors were reindexed
+for the native loader. The conversion preserved packed codes and group
+scale bytes, split the interleaved gate/up rows, resolved the existing
+FP4 outer-scale ratios and transposed convolution storage. It did not
+requantize. Both runs used the same tokenizer and 4,630-token prompt.
+The converted checkpoint was used only for a local text benchmark.
+
+| Runtime on Bare Speed text weights | Decode tok/s over 128 output tokens |
+| --- | ---: |
+| Native mlxcat HTTP | 22.40 |
+| MTPLX AR, cold prompt controls | 41.82–42.23 |
+| MTPLX AR, cached prompt controls | 41.20–41.23 |
+
+The native and MTPLX sequences agreed through token 79, then diverged.
+The comparison controls the weight pack and prompt. It does not prove
+cross-runtime parity, since the two implementations use different
+activation arithmetic. The same-pack runtime gap was about 1.9× in
+the cold-prompt comparison, which excludes prefill time.
