@@ -410,8 +410,10 @@ The macOS host links `MLXCatNative` in-process. Its original app
 layout resolves `Contents/Resources/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib`.
 The host build's shader command used `-fmetal-math-mode=fast` and
 `-fmetal-math-fp32-functions=fast` under Swift Build's package resource
-rule. The sidecar has a separate executable directory and colocated shader
-lookup.
+rule. In Xcode 27.1, `MetalCompiler.xcspec:122` defaults
+`MTL_FAST_MATH` to YES. The derived settings at lines 140 and 168
+select fast arithmetic and fast FP32 functions. The sidecar has a
+separate executable directory and colocated shader lookup.
 
 The pinned macOS Cmlx dependency now generates a separate
 `mlx-swift_CmlxMacMetal.bundle` through a package build tool. The tool
@@ -430,4 +432,46 @@ ordered Jinja object for the standard OpenAI declaration fields. Extra keys
 keep deterministic ordering because the request dictionary has already
 discarded caller insertion order. The unit test renders a complete weather
 declaration. The three real tool fixtures each match all 281 prompt IDs.
-[Tokenizer template context](https://github.com/atlas-open-sources/swift-transformers/blob/089cb3f02a1718b2943c7e7c4553876cd51a75d1/Sources/Tokenizers/Tokenizer.swift#L790-L808).
+[Tokenizer template context](https://github.com/atlas-open-sources/swift-transformers/blob/089cb3f02a1718b2943c7e7c4553876cd51a75d1/Sources/Tokenizers/Tokenizer.swift#L790-L808),
+[Jinja dictionary conversion](https://github.com/huggingface/swift-jinja/blob/1e4d0dc69f7ec1277131fb3853808229c5991825/Sources/Jinja/Value.swift#L59-L67).
+
+The fixture A/B held weights, inputs and fixed prefill windows constant.
+The baseline used the stock embedded library. The precise artifact was
+byte-identical to the standalone library. Greedy counts are sums of the
+matching prefixes of the fixtures. Each row includes the indicated
+number of sampled logits.
+
+| Model | Stock greedy | Stock max logit error | Precise greedy | Precise max logit error | Sampled logits |
+|---|---:|---:|---:|---:|---:|
+| Kestrel-4B-Coder-4bit | 302/330 | 0.4375 | 330/330 | 0 | 856 |
+| Qwen3.8-27B-4bit | 307/307 | 0.5 | 307/307 | 0 | 808 |
+| DaisyRose-27B-4bit | 307/307 | 0.625 | 307/307 | 0 | 808 |
+| Inkling-2-Mini-MLX-4-8bit | 514/760 | 4.31788 | 760/760 | 0 | 960 |
+| Inkling-2-Mini-MLX-M5Pro-48gb | 514/760 | 4.31788 | 760/760 | 0 | 960 |
+
+### Kestrel width eight
+
+The first-decode control fed the same serial-selected input token to
+each row at width eight and as a singleton. Layer-zero embedding and
+input normalization were bit-exact. The first difference was the affine
+gated-delta QKV projection. Eight of 65,536 entries changed, with a maximum
+delta of 0.0009765625. Z was next at 0.001953125. Both shader libraries
+gave the same readings at that boundary. On this device, (M = 8)
+remains below the QMM threshold and takes the wide QMV kernel.
+The singleton takes the ordinary QMV kernel.
+[Qwen input projections](https://github.com/atlas-open-sources/mlx-swift-lm/blob/d28ad596b78b6aad0672a533df63eb3b7e7b69d9/Libraries/MLXVLM/Models/Qwen35.swift#L584-L609),
+[Affine projection dispatch](https://github.com/atlas-open-sources/mlx/blob/8025c1b83254a5a2a88905faa06fd5e1691f578a/mlx/backend/metal/quantized.cpp#L1840-L1939).
+
+On the precise library, the 24-step held-prefix comparison had a
+maximum full-vocabulary logit error of 0.3125. The two argmax changes
+had serial margins of 0.125 and zero. The stock library also reached
+0.3125, with one held-prefix argmax change at a margin of 0.125.
+On the precise library, all eight copies of an identical prompt agreed
+with one another, and all eight differed from the singleton. Both
+libraries differed on two rows in the free-running eight-prompt stress.
+
+For this pack and width, a 0.5 same-prefix logit tolerance, exact
+duplicate-row tokens, and exact greedy decisions whenever the serial
+winner's margin exceeds twice the tolerance distinguish expected width
+rounding from a scheduling defect. The existing strict stress test
+still reports the two differing rows.
