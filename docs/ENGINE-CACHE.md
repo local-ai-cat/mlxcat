@@ -34,3 +34,23 @@ existing scheduler and per-row positional state. As with vLLM-MLX's
 continuous admission, the scheduler can join compatible requests while
 another is generating. The existing per-family and multimodal restrictions
 remain necessary. No scheduler default changed for these measurements.
+
+## SSD restart comparison
+
+Set `MLXCAT_PREFIX_DISK_DIRECTORY` to opt in to persisted named text
+sessions. The native session store writes versioned safetensor snapshots
+with recurrent checkpoints and restores them on an in-memory miss. Model
+file identity and session identity scope the cache. As in oMLX, writes
+are queued after the snapshot, with a bounded per-model budget. Buffer
+materialization still happens before the background write. Media and
+anonymous sessions do not take this path.
+
+| Model | Cold restart TTFT | SSD restart TTFT | Restored tokens | Exact IDs |
+| --- | ---: | ---: | ---: | --- |
+| Qwen3.8-27B-4bit | 27.16 s | 1.95 s | 3,072 | Yes |
+| Kestrel-4B-Coder-4bit | 4.19 s | 0.29 s | 3,072 | Yes |
+
+Both arms used a new process, a short warm-up and the identical follow-up.
+The SSD control was disabled for the cold arm. The versioned cache is
+optional because it persists conversation token IDs and model state, and
+because writing and restoring a large snapshot has real I/O and memory cost.

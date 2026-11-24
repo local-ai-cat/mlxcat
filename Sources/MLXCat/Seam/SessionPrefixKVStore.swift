@@ -58,6 +58,7 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
     let supportsWindowedCheckpoints: Bool
     private let maxBytes: Int64
     private let maxAnonymousSlots: Int
+    private let disk: SessionPrefixDiskStore?
     private var sessionSlots: [String: Slot] = [:]
     private var anonymousSlots: [Slot] = []
     private var sequence: UInt64 = 0
@@ -74,12 +75,14 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
 
     package init(
         maxBytes: Int64, maxAnonymousSlots: Int = 8,
-        windowedLayerDecoder: (@Sendable (SerializedKVLayer) throws -> any KVCache)?
+        windowedLayerDecoder: (@Sendable (SerializedKVLayer) throws -> any KVCache)?,
+        disk: SessionPrefixDiskStore? = nil
     ) {
         self.layerDecoder = windowedLayerDecoder ?? BlockAwarePrefixKVStore.cache(from:)
         self.supportsWindowedCheckpoints = windowedLayerDecoder != nil
         self.maxBytes = max(0, maxBytes)
         self.maxAnonymousSlots = max(1, maxAnonymousSlots)
+        self.disk = disk
     }
 
     func restoreLayer(_ layer: SerializedKVLayer) throws -> any KVCache {
@@ -103,6 +106,12 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
     public func fetch(tokens: [Int], sessionKey: String?) -> PrefixKVStoreHit? {
         withLock {
             guard tokens.count > 1 else { return nil }
+            if let sessionKey, !sessionKey.isEmpty, sessionSlots[sessionKey] == nil,
+                let saved = disk?.read(session: sessionKey)
+            {
+                try? store(tokens: saved.tokens, sessionKey: sessionKey, cache: saved.layers,
+                           checkpoints: saved.checkpoints, persist: false)
+            }
             let candidates = candidateSlots(sessionKey: sessionKey)
                 .filter { $0.leaseCount == 0 }
                 .compactMap { slot -> (slot: Slot, matched: Int, checkpoint: Int?)? in
@@ -189,6 +198,13 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
         cache: [SerializedKVLayer],
         checkpoints: [PrefixRecurrentCheckpoint]
     ) throws {
+        try store(tokens: tokens, sessionKey: sessionKey, cache: cache, checkpoints: checkpoints, persist: true)
+    }
+
+    private func store(
+        tokens: [Int], sessionKey: String?, cache: [SerializedKVLayer],
+        checkpoints: [PrefixRecurrentCheckpoint], persist: Bool
+    ) throws {
         try withLock {
             guard tokens.count > 1, !cache.isEmpty else { return }
             let copied = try cache.map { layer -> SerializedKVLayer in
@@ -255,6 +271,12 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
             currentBytes += slot.byteCount
             _storeCount += 1
             evictIfNeeded()
+            if persist, let disk, let sessionKey, !sessionKey.isEmpty {
+                disk.store(session: sessionKey, snapshot: .init(
+                    tokens: slot.tokens, layers: slot.layers,
+                    checkpoints: slot.checkpoints.map { PrefixRecurrentCheckpoint(position: $0.key, layers: $0.value) }),
+                    byteCount: slot.byteCount)
+            }
         }
     }
 
@@ -274,6 +296,7 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
     public func clearEntry(_ hit: PrefixKVStoreHit) {
         withLock {
             guard let storage = hit.storage as? HitStorage else { return }
+            if let session = slot(id: storage.slotID)?.sessionKey { disk?.invalidate(session: session) }
             removeSlot(id: storage.slotID)
             _clearCount += 1
         }

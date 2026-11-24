@@ -35,6 +35,7 @@ public final class NativeModelEngine: @unchecked Sendable {
         chunkIdlePrefill: Bool,
         kvQuantization: KVQuantizationPolicy = .off,
         windowedLayerDecoder: (@Sendable (SerializedKVLayer) throws -> any KVCache)? = nil,
+        diskPrefixStore: SessionPrefixDiskStore? = nil,
         prefill: PrefillParameters = .init()
     ) {
         self.context = context
@@ -43,7 +44,7 @@ public final class NativeModelEngine: @unchecked Sendable {
         self.parameters = GenerateParameters(maxTokens: 16, temperature: 0, prefill: prefill)
         self.cacheCapabilities = cacheCapabilities
         self.prefixStore = SessionPrefixKVStore(
-            maxBytes: Self.prefixCacheMaxBytes(), windowedLayerDecoder: windowedLayerDecoder)
+            maxBytes: Self.prefixCacheMaxBytes(), windowedLayerDecoder: windowedLayerDecoder, disk: diskPrefixStore)
         self.engine = MLXCatEngine(
             model: context.model,
             parameters: parameters,
@@ -933,7 +934,8 @@ public struct NativeModelLoader: EnginePoolModelLoader {
                 kvQuantization: KVQuantizationPolicy.resolved(
                     .fromEnvironment(), modelType: modelType),
                 windowedLayerDecoder: capabilities.usesWindowedKVCache && reuse && reuseRollingCache
-                    ? BlockAwarePrefixKVStore.cache(from:) : nil
+                    ? BlockAwarePrefixKVStore.cache(from:) : nil,
+                diskPrefixStore: Self.diskPrefixStore(for: modelURL)
             )
         }
     }
@@ -972,7 +974,14 @@ public struct NativeModelLoader: EnginePoolModelLoader {
             schedulerManagedTextPrefill: usesPrefixReuse,
             chunkIdlePrefill: true,
             windowedLayerDecoder: cacheDecoder,
+            diskPrefixStore: Self.diskPrefixStore(for: directory),
             prefill: .init(stepSize: prefillStep))
+    }
+
+    private static func diskPrefixStore(for modelURL: URL) -> SessionPrefixDiskStore? {
+        guard let path = ProcessInfo.processInfo.environment["MLXCAT_PREFIX_DISK_DIRECTORY"], !path.isEmpty
+        else { return nil }
+        return SessionPrefixDiskStore(root: URL(fileURLWithPath: path, isDirectory: true), modelDirectory: modelURL)
     }
 
     public func unloadModel(_ engine: NativeModelEngine, id: String) async {

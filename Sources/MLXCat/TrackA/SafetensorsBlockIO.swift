@@ -89,7 +89,7 @@ public enum SafetensorsBlockIO {
         return header.metadata
     }
 
-    private static func snapshotTensor(name: String, array: MLXArray) -> SafetensorsTensorSnapshot {
+    package static func snapshotTensor(name: String, array: MLXArray) -> SafetensorsTensorSnapshot {
         let dtype = array.dtype
         let dataArray = dtype == .bfloat16 ? array.view(dtype: .uint16) : array
         eval(dataArray)

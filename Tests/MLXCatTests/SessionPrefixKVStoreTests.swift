@@ -4,6 +4,36 @@ import MLXLMCommon
 import XCTest
 
 final class SessionPrefixKVStoreTests: XCTestCase {
+    func testNamedSessionPrefixRestoresFromDiskWithExactArrays() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = root.appendingPathComponent("model")
+        try FileManager.default.createDirectory(at: model, withIntermediateDirectories: true)
+        try Data([0]).write(to: model.appendingPathComponent("model.safetensors"))
+        let diskRoot = root.appendingPathComponent("prefix")
+        let disk = try XCTUnwrap(SessionPrefixDiskStore(root: diskRoot, modelDirectory: model))
+        let writer = SessionPrefixKVStore(maxBytes: 0, windowedLayerDecoder: nil, disk: disk)
+        let tokens = Array(0..<256)
+        let data = arange(256).asType(.bfloat16).reshaped(1, 1, 256, 1)
+        let layer = SerializedKVLayer(state: [data, data], metaState: [], className: "KVCacheSimple")
+        try writer.store(tokens: tokens, sessionKey: "session", cache: [layer])
+        disk.flushWrites()
+        let reopened = try XCTUnwrap(SessionPrefixDiskStore(root: diskRoot, modelDirectory: model))
+        let reader = SessionPrefixKVStore(maxBytes: 0, windowedLayerDecoder: nil, disk: reopened)
+        XCTAssertNil(reader.fetch(tokens: tokens + [256], sessionKey: "another-session"))
+        let hit = try XCTUnwrap(reader.fetch(tokens: tokens + [256], sessionKey: "session"))
+        XCTAssertEqual(hit.matchedTokenCount, 256)
+        let restored = try reader.reconstructCache(from: hit)
+        XCTAssertEqual(restored[0].state[0].view(dtype: .uint16).asArray(UInt16.self),
+                       data.view(dtype: .uint16).asArray(UInt16.self))
+        try Data([0, 1]).write(to: model.appendingPathComponent("model.safetensors"))
+        let changedModel = try XCTUnwrap(SessionPrefixDiskStore(root: diskRoot, modelDirectory: model))
+        XCTAssertNil(changedModel.read(session: "session"))
+        reader.clearEntry(hit)
+        reopened.flushWrites()
+        XCTAssertNil(reopened.read(session: "session"))
+    }
+
     func testRotatingPrefixRestoresChronologicalStateAfterWrap() throws {
         let cache = RotatingKVCache(maxSize: 4, keep: 1, step: 2)
         func append(_ value: Int, to cache: RotatingKVCache) -> [Float] {
