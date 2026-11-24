@@ -86,9 +86,29 @@ package struct InklingReferenceRuntime {
         var build: UInt64 = 0
         var submit: UInt64 = 0
         var read: UInt64 = 0
+        let measureStages = ProcessInfo.processInfo.environment["MLXCAT_INKLING_PROFILE_STAGES"] == "1"
+        var stageElapsed: [String: UInt64] = [:]
         for _ in 0..<steps {
             let start = DispatchTime.now().uptimeNanoseconds
-            let logits = autoreleasepool { model(token.reshaped(1), cache: cache) }
+            let logits = autoreleasepool {
+                guard measureStages else { return model(token.reshaped(1), cache: cache) }
+                var previous = start
+                let visits = cache.map { $0 as! InklingVisitCache }
+                var state = visits.map(\.visit)
+                let result = model.textModel.forward(
+                    embeddings: model.textModel.embed(token.reshaped(1, 1)), cache: &state
+                ) { stage, array in
+                    eval(array)
+                    let now = DispatchTime.now().uptimeNanoseconds
+                    stageElapsed[stage, default: 0] += now - previous
+                    previous = now
+                }
+                for (visit, updated) in zip(visits, state) { visit.visit = updated }
+                eval(result)
+                stageElapsed["final residual and vocabulary", default: 0] +=
+                    DispatchTime.now().uptimeNanoseconds - previous
+                return result
+            }
             let next = sample(logits)
             let built = DispatchTime.now().uptimeNanoseconds
             asyncEval(next, logits)
@@ -102,6 +122,9 @@ package struct InklingReferenceRuntime {
         }
         print("Inkling decode probe end \(DispatchTime.now().uptimeNanoseconds)")
         func milliseconds(_ ticks: UInt64) -> Double { Double(ticks) / Double(steps) / 1_000_000 }
+        for stage in stageElapsed.keys.sorted() {
+            print("Inkling serialized stage \(stage): \(milliseconds(stageElapsed[stage, default: 0])) ms/token")
+        }
         return (tokens, milliseconds(build), milliseconds(submit), milliseconds(read))
     }
 

@@ -1,6 +1,7 @@
 import MLX
 
 struct InklingTextModel {
+    typealias DecodeStageObserver = (String, MLXArray) -> Void
     struct VisitState {
         var attention: InklingAttentionState
         var attentionOutput: InklingConvolution
@@ -41,7 +42,8 @@ struct InklingTextModel {
 
         func callAsFunction(
             _ stream: inout InklingLoop.ResidualStream<MLXArray>,
-            messages: MLXArray?, boundary: Bool, state: inout VisitState
+            messages: MLXArray?, boundary: Bool, state: inout VisitState,
+            observe: DecodeStageObserver? = nil
         ) {
             let config = attention.config
             let epsilon = config.rmsEpsilon
@@ -64,7 +66,9 @@ struct InklingTextModel {
                     part, weight: inputNorms[min(index, inputNorms.count - 1)], eps: epsilon)
                     .asType(input.dtype)
             }
+            if let observe { observe("controller and input norm", stacked(parts)) }
             let attended = attention(query: parts[0], key: parts[1], value: parts[2], state: &state.attention)
+            observe?("attention and KV", attended)
             let residual = state.attentionOutput.apply(
                 attended, weight: attentionConvolution, residual: boundary ? nil : input,
                 outputType: .float32)
@@ -78,8 +82,12 @@ struct InklingTextModel {
             }
             let normalized = MLXFast.rmsNorm(hidden, weight: postAttentionNorm, eps: epsilon)
                 .asType(input.dtype)
+            observe?("attention convolution and MLP input", normalized)
+            let projected = experts(normalized)
+            observe?("MoE", projected)
             stream.partial = state.mlpOutput.apply(
-                experts(normalized), weight: mlpConvolution, residual: residual, outputType: input.dtype)
+                projected, weight: mlpConvolution, residual: residual, outputType: input.dtype)
+            observe?("MLP convolution", stream.partial)
         }
     }
 
@@ -103,7 +111,8 @@ struct InklingTextModel {
     }
 
     func forward(
-        embeddings: MLXArray, cache: inout [VisitState], projectLogits: Bool = true
+        embeddings: MLXArray, cache: inout [VisitState], projectLogits: Bool = true,
+        observe: DecodeStageObserver? = nil
     ) -> MLXArray {
         precondition(cache.count == loop.visits.count)
         let residual = loop.forward(embedding: embeddings, makeBank: InklingMath.messageBank) {
@@ -113,7 +122,8 @@ struct InklingTextModel {
             }
             layers[visit.layer](
                 &stream, messages: messages,
-                boundary: visit.layer.isMultiple(of: config.residualBlockSize), state: &cache[slot])
+                boundary: visit.layer.isMultiple(of: config.residualBlockSize), state: &cache[slot],
+                observe: observe)
         }
         guard projectLogits else { return residual.partial }
         let hidden = InklingMath.attentionResidual(
