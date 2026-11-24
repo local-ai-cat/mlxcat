@@ -31,7 +31,7 @@ def capture_code_trace(model, tokens, path):
     mx.save_safetensors(str(path), stages)
 
 
-def capture(model, tokenizer, case, name, output):
+def capture(model, tokenizer, case, name, output, chunking="remainder"):
     messages = case["messages"]
     if isinstance(messages, str):
         messages = [{"role": "user", "content": messages}]
@@ -47,13 +47,16 @@ def capture(model, tokenizer, case, name, output):
     tokens = mx.array(prompt)
     cache = make_prompt_cache(model)
 
-    # Match the Qwen3.5 VLM's cold prefill shape and its long-prompt last-token split.
-    chunk = 1024
-    reserve = len(prompt) - 1 if len(prompt) > chunk else 0
-    for start in range(0, reserve, chunk):
-        model(tokens[None, start : min(start + chunk, reserve)], cache=cache)
+    # Match Swift's ceiling and reserve the same final token for sampling.
+    step = 1024
+    prefill = len(prompt) - 1 if len(prompt) > step else 0
+    if chunking == "balanced" and prefill > step:
+        windows = (prefill + step - 1) // step
+        step = (prefill + windows - 1) // windows
+    for start in range(0, prefill, step):
+        model(tokens[None, start : min(start + step, prefill)], cache=cache)
         mx.eval([entry.state for entry in cache])
-    row = model(tokens[None, reserve:], cache=cache)[0, -1].astype(mx.float32)
+    row = model(tokens[None, prefill:], cache=cache)[0, -1].astype(mx.float32)
 
     generated, sampled = [], []
     for step in range(64):
@@ -76,6 +79,7 @@ def capture(model, tokenizer, case, name, output):
         "prompt": prompt,
         "generated": generated,
         "sampled": sampled,
+        "prefillChunking": chunking,
     }
 
 
@@ -84,6 +88,7 @@ def main():
     parser.add_argument("checkpoint", type=Path, help="Verified local Qwen3.5 survey checkpoint")
     parser.add_argument("inkling_fixtures", type=Path, help="Directory containing the Inkling fixtures")
     parser.add_argument("output", type=Path, help="JSON receipt path")
+    parser.add_argument("--chunking", choices=("remainder", "balanced"), default="remainder")
     args = parser.parse_args()
 
     model, tokenizer = load(str(args.checkpoint))
@@ -94,7 +99,9 @@ def main():
         case = json.loads(path.read_text())
         if case.get("image_sha256"):
             continue
-        record = capture(model, tokenizer, case, path.stem.removeprefix(prefix), args.output)
+        record = capture(
+            model, tokenizer, case, path.stem.removeprefix(prefix), args.output, args.chunking
+        )
         records.append(record)
         print(record["name"], len(record["prompt"]), len(record["generated"]), flush=True)
         mx.clear_cache()

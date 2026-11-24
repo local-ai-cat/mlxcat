@@ -18,6 +18,7 @@ final class SurveyModelParityTests: XCTestCase {
         let prompt: [Int]
         let generated: [Int]
         let sampled: [Sample]
+        let prefillChunking: String?
     }
 
     func testSurveyModelMatchesPython() async throws {
@@ -64,8 +65,21 @@ final class SurveyModelParityTests: XCTestCase {
                 // Hold input IDs fixed when diagnosing arithmetic after a template mismatch.
                 let targetInput = promptMatch ? input! : LMInput(tokens: MLXArray(fixture.prompt))
                 let cache = try context.model.newCache(parameters: nil)
+                // Packed projections can round differently with a different
+                // number of rows. Reproduce the reference's window boundaries.
+                let chunking: PrefillParameters.Chunking
+                switch fixture.prefillChunking {
+                case nil, "remainder":
+                    chunking = .remainder
+                case "balanced":
+                    chunking = .balanced
+                default:
+                    XCTFail("Unknown reference chunking for \(fixture.name)")
+                    continue
+                }
                 let prepared = try context.model.prepare(
-                    targetInput, cache: cache, state: nil, prefill: .init(stepSize: 1024))
+                    targetInput, cache: cache, state: nil,
+                    prefill: .init(stepSize: 1024, chunking: chunking))
                 guard case .logits(var output) = prepared else {
                     XCTFail("Expected prepared logits for \(fixture.name)")
                     continue
