@@ -31,7 +31,8 @@ Greedy totals count each fixture's matching prefix.
 ### Kestrel
 
 Ten of eleven rendered prompts matched. The tool fixture first differed
-at input token index 20 in the serialized tool definition. With reference
+at input token index 20 in the template's `tool | tojson` output. Python
+placed the `type` key first, and Swift placed `function` first. With reference
 input IDs forced for that case, the model matched 220/330 greedy IDs
 across the suite. Eight hundred fifty-six sampled scores had a maximum
 absolute error of 0.6875.
@@ -58,8 +59,17 @@ swift-transformers `Sources/Tokenizers/Tokenizer.swift:183–199`.
 A scratch diagnostic used the original tokenizer data, template and
 weights and changed only the class label to `Qwen2Tokenizer`.
 All 11 Python-rendered prompt ID arrays remained identical with that
-label. The verified source checkpoint and the native loader retained
-their original contents.
+label.
+
+With the diagnostic alias, ten of eleven rendered prompts matched.
+The tool fixture showed the same JSON key-order mismatch as Kestrel.
+The matching greedy prefixes summed to 292/307 IDs and the maximum
+absolute error over 808 sampled scores was 1.25. On the same coding
+input IDs the embeddings, input RMS norm and QKV projection matched.
+The first observed difference was the quantized `in_proj_z` gate
+projection, with a maximum delta of 0.125
+(`MLXVLM/Models/Qwen35.swift:571–579`). The full gated delta output had
+a maximum delta of 0.125 with either fused or separate projections.
 
 ## Kestrel context and 16 GiB cap
 
@@ -78,20 +88,69 @@ HTTP 200.
 | 8,192 with 16 GiB engine cap | 63.84 | 10.969 | 4.96 |
 
 Kestrel cleared the same 16 GiB software-cap test used for Inkling.
+All 32 capped output IDs matched the uncapped 8k arm.
 The capped request left about 11 GiB below 16 GiB at the measured
 process peak, evidence for a single 8k session on a 16 GB Mac.
 The host used for this test has 48 GiB of physical RAM.
+
+## DaisyRose context with the tokenizer alias
+
+The context numbers below use the scratch alias and the same native
+release server and footprint method as Kestrel. Each returned HTTP 200.
+The short and long HTTP parity samples also matched 48/48 and 5/5
+emitted IDs respectively, after removing the terminal tokenizer EOS.
+
+| Input | Decode tok/s | TTFT s | Peak GiB |
+| --- | ---: | ---: | ---: |
+| 32 | 13.61 | 0.362 | 17.53 |
+| 4,096 | 13.55 | 33.740 | 17.78 |
+| 8,192 | 12.66 | 68.499 | 18.49 |
+
+The observed 8k process peak leaves about 13.5 GiB below 32 GiB on
+the test host. The original pack fails model loading before decoding.
 
 ## Whisker T2
 
 The frozen Whisker runner made three resets of the same fixture for each
 arm. Temperature was zero, seed 42, with Bash allowed inside the reset
-sandbox. Completion required both pytest and the independent duplicate
+sandbox and a 30-round limit. Completion required both pytest and the independent duplicate
 and blank-label checks. The separate counts include generated Qwen tool
 frames that produced no invocation on token ID `248058`.
 
 Kestrel completed 0/3 valid runs. The totals were 0 declined, 1 malformed
 and 5 tool errors. Median wall time was 74.17 s, decode 65.44 tok/s,
-turn TTFT 0.773 s and 10 turns. The original DaisyRose pack produced
+turn TTFT 0.773 s, peak 6.04 GiB and 10 turns. The original DaisyRose pack produced
 three invalid runs because no model request completed. Those attempts
 yielded zero completed turns and zero tool calls.
+
+The DaisyRose alias completed 3/3 valid runs with 0 declined,
+0 malformed and 0 tool errors. Median wall time was 256.49 s,
+decode 13.18 tok/s, turn TTFT 4.711 s, peak 21.19 GiB and 9 turns.
+
+## Catalogue decision and verification
+
+Neither checkpoint meets the catalogue parity gate. DaisyRose's alias
+also requires a tokenizer compatibility change before it can run from
+its upstream download. The optional family comparison had no complete
+checkpoint to use. The sole Gemma 4 candidate in the local model stores
+contained only its final shard, and those stores had no GPT-OSS pack.
+
+Python capture, native context and Whisker measurements ran on the M4
+under the exclusive lease. Raw receipts are local and unpublished.
+The default Swift suite passed 568 XCTest cases with 67 opt-in skips,
+plus 10 Swift Testing cases. The leaderboard and benchmark parity
+checks passed.
+
+## Reproduction
+
+In an mlx-lm development venv, capture the Python reference on the same
+verified checkpoint. The JSON receipt is the input to the Swift test.
+The companion safetensors file adds the coding fixture's operator trace.
+
+```sh
+"$reference_venv/bin/python3" Benchmarks/survey_reference.py "$checkpoint" "$inkling_fixtures" "$reference"
+MLXCAT_SURVEY_MODEL="$checkpoint" MLXCAT_SURVEY_REFERENCE="$reference" \
+  swift test --filter SurveyModelParityTests
+```
+
+Run model-backed comparisons under the machine's exclusive lease.
