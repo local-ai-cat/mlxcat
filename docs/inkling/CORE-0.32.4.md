@@ -64,6 +64,25 @@ Both full Inkling fixture runs on the final code matched 760/760 greedy IDs
 and 960/960 sampled logits with zero maximum error. XCTest reported 571 cases
 with zero failures and 68 opt-in skips. All 10 Swift Testing cases passed.
 
+## Affine model fixture results
+
+All three packs matched the Python layer-0 input norm and the QKV, Z, B
+and A projections for the coding prompt. The first remaining trace boundary
+with a difference was the gated delta attention output. The fused and
+separate Swift projection controls produced the same maximum delta there.
+
+| Model | Greedy IDs on reference input IDs | Sampled logits | Max logit delta (gate 0.25) | Layer-0 gated delta output max |
+| --- | ---: | ---: | ---: | ---: |
+| Qwen3.8-27B-4bit | 307/307 | 808 | 0.75 | 0.125 |
+| Kestrel-4B-Coder-4bit | 304/330 | 856 | 0.625 | 0.015625 |
+| DaisyRose-27B-4bit | 293/307 | 808 | 0.75 | 0.125 |
+
+Each matched 10 of 11 rendered prompts. The tool fixture first differed
+at input token 20 because of JSON key order. The model arithmetic
+comparison used the reference IDs for that case. All three exceeded the
+logit tolerance. Kestrel and DaisyRose therefore remain outside the
+catalogue gate. Kestrel's measured Whisker T2 result is 0/3.
+
 ## Core A/B benchmark
 
 The existing `bench/run.py` short-context arm uses width one, three timed cold
