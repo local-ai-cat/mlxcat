@@ -40,7 +40,7 @@ struct InklingTextModel {
         let mlpConvolution: MLXArray
         let controllers: [Controller]
         /// Reuses the compiled expert graph at the fixed singleton decode shape.
-        var compiledExperts: (@Sendable (MLXArray) -> MLXArray)? = nil
+        var compiledExperts: ((MLXArray) -> MLXArray)? = nil
 
         func callAsFunction(
             _ stream: inout InklingLoop.ResidualStream<MLXArray>,
