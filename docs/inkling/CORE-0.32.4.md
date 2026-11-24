@@ -403,3 +403,31 @@ tool-schema key order, first differing at prompt token 20. These
 numerical results use the Python prompt IDs for that case. The two
 official Inkling packs each retained exact greedy IDs and sampled
 logits. The standard Swift suite stayed green after the fixture change.
+
+### Embedded macOS Metal library
+
+The macOS host links `MLXCatNative` in-process. Its original app
+layout resolves `Contents/Resources/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib`.
+The host build's shader command used `-fmetal-math-mode=fast` and
+`-fmetal-math-fp32-functions=fast` under Swift Build's package resource
+rule. The sidecar has a separate executable directory and colocated shader
+lookup.
+
+The pinned macOS Cmlx dependency now generates a separate
+`mlx-swift_CmlxMacMetal.bundle` through a package build tool. The tool
+and the standalone script call the same compiler wrapper, which uses
+`-fno-fast-math` and the macOS 14 deployment target. The native loader
+checks the precise resource before the compatibility bundle. A colocated
+standalone library or explicit MLX override still has priority. The
+precise resource is a macOS-only target dependency.
+[Package dependency](https://github.com/atlas-open-sources/mlx-swift/blob/15405f9642a6da7877c9964a688c807a641c100e/Package.swift#L270-L275),
+[Shared Metal builder](https://github.com/atlas-open-sources/mlx-swift/blob/15405f9642a6da7877c9964a688c807a641c100e/tools/build-macos-metallib.sh#L1-L20),
+[Native resource lookup](https://github.com/atlas-open-sources/mlx/blob/8025c1b83254a5a2a88905faa06fd5e1691f578a/mlx/backend/metal/device.cpp#L212-L251).
+
+For Qwen3.5 tool declarations, the Swift dictionary-to-Jinja adapter sorted
+every object lexically before `tojson`. The native tokenizer now passes an
+ordered Jinja object for the standard OpenAI declaration fields. Extra keys
+keep deterministic ordering because the request dictionary has already
+discarded caller insertion order. The unit test renders a complete weather
+declaration. The three real tool fixtures each match all 281 prompt IDs.
+[Tokenizer template context](https://github.com/atlas-open-sources/swift-transformers/blob/089cb3f02a1718b2943c7e7c4553876cd51a75d1/Sources/Tokenizers/Tokenizer.swift#L790-L808).
