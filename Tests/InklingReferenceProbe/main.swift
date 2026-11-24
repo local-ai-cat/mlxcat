@@ -64,6 +64,31 @@ struct InklingReferenceProbe {
                 passed = false
                 continue
             }
+            if let rawDepth = environment["MLXCAT_INKLING_PROBE_DRAFT"], let depth = Int(rawDepth), depth >= 0 {
+                let steps = environment["MLXCAT_INKLING_DRAFT_STEPS"].flatMap(Int.init).flatMap { $0 > 0 ? $0 : nil }
+                let promptPath = environment["MLXCAT_INKLING_PROFILE_PROMPT_FILE"]
+                let target: LMInput
+                if let promptPath {
+                    let prompt = try String(contentsOfFile: promptPath, encoding: .utf8)
+                    target = try runtime.prepare(UserInput(
+                        chat: [.user(prompt)], additionalContext: ["reasoning_effort": "none"]))
+                } else {
+                    target = input
+                }
+                let expected = Array(fixture.generatedIDs.prefix(64))
+                let result = try runtime.greedyDecode(
+                    in: target, chunk: fixture.prefillChunk, steps: steps ?? expected.count, draftDepth: depth)
+                print("\(name) decode: \(target.text.tokens.size) prompt, \(result.tokens.count) output, "
+                    + "\(Double(result.tokens.count) / result.seconds) tok/s, "
+                    + "\(result.accepted)/\(result.proposed) accepted")
+                print("Token IDs: \(result.tokens)")
+                if steps == nil && promptPath == nil {
+                    let matching = zip(result.tokens, expected).prefix(while: { $0.0 == $0.1 }).count
+                    print("\(name): \(matching)/\(expected.count) speculative greedy tokens")
+                    passed = passed && matching == expected.count && result.tokens.count == expected.count
+                }
+                continue
+            }
             if let rawSteps = environment["MLXCAT_INKLING_PROFILE_STEPS"],
                 let steps = Int(rawSteps), steps > 0
             {
@@ -91,10 +116,19 @@ struct InklingReferenceProbe {
             }
             if environment["MLXCAT_INKLING_PROBE_VERIFY_PANEL"] == "1" {
                 let panel = Array(expected.prefix(8))
+                let prefix = environment["MLXCAT_INKLING_VERIFY_PREFIX"].flatMap(Int.init)
+                let panelInput: LMInput
+                if let prefix, prefix > 0, prefix < input.text.tokens.size, input.image == nil {
+                    panelInput = LMInput(tokens: input.text.tokens.reshaped(-1)[..<prefix])
+                } else {
+                    panelInput = input
+                }
                 let proof = try runtime.compareVerificationPanel(
-                    panel, in: input, chunk: fixture.prefillChunk)
+                    panel, in: panelInput, chunk: fixture.prefillChunk)
                 print("\(name): panel vs serial over \(panel.count) rows, max error "
-                    + "\(proof.maximumLogitError), top-token differences \(proof.differentTopTokens)")
+                    + "\(proof.maximumLogitError), top-token differences \(proof.differentTopTokens), "
+                    + "nonidentical logit rows \(proof.differentLogitRows), cache exact \(proof.cacheExact)")
+                if prefix != nil { continue }
             }
             let actual = try runtime.compare(
                 expected, in: input, chunk: fixture.prefillChunk,

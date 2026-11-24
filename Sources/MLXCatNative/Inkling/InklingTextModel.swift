@@ -119,11 +119,12 @@ struct InklingTextModel {
 
     func forward(
         embeddings: MLXArray, cache: inout [VisitState], projectLogits: Bool = true,
-        observe: DecodeStageObserver? = nil
+        observe: DecodeStageObserver? = nil, capture: ((Int, MLXArray) -> Void)? = nil
     ) -> MLXArray {
         precondition(cache.count == loop.visits.count)
         let residual = loop.forward(embedding: embeddings, makeBank: InklingMath.messageBank) {
             slot, visit, bank, stream in
+            capture?(slot, stream.partial)
             let messages = bank.map {
                 InklingMath.messages(query: messageQueries[visit.layer - config.loop.start], bank: $0)
             }
@@ -132,13 +133,15 @@ struct InklingTextModel {
                 boundary: visit.layer.isMultiple(of: config.residualBlockSize), state: &cache[slot],
                 observe: observe)
         }
-        guard projectLogits else { return residual.partial }
+        guard projectLogits || capture != nil else { return residual.partial }
         let hidden = InklingMath.attentionResidual(
             states: residual.completed + [residual.partial], query: finalQuery,
             normalizeValues: config.normalizeResidual).squeezed(axis: -2)
         let normalized = MLXFast.rmsNorm(hidden, weight: finalNorm, eps: config.rmsEpsilon)
-            .asType(embeddingNorm.dtype).asType(.float32)
-        let logits = vocabulary(normalized)
+            .asType(embeddingNorm.dtype)
+        capture?(loop.visits.count, normalized)
+        guard projectLogits else { return normalized }
+        let logits = vocabulary(normalized.asType(.float32))
         let capped = tanh(logits / config.logitCap) * config.logitCap
         return capped[.ellipsis, ..<config.vocabularySize]
     }

@@ -62,3 +62,36 @@ keeps the snapshot after the anchor and matching proposals. The next
 anchor is the exact target argmax at that accepted boundary. Thus the
 committed cache and the emitted prefix advance by ordinary greedy
 steps. The drafter only observes features from committed rows.
+
+## Control results
+
+The singleton-arithmetic panel trial matched all 96 full-vocabulary
+rows per release checkpoint bit for bit, along with every compared
+final KV and convolution array and cache offset. Two additional
+eight-row trials on the 4/8-bit release crossed offsets 1,024 and 8,192
+from populated prefixes. Both matched all logits and cache state.
+The batches that kept packed dense GEMV and unsorted vector expert
+gathers while invoking SDPA per row also matched the code and long
+context panels on both packs.
+
+The strict DSpark control matched 760/760 greedy IDs on each release
+pack. The timed pair used the 4/8-bit release, 128 output tokens and
+three DSpark proposals per round under an exclusive machine lease.
+Rates exclude target and drafter prefill and include proposals,
+verification and state commits.
+
+| Input | Plain greedy | DSpark with singleton checks | Identical output IDs | Accepted proposals |
+| --- | ---: | ---: | ---: | ---: |
+| 32 tokens | 20.96 tok/s | 9.81 tok/s | 128/128 | 66/183 |
+| 4,630 tokens | 18.05 tok/s | 8.24 tok/s | 128/128 | 68/179 |
+
+The strict verifier groups the host readback and still submits each
+target row's singleton GPU operations. It leaves native serving on
+ordinary decode. In the standalone fixture tool, set
+`MLXCAT_INKLING_PROBE_DRAFT=3` to reproduce the control, or use `0` for
+plain timing. `MLXCAT_INKLING_PROFILE_PROMPT_FILE` supplies a benchmark
+prompt and `MLXCAT_INKLING_DRAFT_STEPS` sets its output budget. Without
+these two overrides, the tool compares the emitted IDs against the
+selected fixture. The two verified draft archives had the same
+SHA-256, matching the checksum shipped with the M5 Pro pack.
+Raw benchmark and trace receipts are local and unpublished.

@@ -104,6 +104,13 @@ final class InklingLanguageModel: Module, LanguageModel {
     func prepare(
         _ input: LMInput, cache: [any KVCache], state: LMOutput.State?, prefill: PrefillParameters
     ) throws -> PrepareResult {
+        try prepare(input, cache: cache, prefill: prefill, capture: nil)
+    }
+
+    func prepare(
+        _ input: LMInput, cache: [any KVCache], prefill: PrefillParameters,
+        capture: ((Int, MLXArray) -> Void)?
+    ) throws -> PrepareResult {
         guard input.text.tokens.size > 0 else { throw InklingInputProcessor.InputError.emptyPrompt }
         let tokens = input.text.tokens.reshaped(1, -1)
         let embeddings = textModel.embed(tokens)
@@ -117,11 +124,13 @@ final class InklingLanguageModel: Module, LanguageModel {
         let last = tokens.dim(1) - 1
         for start in stride(from: 0, to: last, by: chunkSize) {
             let end = min(last, start + chunkSize)
-            _ = forward(embeddings[0..., start..<end, 0...], cache: cache, projectLogits: false)
+            _ = forward(
+                embeddings[0..., start..<end, 0...], cache: cache, projectLogits: false, capture: capture)
             eval(cache)
             Memory.clearCache()
         }
-        return .logits(.init(logits: forward(embeddings[0..., last..., 0...], cache: cache)))
+        return .logits(.init(logits: forward(
+            embeddings[0..., last..., 0...], cache: cache, capture: capture)))
     }
 
     private func insertImageFeatures(
@@ -162,12 +171,12 @@ final class InklingLanguageModel: Module, LanguageModel {
 
     func forward(
         _ embeddings: MLXArray, cache: [any KVCache]?, projectLogits: Bool = true,
-        observe: InklingTextModel.DecodeStageObserver? = nil
+        observe: InklingTextModel.DecodeStageObserver? = nil, capture: ((Int, MLXArray) -> Void)? = nil
     ) -> MLXArray {
         let caches = cache?.map { $0 as! InklingVisitCache }
         var visits = caches?.map(\.visit) ?? textModel.makeCache()
         let result = textModel.forward(
-            embeddings: embeddings, cache: &visits, projectLogits: projectLogits, observe: observe)
+            embeddings: embeddings, cache: &visits, projectLogits: projectLogits, observe: observe, capture: capture)
         if let caches {
             for (cache, visit) in zip(caches, visits) { cache.visit = visit }
         }
