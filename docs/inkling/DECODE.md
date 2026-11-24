@@ -114,3 +114,10 @@ of 0.0 in the weighted verifier.
 Set `MLXCAT_INKLING_COMPILED_EXPERTS=0` for the comparison path. Receipts
 are in `overnight-compiled-expert-ab`, `overnight-compiled-http` and
 `overnight-compiled-Inkling-*.txt`.
+
+On the same 4,630-token prompt used by MTPLX, an HTTP pair improved from
+18.56 to 19.05 tok/s with all 128 IDs matching between the native arms.
+Peak was 24.32–24.33 GiB. This is a matched prompt and output budget across
+runtimes, with different checkpoint layouts and with MTPLX's prompt restored
+from cache. The turn's prefill is excluded from decode throughput. The
+remaining gap is still roughly 2.2×. Receipt: `overnight-matched-http`.
