@@ -475,3 +475,27 @@ duplicate-row tokens, and exact greedy decisions whenever the serial
 winner's margin exceeds twice the tolerance distinguish expected width
 rounding from a scheduling defect. The existing strict stress test
 still reports the two differing rows.
+
+### Automatic lookup and decode rate
+
+The three affine suites also passed through automatic package lookup
+with exact tool prompts and zero error on every sampled logit. Both
+Inkling packs passed 760/760 greedy IDs and 960/960 sampled logits in
+the app-bundle layout with the precise resource and stock fallback
+both present. These tests use an Xcode host and native model probes.
+The installed app retains its original dependency pins.
+
+The decode A/B used the same optimized native HTTP binary in both
+app-bundle layouts. After one warmup, each cell reports the median
+of three 64-token requests using the server's decode-rate counter.
+
+| Model | Stock tok/s | Precise tok/s | Change |
+|---|---:|---:|---:|
+| Kestrel-4B-Coder-4bit | 70.23 | 69.18 | -1.5% |
+| Qwen3.8-27B-4bit | 13.60 | 13.07 | -3.9% |
+| DaisyRose-27B-4bit | 13.65 | 13.54 | -0.8% |
+| Inkling-2-Mini-MLX-4-8bit | 21.11 | 20.87 | -1.1% |
+| Inkling-2-Mini-MLX-M5Pro-48gb | 21.14 | 20.38 | -3.6% |
+
+The standard suite passed 574 XCTest cases with 70 opt-in skips and
+all 10 Swift Testing cases. All 24 strict Metal 3 checks passed.
