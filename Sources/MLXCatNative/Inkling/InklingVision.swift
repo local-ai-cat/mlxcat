@@ -147,6 +147,16 @@ struct InklingVision {
             out[size_t(y) * outWidth * channels + gx] = result;
             """)
 
+    // One ULP in the frequencies can move a rotated key across a BF16
+    // rounding boundary. Use the precise Metal function to match mlx-vlm.
+    private static let rotaryFrequencies = MLXFast.metalKernel(
+        name: "mlxcat_inkling_rotary_frequencies",
+        inputNames: ["exponents"], outputNames: ["frequencies"],
+        source: """
+            const uint i = thread_position_in_grid.x;
+            frequencies[i] = metal::precise::pow(10000.0f, exponents[i]);
+            """)
+
     private func spatialAngles(rows: Int, columns: Int) -> MLXArray {
         let merge = config.merge
         var coordinates: [Float] = [0, 0]
@@ -162,7 +172,15 @@ struct InklingVision {
         }
         let spatialWidth = config.width / config.heads / 2
         let exponents = -arange(0, spatialWidth, step: 2).asType(.float32) / Float(spatialWidth)
-        let inverse = pow(MLXArray(Float(10_000)), exponents)
+        let inverse: MLXArray
+        if Device.defaultDevice().deviceType == .gpu {
+            inverse = Self.rotaryFrequencies(
+                [exponents], grid: (exponents.size, 1, 1),
+                threadGroup: (min(exponents.size, 64), 1, 1),
+                outputShapes: [exponents.shape], outputDTypes: [.float32])[0]
+        } else {
+            inverse = pow(MLXArray(Float(10_000)), exponents)
+        }
         let products = MLXArray(coordinates).reshaped(-1, 2, 1) * inverse
         let angles = products.reshaped(coordinates.count / 2, spatialWidth)
         return stacked([angles, angles], axis: -1)
