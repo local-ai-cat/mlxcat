@@ -88,10 +88,17 @@ package enum NativeQwenToolSchema {
         }
         return try orderedObject(object, first: ["type", "description", "properties", "required", "additionalProperties"]) {
             key, value in
-            if key == "properties", let properties = value as? [String: any Sendable] {
-                return try orderedObject(properties, first: []) { _, value in try schema(value) }
+            switch key {
+            case "properties", "$defs", "definitions":
+                if let properties = value as? [String: any Sendable] {
+                    return try orderedObject(properties, first: []) { _, value in try schema(value) }
+                }
+            case "items", "additionalProperties", "anyOf", "allOf", "oneOf", "not":
+                return try schema(value)
+            default:
+                break
             }
-            return try schema(value)
+            return try Jinja.Value(any: value)
         }
     }
 
