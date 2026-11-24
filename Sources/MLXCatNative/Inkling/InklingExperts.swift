@@ -96,15 +96,39 @@ struct InklingExperts {
                 let result = gatherQuantizedMM(
                     input.asType(.float32), weight, scales: scales, biases: nil,
                     rhsIndices: indices, groupSize: 16, bits: 4, mode: .nvfp4, sortedIndices: sorted)
-                let factor: MLXArray
-                if globalScale.size == 1 {
-                    factor = globalScale.asType(.float32).reshaped([])
-                } else {
-                    let rows = globalScale.asType(.float32).reshaped(weight.dim(0), -1)
-                    factor = rows[indices].expandedDimensions(axis: -2)
-                }
-                return (result * factor).asType(input.dtype)
+                return applyNVFP4Scale(result, scale: globalScale, indices: indices, dtype: input.dtype)
             }
+        }
+
+        func applyNVFP4Scale(_ result: MLXArray, scale: MLXArray, indices: MLXArray, dtype: DType) -> MLXArray {
+            let factor: MLXArray
+            if scale.size == 1 {
+                factor = scale.asType(.float32).reshaped([])
+            } else {
+                let rows = scale.asType(.float32).reshaped(weight.dim(0), -1)
+                factor = rows[indices].expandedDimensions(axis: -2)
+            }
+            return (result * factor).asType(dtype)
+        }
+    }
+
+    struct PairedNVFP4 {
+        let weight: MLXArray
+        let scales: MLXArray
+
+        init?(up: Projection, gate: Projection) {
+            guard case .nvfp4 = up.format, case .nvfp4 = gate.format,
+                up.weight.shape == gate.weight.shape, up.scales.shape == gate.scales.shape,
+                up.weight.dim(1).isMultiple(of: 8)
+            else { return nil }
+            weight = concatenated([up.weight, gate.weight], axis: 1)
+            scales = concatenated([up.scales, gate.scales], axis: 1)
+        }
+
+        func projection(rows: Range<Int>, format: Projection.Format) -> Projection {
+            Projection(
+                weight: weight[0..., rows, 0...], scales: scales[0..., rows, 0...],
+                format: format)
         }
     }
 
@@ -117,6 +141,7 @@ struct InklingExperts {
     let routeScale: Float
     let upCap: Float
     let gateCap: Float
+    var paired: PairedNVFP4? = nil
 
     func callAsFunction(_ input: MLXArray) -> MLXArray {
         let routes = InklingMath.route(
@@ -141,8 +166,23 @@ struct InklingExperts {
     }
 
     private func project(_ input: MLXArray, indices: MLXArray, sorted: Bool) -> MLXArray {
-        let upValues = up(input, indices: indices, sorted: sorted)
-        let gateValues = gate(input, indices: indices, sorted: sorted)
+        let upValues: MLXArray
+        let gateValues: MLXArray
+        if let paired, !sorted, indices.size == topK, topK == 8,
+            case .nvfp4(let upScale) = up.format, case .nvfp4(let gateScale) = gate.format
+        {
+            let both = gatherQuantizedMM(
+                input.asType(.float32), paired.weight, scales: paired.scales, biases: nil,
+                rhsIndices: indices, groupSize: 16, bits: 4, mode: .nvfp4)
+            let width = up.weight.dim(1)
+            upValues = up.applyNVFP4Scale(
+                both[.ellipsis, ..<width], scale: upScale, indices: indices, dtype: input.dtype)
+            gateValues = gate.applyNVFP4Scale(
+                both[.ellipsis, width...], scale: gateScale, indices: indices, dtype: input.dtype)
+        } else {
+            upValues = up(input, indices: indices, sorted: sorted)
+            gateValues = gate(input, indices: indices, sorted: sorted)
+        }
         let hidden = InklingMath.gatedActivation(
             up: upValues, gate: gateValues, upCap: upCap, gateCap: gateCap)
         return down(hidden, indices: indices, sorted: sorted).squeezed(axis: -2)

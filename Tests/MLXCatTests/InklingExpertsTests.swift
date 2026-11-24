@@ -4,6 +4,38 @@ import XCTest
 @testable import MLXCatNative
 
 final class InklingExpertsTests: XCTestCase {
+    func testPairedNVFP4PreservesTopEightOutputAndPrefill() throws {
+        try MLXMetalRuntime.requireAvailable()
+        let count = 16
+        let width = 32
+        let weight = sin(arange(count * width * width).asType(.float32) * 0.03)
+            .reshaped(count, width, width)
+        func projection(_ offset: Float) -> InklingExperts.Projection {
+            let packed = quantized(weight + offset, groupSize: 16, bits: 4, mode: .nvfp4)
+            return .init(weight: packed.wq, scales: packed.scales,
+                         format: .nvfp4(scale: (arange(count).asType(.float32) + 1) * 0.02))
+        }
+        let up = projection(0.2)
+        let gate = projection(-0.2)
+        let pair = try XCTUnwrap(InklingExperts.PairedNVFP4(up: up, gate: gate))
+        let router = weight[0 ..< count, 0, 0...]
+        let bias = MLXArray.zeros([count])
+        let down = projection(0.1)
+        let reference = InklingExperts(
+            router: router, routingBias: bias, up: up, gate: gate, down: down,
+            topK: 8, routeScale: 8, upCap: 25, gateCap: 4)
+        let fused = InklingExperts(
+            router: router, routingBias: bias,
+            up: pair.projection(rows: 0..<width, format: up.format),
+            gate: pair.projection(rows: width..<(width * 2), format: gate.format),
+            down: down, topK: 8, routeScale: 8, upCap: 25, gateCap: 4, paired: pair)
+        for length in [1, 32] {
+            let input = cos(arange(length * width).asType(.float32) * 0.17)
+                .reshaped(1, length, width).asType(.bfloat16)
+            XCTAssertEqual(reference(input).asArray(Float.self), fused(input).asArray(Float.self))
+        }
+    }
+
     func testMXFP8VectorGatherMatchesTheAlignedMLXKernel() throws {
         try MLXMetalRuntime.requireAvailable()
         let width = 256

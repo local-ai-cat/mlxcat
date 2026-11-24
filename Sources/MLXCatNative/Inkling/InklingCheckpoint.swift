@@ -148,11 +148,21 @@ extension InklingCheckpoint {
             queryScale: required("\(attention).q_scale"),
             relativeScale: required("\(attention).rel_scale"),
             keyConvolution: convolution("k"), valueConvolution: convolution("v"))
+        let originalUp = try expert("up")
+        let originalGate = try expert("gate")
+        let pairExperts = ProcessInfo.processInfo.environment["MLXCAT_INKLING_PAIRED_EXPERTS"] == "1"
+        let paired = pairExperts ? InklingExperts.PairedNVFP4(up: originalUp, gate: originalGate) : nil
+        let middle = originalUp.weight.dim(1)
+        if let paired {
+            eval(paired.weight, paired.scales)
+        }
         let experts = try InklingExperts(
             router: required("\(mlp).gate_weight"), routingBias: required("\(mlp).e_score_correction_bias"),
-            up: expert("up"), gate: expert("gate"), down: expert("down"),
+            up: paired?.projection(rows: 0..<middle, format: originalUp.format) ?? originalUp,
+            gate: paired?.projection(rows: middle..<(2 * middle), format: originalGate.format) ?? originalGate,
+            down: expert("down"),
             topK: config.routeCount, routeScale: config.routeScale,
-            upCap: config.upCap, gateCap: config.gateCap)
+            upCap: config.upCap, gateCap: config.gateCap, paired: paired)
         let normNames = isLocal ? ["input"] : ["q_input", "k_input", "v_input"]
         let norms = try normNames.map { try required("\(prefix).\($0)_layernorm.weight") }
         let controllers: [InklingTextModel.Controller]

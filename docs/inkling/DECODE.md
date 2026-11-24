@@ -181,3 +181,32 @@ The comparison controls the weight pack and prompt. It does not prove
 cross-runtime parity, since the two implementations use different
 activation arithmetic. The same-pack runtime gap was about 1.9× in
 the cold-prompt comparison, which excludes prefill time.
+
+## Top-eight NVFP4 decode with a shared gate/up bank
+
+`MLXCAT_INKLING_PAIRED_EXPERTS=1` combines the selected gate and up
+projections into one FP32-accumulating gathered GEMV. It uses the pinned
+MLX top-eight router and its ordering. Per-projection scales, BF16 rounds,
+activation and reduction stay in their reference order. The prefill path
+reads separate views of a shared packed bank so it does not retain a
+second set of projection weights.
+
+| Native HTTP prompt | Separate projections | Shared pair | Exact output |
+| --- | ---: | ---: | --- |
+| 32 tokens, 256 output | 22.71–22.80 tok/s | 22.91–23.15 tok/s | 256/256 |
+| 4,630 tokens, 128 output | 18.91 tok/s | 19.24 tok/s | 128/128 |
+
+Both original checkpoints matched 760/760 greedy IDs and 960/960 sampled
+logits, with zero observed logit error. A synthetic test compares the paired
+singleton and separate prefill paths. The longer prompt's TTFT rose from
+19.60 to 20.58 s. The paired path is opt-in because its decode gain is
+small and the prefill views can require contiguous copies.
+
+A stride-aware prefill trial preserved both checkpoints' exact outputs,
+but its common prefill kernel was slower in both A/B arms. In that trial
+the 4,630-token decode moved from 19.02 to 19.11 tok/s. The stride change
+was removed. Two handwritten Metal gate/up trials also failed the code
+fixture (39/64 greedy IDs, 1.2505 maximum sampled-logit error), including
+a variant that retained the reference activation. A single kernel that
+also computes top-eight routing remains unqualified for exact release
+output. The raw trial receipts are local and unpublished.
