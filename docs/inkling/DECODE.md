@@ -50,7 +50,7 @@ An 8,225-token HTTP A/B enabled graph overlap in both arms and varied only `MLXC
 
 The reference probe with reserved KV enabled matched 760/760 greedy IDs and all 960 sampled logits for each of the netprojects and baytizzel checkpoints. The maximum observed absolute logit error was 0.0, including each 8,225-token fixture.
 
-Raw receipts are under `/Volumes/scratch/lac-dd-1121/inkling/` in `ar-decode-profile`, `ar-count`, `ar-sync-count`, `ar-matched-prompt`, `ar-stages`, `ar-native-variants`, `ar-native-controller-ab`, `ar-native-kv-ab`, `ar-native-global-ab`, `ar-native-global-long`, `ar-reserved-http`, `ar-copy-final`, and `ar-final-Inkling-*.txt`. Each measured run held the exclusive machine lease.
+The raw benchmark receipts were retained locally and are unpublished. Each measured run held the exclusive machine lease.
 
 ## Paired NVFP4 projection trial
 
