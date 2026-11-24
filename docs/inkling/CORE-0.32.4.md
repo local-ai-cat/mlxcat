@@ -234,3 +234,144 @@ directly to the output. The buffer total describes the trace, while
 the process peak also covers other working allocations.
 [Old core dispatch](https://github.com/atlas-open-sources/mlx/blob/5186c44bf7d10c07a4e4fc7838da881c6c031c33/mlx/backend/metal/quantized.cpp#L1315-L1339),
 [New split-K allocation and reducer](https://github.com/ml-explore/mlx/blob/v0.32.4/mlx/backend/metal/quantized.cpp#L1180-L1277).
+
+### Layer-three full attention
+
+The Kestrel regression after the gated-delta correction was concentrated in
+two fixtures. The score sums the common greedy prefix of each fixture. A
+single early miss excludes the rest of that fixture from the count even
+though the harness continues on the Python prefix and compares the logits.
+
+| Kestrel fixture | Before GDN correction | After GDN correction | With fused RoPE |
+|---|---:|---:|---:|
+| Literal | 1/19 | 19/19 | 19/19 |
+| Reasoning | 56/64 | 10/64 | 56/64 |
+| Short chat | 23/23 | 3/23 | 3/23 |
+| Total across 11 fixtures | 304/330 | 256/330 | 302/330 |
+
+At reasoning index 10, Python scored its winner (15060) at 19.75 and
+mlxcat's winner (13) at 19.625. At short-chat index 3, Python scored both
+353 and 10252 at 19.875 and selected 353. These are zero-based output
+indices. Reducing the overall max logit error did not guarantee preserving
+these local rankings. The earlier GDN error had moved the logits enough
+for the legacy rotation path to pick the Python token at both positions.
+With GDN corrected, blocks 0–2 matched on both teacher-forced steps and
+the first nonzero layer boundary was block 3 (0.001953125 for reasoning,
+0.0009765625 for short chat). Replacing only the rotation zeroed the
+reasoning boundary and restored the greedy prefix through index 55.
+Short chat still differed at block 3 by 0.00048828125 and selected the
+other tied candidate.
+
+The real-weight layer-3 probe held the Python input fixed, replayed each
+operator independently and compared BF16 outputs. Q/K/V projections,
+Q/K RMS normalization, KV writes, output gating and output projection were
+exact on their respective reference operands. Legacy M-RoPE first changed
+the normalized queries and keys. Its largest query delta was 0.03125 on
+each pack in the code prefill. Swift calculated the angles with reciprocal
+powers, cast cos/sin to BF16, and multiplied and added separate BF16
+tensors. mlx-lm's default text RoPE called the core's fused
+half-split rotation, using `exp2`, FP32 trig and FP32 rotation before the
+final BF16 write. The scalar and per-row offset APIs run that same
+rotation. [Original Swift Q/K normalization and full attention](https://github.com/atlas-open-sources/mlx-swift-lm/blob/3123a08d910ae80f399845d5172c1e6c570608dc/Libraries/MLXVLM/Models/Qwen35.swift#L379-L430), [Original Swift rotary arithmetic](https://github.com/atlas-open-sources/mlx-swift-lm/blob/3123a08d910ae80f399845d5172c1e6c570608dc/Libraries/MLXVLM/Models/Qwen35.swift#L232-L309), [Python Q/K and rotary path](https://github.com/ml-explore/mlx-lm/blob/v0.31.3/mlx_lm/models/qwen3_next.py#L113-L158), [Python default RoPE](https://github.com/ml-explore/mlx-lm/blob/v0.31.3/mlx_lm/models/rope_utils.py#L235-L251), [Metal rotation](https://github.com/ml-explore/mlx/blob/36969c094354086e15d2a327a9c50feb20b9cf11/mlx/backend/metal/kernels/rope.metal#L20-L65).
+
+Contiguous positions now take the fused default path, using the start of
+each row across prefill, decode and windowed continuation. Image and video
+spans retain explicit temporal, height and width coordinates. The code
+prefill is now exact through layer 3 on all three packs. This initial
+comparison used the default package-bundled metallib in XCTest.
+
+| Model | GDN fix greedy | Fused RoPE greedy | Sampled logits | Max delta before → after | First remaining code-prefill boundary |
+|---|---:|---:|---:|---:|---|
+| Qwen3.8-27B-4bit | 307/307 | 307/307 | 808 | 0.75 → 0.5 | Layer 46, 0.25 |
+| Kestrel-4B-Coder-4bit | 256/330 | 302/330 | 856 | 0.5 → 0.375 | All 32 blocks exact |
+| DaisyRose-27B-4bit | 293/307 | 307/307 | 808 | 0.75 → 0.625 | Layer 7, 0.00390625 |
+
+These counts use the same Python token IDs in both engines. The separate
+tool-schema key-order difference still changes the rendered prompt on all
+three packs. With that fixture excluded, the numerical maxima are 0.375,
+0.375 and 0.5, respectively, above the 0.25 gate.
+
+With identical rotated Q/K and BF16 V, the causal descriptor and explicit
+boolean mask produced identical output for the code prefill and both
+captured 1,024-row chunks on all three packs. The Kestrel short-chat decode
+probe still found one different output out of 4,096 (0.0009765625) with
+both the original and contiguous Python operands. The separate gate and
+output projection replays were exact. Swift and Python both pass ordinary
+BF16 KV caches to the core. Metal uses the vector kernel for at most eight
+query rows, with float accumulators. The captured single-row case takes
+the one-pass vector path. [Swift SDPA and KV dispatch](https://github.com/atlas-open-sources/mlx-swift-lm/blob/3123a08d910ae80f399845d5172c1e6c570608dc/Libraries/MLXLMCommon/AttentionUtils.swift#L46-L111), [Python SDPA dispatch](https://github.com/ml-explore/mlx-lm/blob/v0.31.3/mlx_lm/models/base.py#L108-L137), [Metal SDPA dispatch](https://github.com/ml-explore/mlx/blob/36969c094354086e15d2a327a9c50feb20b9cf11/mlx/backend/metal/scaled_dot_product_attention.cpp#L1507-L1581), [Vector precision](https://github.com/ml-explore/mlx/blob/36969c094354086e15d2a327a9c50feb20b9cf11/mlx/backend/metal/kernels/sdpa_vector.h#L50-L160).
+
+Reproduce with `Benchmarks/full_attention_reference.py CHECKPOINT FIXTURES
+OUTPUT_DIRECTORY` in the mlx-lm reference environment. Run the
+`FullAttentionProjectionProbeTests` filter with `MLXCAT_ATTN_MODEL` set to
+the same checkpoint and `MLXCAT_ATTN_CAPTURE` set to the output directory.
+The probe also accepts a full-attention layer index through `--layer` in
+Python and `MLXCAT_ATTN_LAYER` in Swift.
+
+The compiled Metal library explains additional differences after the Swift
+path uses the same RoPE operator as Python. With the default bundled
+library, both scalar and array offsets reproduce the 1,024-row residual
+even when Q/K are bit-exact and the head/sequence layout is preserved. For example,
+Kestrel's second chunk changes 12 of 4,194,304 rotated query values, with
+a maximum delta of 0.0078125. DaisyRose's first code-prefill difference
+after layer 3 is one rotated query value at layer 7, also 0.0078125.
+
+Explicitly loading each of the two stock mlxcat artifacts isolated
+the build difference. The package resource compiled by Swift Build
+uses `-fmetal-math-mode=fast` and `-fmetal-math-fp32-functions=fast`.
+The standalone builder compiles with `-fno-fast-math`. Both stock
+artifacts use the same source, compiler 32023.921 and macOS 14
+deployment target. The standalone artifact zeroed the captured
+long-window RoPE differences and the single-row SDPA difference.
+The embedded artifact reproduced both. [Standalone builder](../../scripts/build-metallib.sh#L29), [Metal RoPE dispatch](https://github.com/ml-explore/mlx/blob/36969c094354086e15d2a327a9c50feb20b9cf11/mlx/backend/metal/rope.cpp#L44-L120).
+
+The Python wheel metallib and a local macOS 26.2 rebuild also zeroed the
+captured differences. A precise sine/cosine trial compiled for macOS 14
+matched the Python readings, including operators outside RoPE. The
+stock standalone artifact gave the same result without that kernel
+patch. The retained model change uses the existing fused operator and
+the supported deployment target.
+
+The full standalone fixture run on macOS 14 matched all greedy IDs on
+the reference prompts. All sampled logits outside the 8,225-token
+fixture were exact, including the tool case when its input IDs were
+held fixed.
+
+| Model | Standalone greedy | Sampled logits | Max delta | Numerical gate ≤ 0.25 |
+|---|---:|---:|---:|---|
+| Qwen3.8-27B-4bit | 307/307 | 808 | 0.375 | Above gate |
+| Kestrel-4B-Coder-4bit | 330/330 | 856 | 0.25 | Within gate |
+| DaisyRose-27B-4bit | 307/307 | 808 | 0.375 | Above gate |
+
+The macOS 26.2 and precise sine/cosine controls produced the same
+fixture results. A minimal Swift Build shader package kept its fast-math
+flags when given an `XCODE_XCCONFIG_FILE` override. Closing the embedded
+gap requires control over package shader compilation. The standalone
+run also needs a separate numerical correction in the long-context
+path for Qwen3.8 and DaisyRose.
+
+The 1,024-row prefill also differs before full attention with the bundled
+library. The first nonzero boundary is layer 1 on all three packs. The
+reference metallib restores that boundary and the next two in the
+captured first chunks on Qwen3.8 and Kestrel. In the separate Qwen3.8
+short-prompt trace, layer 46 still differs in the end-to-end run, but
+replaying the captured layer's affine projections, recurrent update,
+attention output and MLP individually gives exact outputs. That trace
+localizes a boundary without assigning the difference to one of those
+operators.
+
+Both official Inkling packs remain exact at 760/760 greedy IDs and
+960/960 sampled logits each, including the image fixture. The pinned
+Swift suite ran 573 XCTest cases with 70 opt-in skips and zero failures,
+and all 10 Swift Testing cases passed. The opt-in Kestrel ragged-width-4
+and prefix tests passed. The width-8 stress test had one divergent row
+before and two after the RoPE change, so width-8 token parity remains
+unqualified for this pack. The unchanged strict Metal 3 matrix passed
+all 24 checks. The benchmark harness passed 28 tests and its parity and
+leaderboard checks passed.
+
+The standalone fixture run can be reproduced by pointing
+`MLXCAT_SURVEY_METALLIB` at the library generated by
+`scripts/build-metallib.sh`. The full-attention probe takes the same
+override through `MLXCAT_ATTN_METALLIB`. Use a separate process for
+each artifact because MLX opens the device library once per process.

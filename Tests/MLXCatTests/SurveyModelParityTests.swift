@@ -25,6 +25,9 @@ final class SurveyModelParityTests: XCTestCase {
         guard let directory = env["MLXCAT_SURVEY_MODEL"], let fixtures = env["MLXCAT_SURVEY_REFERENCE"] else {
             throw XCTSkip("Set MLXCAT_SURVEY_MODEL and MLXCAT_SURVEY_REFERENCE to verified local data.")
         }
+        if let metallib = env["MLXCAT_SURVEY_METALLIB"] {
+            GPU.metallib = URL(fileURLWithPath: metallib)
+        }
         try MLXMetalRuntime.requireAvailable()
         let cases = try JSONDecoder().decode([Case].self, from: Data(contentsOf: URL(fileURLWithPath: fixtures)))
         XCTAssertEqual(cases.count, 11)
