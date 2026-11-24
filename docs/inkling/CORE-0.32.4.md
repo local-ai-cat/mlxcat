@@ -141,7 +141,9 @@ position in every case.
 | VisualInference Inkling | 50 | 50/64 | 64/64 | 170248 at 27.62344 | 196980 at 27.65937 | 0.03593 for new |
 
 Both Qwen flips are one BF16 logit step. In all three cases the two
-candidates are Python's top two tokens at the changed position.
+candidates are Python's top two tokens at the changed position. The
+release rerun after the gated delta fix retained the same three
+match lengths against Python.
 
 ### Layer-zero gated delta
 
@@ -195,8 +197,15 @@ full-attention block.
 | DaisyRose-27B-4bit | 293/307 → 293/307 | 0.75 → 0.75 | 0.25 |
 
 Kestrel's literal fixture became exact, and its reasoning and short-chat
-fixtures diverged earlier. All three still exceed the 0.25 end-to-end
-tolerance, and the tool prompt key-order difference remains.
+fixtures diverged earlier. Python's margin at the new reasoning flip
+was 0.125, and the short-chat candidates tied at 19.875. All three still
+exceed the 0.25 end-to-end tolerance, and the tool prompt key-order
+difference remains.
+
+On this pin, both Inkling packs repeated their 760/760 greedy and
+960/960 sampled-logit matches at zero maximum error. The Swift suite
+reported 572 XCTest cases with zero failures and 69 opt-in skips.
+All 10 Swift Testing cases passed.
 
 ### Qwen3-1.7B repeat and allocation trace
 
