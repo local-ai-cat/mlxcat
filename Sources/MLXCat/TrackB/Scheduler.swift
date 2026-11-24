@@ -1031,7 +1031,7 @@ public actor Scheduler {
     ) -> [Int] {
         guard capturesRecurrentCheckpoints,
             !admission.storedPromptTokens.isEmpty,
-            admission.cache.contains(where: { !$0.isTrimmable })
+            admission.cache.contains(where: Self.requiresExactPrefixBoundary)
         else { return [] }
         let promptEnd = admission.prefillRange.upperBound
         let lastToken = promptEnd - 1
@@ -1058,7 +1058,7 @@ public actor Scheduler {
         PrefixRecurrentCheckpoint(
             position: Self.checkpointSabotage ? position - 1 : position,
             layers: cache.map { layer in
-                guard !layer.isTrimmable else { return nil }
+                guard usesWindowedPrefixCheckpoints || Self.requiresExactPrefixBoundary(layer) else { return nil }
                 return SerializedKVLayer(
                     state: layer.state,
                     metaState: layer.metaState,
@@ -1066,6 +1066,10 @@ public actor Scheduler {
                 )
             }
         )
+    }
+
+    static func requiresExactPrefixBoundary(_ layer: any KVCache) -> Bool {
+        layer is RotatingKVCache || !layer.isTrimmable
     }
 
     private func cacheSnapshot(uid: String) -> [SerializedKVLayer]? {

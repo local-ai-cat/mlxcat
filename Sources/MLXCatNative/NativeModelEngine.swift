@@ -914,21 +914,26 @@ public struct NativeModelLoader: EnginePoolModelLoader {
                 )
             }
         return await container.perform { context in
-            NativeModelEngine(
+            let capabilities = Self.cacheCapabilities(for: modelConfiguration)
+            let reuse = Scheduler.hybridPrefixReuseEnabled()
+            let reuseRollingCache = ProcessInfo.processInfo.environment["MLXCAT_ROLLING_PREFIX_REUSE"] == "1"
+            return NativeModelEngine(
                 context: context,
                 modelID: id,
                 maxContextTokens: try? contextWindow(in: modelURL),
                 maxConcurrentRequests: maxConcurrentRequests,
-                cacheCapabilities: Self.cacheCapabilities(for: modelConfiguration),
+                cacheCapabilities: capabilities,
                 serializationPolicy: Self.serializationPolicy(modelType: modelType, isVLM: isVLM),
                 // Text-only requests on a VLM take the scheduler path (and so the prefix
                 // cache) when hybrid prefix reuse is on; images still go through `prepare`.
-                schedulerManagedTextPrefill: !isVLM || Scheduler.hybridPrefixReuseEnabled(),
+                schedulerManagedTextPrefill: !isVLM || reuse,
                 chunkIdlePrefill: Self.chunksIdlePrefill(modelType: modelType),
                 // Resolved per model, not per process: `gpt_oss` is excluded
                 // because its quantized attention route drops attention sinks.
                 kvQuantization: KVQuantizationPolicy.resolved(
-                    .fromEnvironment(), modelType: modelType)
+                    .fromEnvironment(), modelType: modelType),
+                windowedLayerDecoder: capabilities.usesWindowedKVCache && reuse && reuseRollingCache
+                    ? BlockAwarePrefixKVStore.cache(from:) : nil
             )
         }
     }

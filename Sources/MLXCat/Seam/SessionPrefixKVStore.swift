@@ -338,7 +338,7 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
     /// The layers that cannot trim (recurrent state), index-aligned, `nil` elsewhere.
     private func recurrentLayers(of layers: [SerializedKVLayer]) -> [SerializedKVLayer?] {
         layers.map { layer in
-            guard let cache = try? restoreLayer(layer), !cache.isTrimmable
+            guard let cache = try? restoreLayer(layer), Scheduler.requiresExactPrefixBoundary(cache)
             else { return nil }
             return layer
         }

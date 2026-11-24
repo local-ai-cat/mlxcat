@@ -4,6 +4,20 @@ import MLXLMCommon
 import XCTest
 
 final class SessionPrefixKVStoreTests: XCTestCase {
+    func testRotatingPrefixRestoresChronologicalStateAfterWrap() throws {
+        let cache = RotatingKVCache(maxSize: 4, keep: 1, step: 2)
+        func append(_ value: Int, to cache: RotatingKVCache) -> [Float] {
+            let row = MLXArray(Float(value)).reshaped(1, 1, 1, 1)
+            return cache.update(keys: row, values: row).0.asArray(Float.self)
+        }
+        for token in 0..<7 { _ = append(token, to: cache) }
+        let layer = SerializedKVLayer(state: cache.state, metaState: cache.metaState, className: "RotatingKVCache")
+        let restored = try XCTUnwrap(BlockAwarePrefixKVStore.cache(from: layer) as? RotatingKVCache)
+        XCTAssertEqual(restored.offset, cache.offset)
+        XCTAssertEqual(append(7, to: restored), append(7, to: cache))
+        XCTAssertEqual(append(8, to: restored), append(8, to: cache))
+    }
+
     func testMambaLayerRoundTripsWithoutCoercingMetadataIntoSimpleCache() throws {
         let original = MambaCache()
         original[0] = MLXArray.zeros([1, 2, 3])

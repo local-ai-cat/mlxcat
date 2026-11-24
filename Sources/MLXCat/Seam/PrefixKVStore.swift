@@ -171,6 +171,20 @@ public final class BlockAwarePrefixKVStore: PrefixKVStore, @unchecked Sendable {
 
     public static func cache(from layer: SerializedKVLayer) throws -> any KVCache {
         switch layer.className {
+        case "RotatingKVCache":
+            let meta = layer.metaState
+            guard layer.state.count == 2, layer.state.allSatisfy({ $0.ndim == 4 }),
+                meta.count == 5 || meta.count == 6,
+                let keep = Int(meta[0]), let capacity = Int(meta[1]),
+                let step = Int(meta[2]), let offset = Int(meta[3]), let index = Int(meta[4]),
+                keep >= 0, capacity > keep, step > 0, offset >= 0, index >= 0,
+                layer.state.allSatisfy({ index <= $0.dim(2) }),
+                meta.count == 5 || ["modelNative", "requested"].contains(meta[5])
+            else { throw PrefixKVStoreError.unsupportedLayerState }
+            let cache = RotatingKVCache(maxSize: capacity, keep: keep, step: step)
+            cache.state = layer.state
+            cache.metaState = meta
+            return cache
         case "MambaCache":
             guard layer.state.count <= 2 else {
                 throw PrefixKVStoreError.unsupportedLayerState
