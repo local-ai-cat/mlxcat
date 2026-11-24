@@ -75,15 +75,15 @@ gathers while invoking SDPA per row also matched the code and long
 context panels on both packs.
 
 The strict DSpark control matched 760/760 greedy IDs on each release
-pack. The timed pair used the 4/8-bit release, 128 output tokens and
+pack. The timed pairs used the 4/8-bit release, 128 output tokens and
 three DSpark proposals per round under an exclusive machine lease.
 Rates exclude target and drafter prefill and include proposals,
 verification and state commits.
 
 | Input | Plain greedy | DSpark with singleton checks | Identical output IDs | Accepted proposals |
 | --- | ---: | ---: | ---: | ---: |
-| 32 tokens | 20.96 tok/s | 9.81 tok/s | 128/128 | 66/183 |
-| 4,630 tokens | 18.05 tok/s | 8.24 tok/s | 128/128 | 68/179 |
+| 32 tokens | 20.75–20.96 tok/s | 9.81–9.84 tok/s | 128/128 | 66/183 |
+| 4,630 tokens | 18.04–18.05 tok/s | 8.04–8.24 tok/s | 128/128 | 68/179 |
 
 The strict verifier groups the host readback and still submits each
 target row's singleton GPU operations. It leaves native serving on
@@ -95,3 +95,38 @@ these two overrides, the tool compares the emitted IDs against the
 selected fixture. The two verified draft archives had the same
 SHA-256, matching the checksum shipped with the M5 Pro pack.
 Raw benchmark and trace receipts are local and unpublished.
+
+## Packed draft-round experiment
+
+The packed verifier used batched dense GEMV with weights on the left
+and token column vectors on the right. This avoids the pinned Metal
+matmul's row-batch collapse (`backend/metal/matmul.cpp:1255–1265`).
+It kept unsorted singleton-width gathered expert projections and used
+an ordinary SDPA call for each row with that row's exact visible span
+and sink position. The first commit strategy repaired the accepted
+prefix after a rejection by running those rows again. The second saved
+each row's K/V state and sliced its four convolution histories out of
+the original convolution contexts. It reused the saved state at the
+accepted boundary.
+
+The scratch experiment ran the same two prompts under an exclusive
+lease. Each packed arm matched 128/128 greedy IDs against the ordinary
+control. Retaining the original row state improved on rerunning the
+accepted prefix, but remained slower than the ordinary target.
+
+| Input | Plain greedy | Packed with prefix rerun | Packed with row snapshots |
+| --- | ---: | ---: | ---: |
+| 32 tokens | 21.25 tok/s | 11.91 tok/s | 16.00 tok/s |
+| 4,630 tokens | 18.10 tok/s | 9.72 tok/s | 12.26 tok/s |
+
+The packed snapshot arm matched 760/760 greedy IDs on each release pack.
+On the coding fixture for each pack, a separate checked run also compared
+every drafted-row logit and each row's KV, convolution and offset
+snapshot against ordinary singleton execution. Those checks passed.
+This packed path stays in the scratch experiment because it lost both
+throughput comparisons. The opt-in strict probe remains reproducible
+from the branch.
+
+The clean branch rerun passed the Swift suite (567 XCTest cases with
+66 opt-in skips, plus 10 Swift Testing cases) and 28 benchmark
+safeguard tests. The leaderboard and benchmark parity checks passed.
