@@ -40,10 +40,28 @@ final class SingletonDecodeCopyTests: XCTestCase {
     }
 }
 
-private final class CopyCache: BaseKVCache, CopyPrebuildKVCache {
+private final class CopyCache: CopyPrebuildKVCache {
+    var offset = 0
+    let maxSize: Int? = nil
+    var state: [MLXArray] = []
+    var metaState: [String] = []
+    let isTrimmable = false
     var supportsCopyPrebuild: Bool { true }
 
-    override func copy() -> any KVCache {
+    func innerState() -> [MLXArray] { state }
+
+    func update(keys: MLXArray, values: MLXArray) -> (MLXArray, MLXArray) {
+        offset += keys.dim(2)
+        return (keys, values)
+    }
+
+    func trim(_ n: Int) -> Int { 0 }
+
+    func makeMask(n: Int, windowSize: Int?, returnArray: Bool) -> MLXFast.ScaledDotProductAttentionMaskMode {
+        .none
+    }
+
+    func copy() -> any KVCache {
         let result = CopyCache()
         result.offset = offset
         return result
