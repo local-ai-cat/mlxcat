@@ -172,15 +172,19 @@ The converted checkpoint was used only for a local text benchmark.
 
 | Runtime on Bare Speed text weights | Decode tok/s over 128 output tokens |
 | --- | ---: |
-| Native mlxcat HTTP | 22.40 |
+| Native mlxcat HTTP, compiled expert graph off | 22.40 |
+| Native mlxcat HTTP, default expert graph | 22.89 |
+| Native mlxcat HTTP, shared gate/up pair | 23.69 |
 | MTPLX AR, cold prompt controls | 41.82–42.23 |
 | MTPLX AR, cached prompt controls | 41.20–41.23 |
 
-The native and MTPLX sequences agreed through token 79, then diverged.
+Both native arms in the final pair matched all 128 IDs. Each native
+sequence agreed with MTPLX through token 79, then diverged.
 The comparison controls the weight pack and prompt. It does not prove
 cross-runtime parity, since the two implementations use different
-activation arithmetic. The same-pack runtime gap was about 1.9× in
-the cold-prompt comparison, which excludes prefill time.
+activation arithmetic. With the shared pair enabled, the same-pack
+runtime gap was about 1.8× in the cold-prompt comparison, which excludes
+prefill time.
 
 ## Top-eight NVFP4 decode with a shared gate/up bank
 
