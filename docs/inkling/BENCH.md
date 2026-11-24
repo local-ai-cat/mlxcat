@@ -379,6 +379,23 @@ on the 48 GiB host, and macOS overhead on a 16 GiB machine would further
 reduce the available budget. The fixed 16 GiB configuration did not
 qualify in this test.
 
+The same checkpoint and prompts were rerun with graph overlap and reserved
+global KV enabled, using an unseeded temperature-0 request. All 384 greedy
+IDs matched the corresponding earlier native runs.
+
+| Prompt tokens | Output tokens | Native physical peak GiB | Native TTFT s | Native decode tok/s |
+| ---: | ---: | ---: | ---: | ---: |
+| 32 | 256 | 16.65 | 0.28 | 24.54 |
+| 224 | 32 | 15.72 | 1.04 | 24.72 |
+| 4,364 | 32 | 17.31 | 19.38 | 21.86 |
+| 8,824 | 32 | 17.22 | 39.61 | 21.40 |
+| 17,684 | 32 | 18.04 | 82.19 | 19.40 |
+
+Both capped requests returned HTTP 507 again at 224 and 4,364 prompt
+tokens. The 16 GiB result remains a software-cap test on the 48 GiB M4 Pro.
+Receipts are `ar-4bit-curve.jsonl` and `ar-4bit-cap.jsonl` in the shared
+work directory.
+
 ## Whisker with the combined defaults
 
 One additional Inkling T2 smoke on the final release passed independent
