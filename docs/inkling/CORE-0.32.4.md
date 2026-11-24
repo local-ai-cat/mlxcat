@@ -89,3 +89,35 @@ The existing `bench/run.py` short-context arm uses width one, three timed cold
 samples, one warm-up and the harness's quiet-machine and memory checks. The
 greedy check uses the same fixed coding prompt, temperature zero and a
 64-token cap on both cores and compares emitted IDs and stop reasons.
+
+Both release arms ran under the exclusive lease on the M4 Pro. All 18
+performance cells had three valid samples. The table shows old → new.
+TTFT and decode are medians. Peak is the server process physical footprint.
+
+| Checkpoint | Decode tok/s | TTFT ms | Peak GiB | Fixed-prompt greedy match | Relative changes |
+| --- | ---: | ---: | ---: | --- | --- |
+| DaisyRose-27B-4bit | 13.18 → 13.50 | 2485 → 2409 | 17.83 → 17.83 | 23 common, 64 → 64 IDs | decode +2.4%, TTFT -3.1%, peak 0.0% |
+| Inkling-2-Mini-MLX-4-8bit | 22.45 → 22.49 | 1302 → 1309 | 22.37 → 22.39 | 64/64 exact | decode +0.2%, TTFT +0.6%, peak +0.1% |
+| Inkling-2-Mini-MLX-M5Pro-48gb | 22.43 → 22.44 | 1309 → 1296 | 22.37 → 22.38 | 64/64 exact | decode 0.0%, TTFT -1.0%, peak +0.1% |
+| Kestrel-4B-Coder-4bit | 68.85 → 68.99 | 338 → 330 | 4.25 → 4.26 | 64/64 exact | decode +0.2%, TTFT -2.6%, peak +0.3% |
+| MTPLX-Bare-Speed-text | 27.10 → 27.18 | 1282 → 1271 | 17.17 → 17.22 | 64/64 exact | decode +0.3%, TTFT -0.9%, peak +0.3% |
+| Qwen3-1.7B-4bit | 171.58 → 166.33 | 126 → 124 | 2.23 → 2.30 | 64/64 exact | decode -3.1%, TTFT -2.0%, peak +3.2% |
+| Qwen3.6-35B-A3B-4bit | 65.05 → 68.97 | 385 → 342 | 20.29 → 20.35 | 31 common, 64 → 64 IDs | decode +6.0%, TTFT -11.2%, peak +0.3% |
+| Qwen3.8-27B-4bit | 13.31 → 13.37 | 2451 → 2414 | 17.83 → 17.77 | 64/64 exact | decode +0.4%, TTFT -1.5%, peak -0.3% |
+| VisualInference-Inkling-2-Mini-MLX-4bit | 25.66 → 25.88 | 1266 → 1247 | 17.96 → 17.95 | 50 common, 64 → 64 IDs | decode +0.9%, TTFT -1.5%, peak 0.0% |
+
+Qwen3-1.7B had the only measured decode slowdown (3.1%) and the largest
+relative peak increase (3.2%, 2.23 → 2.30 GiB). The Inkling 4/8-bit pack's
+TTFT rose from 1,302 to 1,309 ms (0.6%). Qwen3.6-35B's decode improved 6.0%
+and TTFT fell 11.2%. Six fixed greedy sequences matched all 64 tokens and
+their stop reasons. DaisyRose, Qwen3.6-35B and VisualInference Inkling first
+changed at zero-based output positions 23, 31 and 50, respectively.
+
+The sweep covers the nine complete chat checkpoints found for this run,
+including the archived Qwen3.6-35B MLX pack and MTPLX text weights. Ten
+additional benchmark registry entries lacked complete local checkpoints:
+Qwen3-0.6B, Llama 3.2 3B, Gemma 4 E2B/E4B/12B, Qwen3.5-4B,
+Qwen2.5-Coder-7B, GPT-OSS-20B, Qwen3.6-27B and Qwen3-Coder-30B.
+
+The 28 benchmark harness tests passed. The leaderboard and regression
+snapshot checks passed. Raw measurement receipts are local.
