@@ -187,7 +187,7 @@ extension InklingCheckpoint {
             mlpConvolution: required("\(prefix).mlp_sconv.conv.weight"),
             controllers: controllers)
         if ProcessInfo.processInfo.environment["MLXCAT_INKLING_COMPILED_EXPERTS"] != "0" {
-            layer.compiledExperts = compile { (input: MLXArray) in experts(input) }
+            layer.compiledExperts = compile(inputs: []) { (input: MLXArray) in experts(input) }
         }
         return layer
     }

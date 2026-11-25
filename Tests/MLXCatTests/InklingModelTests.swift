@@ -166,7 +166,7 @@ final class InklingModelTests: XCTestCase {
                 controllers: [controller, controller, controller, controller])
             if compileExperts {
                 let experts = layer.experts
-                layer.compiledExperts = compile { (input: MLXArray) in experts(input) }
+                layer.compiledExperts = compile(inputs: []) { (input: MLXArray) in experts(input) }
             }
             return layer
         }

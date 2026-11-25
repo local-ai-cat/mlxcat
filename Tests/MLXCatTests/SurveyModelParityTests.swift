@@ -18,12 +18,16 @@ final class SurveyModelParityTests: XCTestCase {
         let prompt: [Int]
         let generated: [Int]
         let sampled: [Sample]
+        let prefillChunking: String?
     }
 
     func testSurveyModelMatchesPython() async throws {
         let env = ProcessInfo.processInfo.environment
         guard let directory = env["MLXCAT_SURVEY_MODEL"], let fixtures = env["MLXCAT_SURVEY_REFERENCE"] else {
             throw XCTSkip("Set MLXCAT_SURVEY_MODEL and MLXCAT_SURVEY_REFERENCE to verified local data.")
+        }
+        if let metallib = env["MLXCAT_SURVEY_METALLIB"] {
+            GPU.metallib = URL(fileURLWithPath: metallib)
         }
         try MLXMetalRuntime.requireAvailable()
         let cases = try JSONDecoder().decode([Case].self, from: Data(contentsOf: URL(fileURLWithPath: fixtures)))
@@ -61,8 +65,21 @@ final class SurveyModelParityTests: XCTestCase {
                 // Hold input IDs fixed when diagnosing arithmetic after a template mismatch.
                 let targetInput = promptMatch ? input! : LMInput(tokens: MLXArray(fixture.prompt))
                 let cache = try context.model.newCache(parameters: nil)
+                // Packed projections can round differently with a different
+                // number of rows. Reproduce the reference's window boundaries.
+                let chunking: PrefillParameters.Chunking
+                switch fixture.prefillChunking {
+                case nil, "remainder":
+                    chunking = .remainder
+                case "balanced":
+                    chunking = .balanced
+                default:
+                    XCTFail("Unknown reference chunking for \(fixture.name)")
+                    continue
+                }
                 let prepared = try context.model.prepare(
-                    targetInput, cache: cache, state: nil, prefill: .init(stepSize: 1024))
+                    targetInput, cache: cache, state: nil,
+                    prefill: .init(stepSize: 1024, chunking: chunking))
                 guard case .logits(var output) = prepared else {
                     XCTFail("Expected prepared logits for \(fixture.name)")
                     continue

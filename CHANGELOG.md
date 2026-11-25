@@ -6,7 +6,34 @@ are tags on `main`.
 
 ## [Unreleased]
 
+### Changed
+- **MLX core 0.32.4.** `mlx-swift` moves to `15405f9` and `mlx-swift-lm` to
+  `d28ad59` (both atlas-open-sources). The mlx-swift fork keeps strict
+  Metal 3 compilation of the attention sources in their source, generated and
+  JIT forms. The mlx-swift-lm fork keeps the Gemma 4 per-row RoPE fix.
+  `swift-jinja` 2.x is a direct
+  dependency for ordered tool declarations. The qualification, Metal 3 gate and
+  old-vs-new benchmark are in `docs/inkling/CORE-0.32.4.md`.
+- **Precise embedded Metal library on macOS.** The pinned Cmlx builds a
+  separate `mlx-swift_CmlxMacMetal.bundle` with `-fno-fast-math`. The native
+  loader prefers it to the compatibility bundle. A host app's default Xcode
+  Metal settings (fast math) no longer change the shader arithmetic, so the
+  embedded engine matches standalone `mlxcat-http` and mlx-lm.
+  `scripts/build-metallib.sh` uses the same compiler wrapper.
+
 ### Fixed
+- **Singleton sampling matches batched sampling on MLX 0.32.4.** The new
+  categorical sampler takes a different path for a scalar result. Singleton
+  rows now pass rank-one logits, so an unseeded request batched with seeded
+  ones samples the same tokens.
+- **Compiled model closures stay executor-local.** Qwen's compiled decode and
+  Inkling's compiled experts use the new compile overload for closures that
+  capture model state.
+- **Inkling vision rotary frequencies use `metal::precise::pow`.** This
+  restores zero-error image fixtures.
+- **Qwen3.5 tool declarations render in reference order**, and schema literals
+  render stably. The real tool fixtures match every prompt ID
+  (`NativeQwenToolSchemaTests`).
 - **Incremental `swift test` under Xcode 27.** The test bootstrap
   (`MLXMetalRuntime`) no longer copies its metallib into the signed
   `MLXCatTests.xctest` bundle, which made the next incremental run fail to
