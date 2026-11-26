@@ -403,13 +403,35 @@ public final class OpenAIServer: @unchecked Sendable {
         // Loopback hosts must actually bind loopback-only: the `host` parameter
         // used to be stored but never applied, so the listener accepted
         // connections on every interface regardless of it.
+        //
+        // `requiredInterfaceType = .loopback` alone was not enough: the socket
+        // still bound the wildcard address (`lsof` showed `*:11435` for a
+        // sidecar started with `--host 127.0.0.1`), only accepted connections
+        // were filtered. The listener now binds the loopback address itself.
         let parameters: NWParameters = .tcp
-        if ["127.0.0.1", "localhost", "::1"].contains(host) {
+        if let loopbackAddress = Self.loopbackBindAddress(for: host) {
             parameters.requiredInterfaceType = .loopback
+            parameters.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(loopbackAddress), port: nwPort)
+            self.listener = try NWListener(using: parameters)
+        } else {
+            self.listener = try NWListener(using: parameters, on: nwPort)
         }
-        self.listener = try NWListener(using: parameters, on: nwPort)
         self.responsesStore = ResponsesStore()
         self.mcpManager = mcpManager
+    }
+
+    /// The literal loopback address a loopback `host` binds, or nil for any other
+    /// host. `localhost` binds IPv4 only, the address every local client of the
+    /// sidecar dials.
+    static func loopbackBindAddress(for host: String) -> String? {
+        switch host {
+        case "127.0.0.1", "localhost":
+            return "127.0.0.1"
+        case "::1":
+            return "::1"
+        default:
+            return nil
+        }
     }
 
     /// The port the listener is actually bound to — differs from the requested

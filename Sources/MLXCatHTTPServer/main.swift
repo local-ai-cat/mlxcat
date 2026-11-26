@@ -12,6 +12,14 @@ import Tokenizers
 
 struct MLXCatHTTPServerMain {
     static func main() async throws {
+        // First, before any model loads: a launcher that named itself in
+        // MLXCAT_PARENT_PID is followed out, so its crash or SIGKILL cannot
+        // leave this server orphaned on its port (see ParentProcessWatch).
+        let parentWatch = ParentProcessWatch.startFromEnvironment {
+            print("MLXCatHTTP: launcher exited; shutting down")
+            Foundation.exit(0)
+        }
+        defer { parentWatch?.cancel() }
         let config = try ServerConfig.parse(CommandLine.arguments)
         let modelRootURL = URL(fileURLWithPath: config.modelPath, isDirectory: true)
         let allDiscovered = try applyModelIDOverrideIfNeeded(
@@ -314,6 +322,9 @@ private struct ServerConfig {
               --idle-timeout SECONDS            Unload idle, unpinned models after this many seconds. Default: off.
               --pin ID                          Pin a discovered model in memory. Repeatable.
               --mcp-config PATH                 Optional Claude Desktop-style MCP JSON config.
+
+            Environment:
+              MLXCAT_PARENT_PID=PID             Exit when process PID exits (set by a host app that launches this server).
             """
         )
     }

@@ -22,6 +22,17 @@ are tags on `main`.
   `scripts/build-metallib.sh` uses the same compiler wrapper.
 
 ### Fixed
+- **A loopback host binds the loopback address.** `--host 127.0.0.1` (and
+  `localhost`, `::1`) used to bind the wildcard address and only filter
+  accepted connections by interface; `lsof` showed `*:<port>`. The listener now
+  binds the address itself (`requiredLocalEndpoint`); `SidecarLifetimeTests`
+  asserts the listening address.
+- **`mlxcat-http` follows its launcher out.** A launcher that sets
+  `MLXCAT_PARENT_PID` to its own pid is watched with a kqueue `NOTE_EXIT`
+  source, and the server exits when it goes, so a crashed or SIGKILLed host app
+  no longer leaves an orphan holding the port (Local AI Cat, 2026-11-26: an
+  orphan held 11435 for 31 hours). An environment variable, not a flag, so a
+  host may set it for any build.
 - **Singleton sampling matches batched sampling on MLX 0.32.4.** The new
   categorical sampler takes a different path for a scalar result. Singleton
   rows now pass rank-one logits, so an unseeded request batched with seeded
