@@ -416,18 +416,26 @@ public actor Scheduler {
             Stream.gpu.synchronize()
             for uid in finishedUIDs {
                 let finishedRequest = running[uid]
-                // Release the slot this request resumed from before the finish publish: the
-                // snapshot comes from the row's own cache, and a leased slot cannot be replaced
-                // by its continuation. Publishing first kept the previous turn of every
+                // A sessionless request releases the slot it resumed from before its finish
+                // publish (the snapshot comes from the row's own cache), so the publish can
+                // replace that slot. Publishing first kept the previous turn of every
                 // sessionless chat alive one turn longer (two full KV copies; 2.2 GB for
-                // Qwen3-0.6B over a 7.3k-token chat on the M4 Pro).
-                if let hit = finishedRequest?.prefixHit {
+                // Qwen3-0.6B over a 7.3k-token chat on the M4 Pro). A named session keeps the
+                // old order: its slot is replaced only while unleased, and replacing it at
+                // finish would drop a hybrid model's checkpoints when the next turn re-renders
+                // the reply (the session path carries them over only on a strict extension).
+                let session = finishedRequest?.request.cacheSession ?? ""
+                let releasesFirst = session.isEmpty
+                if releasesFirst, let hit = finishedRequest?.prefixHit {
                     prefixStore?.release(hit)
                 }
                 if let finishedRequest {
                     publishAvailablePrefixBlocks(uid: uid, runningRequest: finishedRequest)
                 }
                 generator.remove(uid: uid)
+                if !releasesFirst, let hit = finishedRequest?.prefixHit {
+                    prefixStore?.release(hit)
+                }
                 running.removeValue(forKey: uid)
                 resumeGeneratedTokens.removeValue(forKey: uid)
             }
@@ -1125,7 +1133,8 @@ public actor Scheduler {
                 tokens: row.promptTokens,
                 sessionKey: request.cacheSession,
                 cache: snapshot,
-                checkpoints: row.checkpoints
+                checkpoints: row.checkpoints,
+                promptLength: row.promptTokens.count
             )
         } catch {
             logCacheFailure("completed admission prefix cache store failed", error)
@@ -1172,7 +1181,8 @@ public actor Scheduler {
                 tokens: availableTokens,
                 sessionKey: runningRequest.request.cacheSession,
                 cache: snapshot,
-                checkpoints: runningRequest.checkpoints
+                checkpoints: runningRequest.checkpoints,
+                promptLength: runningRequest.promptTokens.count
             )
             runningRequest.cachedTokenCount = availableTokens.count
         } catch {

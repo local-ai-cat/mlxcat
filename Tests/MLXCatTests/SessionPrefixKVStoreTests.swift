@@ -211,6 +211,47 @@ final class SessionPrefixKVStoreTests: XCTestCase {
         store.release(hit)
     }
 
+    // A recurrent or windowed slot resumes only at its end and its checkpoints: a split inside
+    // its prompt keeps it, tolerance or not (two windowed branches publishing at one boundary).
+    func testRecurrentSlotSplitInsideItsPromptIsKept() throws {
+        let store = SessionPrefixKVStore()
+        let branchA = Array(1...40)
+        try store.store(tokens: branchA, sessionKey: nil, cache: Self.mambaLayers())
+        let branchB = Array(branchA.prefix(36)) + Array(500...503)
+        try store.store(tokens: branchB, sessionKey: nil, cache: Self.mambaLayers())
+
+        XCTAssertEqual(store.stats.slotCount, 2)
+        XCTAssertEqual(store.stats.supersededCount, 0)
+    }
+
+    // The scheduler passes each request's prompt length. A turn that extends the last one
+    // exactly is a new prompt, not the last request's reply: a branch that shares only the
+    // last turn's prompt keeps it.
+    func testPromptLengthFromTheSchedulerIsNotInheritedAcrossRequests() throws {
+        let lastTurn = Array(1...40) + Array(100...109)
+        let turn = lastTurn + Array(200...249)
+        let finished = turn + Array(300...309)
+        let branch = Array(turn.prefix(45)) + Array(700...779)
+        for (passesPromptLength, expectedSlots) in [(true, 2), (false, 1)] {
+            let store = SessionPrefixKVStore()
+            try store.store(tokens: lastTurn, sessionKey: nil, cache: Self.layers(tokenCount: lastTurn.count),
+                            checkpoints: [], promptLength: 40)
+            if passesPromptLength {
+                try store.store(tokens: turn, sessionKey: nil, cache: Self.layers(tokenCount: turn.count),
+                                checkpoints: [], promptLength: turn.count)
+                try store.store(tokens: finished, sessionKey: nil, cache: Self.layers(tokenCount: finished.count),
+                                checkpoints: [], promptLength: turn.count)
+            } else {
+                try store.store(tokens: turn, sessionKey: nil, cache: Self.layers(tokenCount: turn.count))
+                try store.store(tokens: finished, sessionKey: nil, cache: Self.layers(tokenCount: finished.count))
+            }
+            XCTAssertEqual(store.stats.slotCount, 1)
+            try store.store(tokens: branch, sessionKey: nil, cache: Self.layers(tokenCount: branch.count),
+                            checkpoints: [], promptLength: branch.count)
+            XCTAssertEqual(store.stats.slotCount, expectedSlots, "prompt length passed: \(passesPromptLength)")
+        }
+    }
+
     // The tolerance is exact: a split one token earlier than it allows keeps both slots.
     func testPromptTailToleranceBoundary() throws {
         let tolerance = SessionPrefixKVStore.promptTailTolerance

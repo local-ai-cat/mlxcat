@@ -40,6 +40,15 @@ public protocol PrefixKVStore: AnyObject, Sendable {
         cache: [SerializedKVLayer],
         checkpoints: [PrefixRecurrentCheckpoint]
     ) throws
+    /// `promptLength`: how many of `tokens` are the request's prompt; the rest are its
+    /// reply. A requirement for the same reason as above.
+    func store(
+        tokens: [Int],
+        sessionKey: String?,
+        cache: [SerializedKVLayer],
+        checkpoints: [PrefixRecurrentCheckpoint],
+        promptLength: Int
+    ) throws
     func release(_ hit: PrefixKVStoreHit)
     func clearEntry(_ hit: PrefixKVStoreHit)
 }
@@ -71,6 +80,17 @@ public extension PrefixKVStore {
         checkpoints: [PrefixRecurrentCheckpoint]
     ) throws {
         try store(tokens: tokens, sessionKey: sessionKey, cache: cache)
+    }
+
+    /// Stores that do not track prompts ignore the prompt length.
+    func store(
+        tokens: [Int],
+        sessionKey: String?,
+        cache: [SerializedKVLayer],
+        checkpoints: [PrefixRecurrentCheckpoint],
+        promptLength: Int
+    ) throws {
+        try store(tokens: tokens, sessionKey: sessionKey, cache: cache, checkpoints: checkpoints)
     }
 
     func fetch(tokens: [Int]) -> PrefixKVStoreHit? {

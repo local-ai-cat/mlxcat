@@ -28,9 +28,10 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
         /// Whether any layer cannot trim (a hybrid model's recurrent state). Such a
         /// slot is exact only at `tokens.count` and at its checkpoints.
         var hasRecurrentLayers = false
-        /// An anonymous slot's prompt: the length of the first slot of the chain it continues
-        /// (a request publishes its bare prompt first, then longer prefixes of the same row).
-        /// Nil until it continues one; then `tokens.count` of that first slot.
+        /// How many of `tokens` are the request's prompt. The scheduler passes it; when a
+        /// caller does not, an anonymous slot that extends another takes that slot's (a
+        /// request publishes its bare prompt first, then longer prefixes of the same row).
+        /// Nil: unknown, read as `tokens.count`.
         var promptLength: Int?
 
         init(
@@ -216,9 +217,23 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
         try store(tokens: tokens, sessionKey: sessionKey, cache: cache, checkpoints: checkpoints, persist: true)
     }
 
+    public func store(
+        tokens: [Int],
+        sessionKey: String?,
+        cache: [SerializedKVLayer],
+        checkpoints: [PrefixRecurrentCheckpoint],
+        promptLength: Int
+    ) throws {
+        try store(
+            tokens: tokens, sessionKey: sessionKey, cache: cache, checkpoints: checkpoints, persist: true,
+            promptLength: promptLength)
+    }
+
+    /// `promptLength` nil (a caller that does not know it): an anonymous slot that extends
+    /// another takes that slot's prompt length, which holds within one request's publishes.
     private func store(
         tokens: [Int], sessionKey: String?, cache: [SerializedKVLayer],
-        checkpoints: [PrefixRecurrentCheckpoint], persist: Bool
+        checkpoints: [PrefixRecurrentCheckpoint], persist: Bool, promptLength: Int? = nil
     ) throws {
         try withLock {
             guard tokens.count > 1, !cache.isEmpty else { return }
@@ -241,6 +256,9 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
                 lastAccess: nextSequence()
             )
             slot.hasRecurrentLayers = recurrentLayers(of: copied).contains { $0 != nil }
+            if let promptLength, promptLength > 0 {
+                slot.promptLength = min(promptLength, tokens.count)
+            }
             Scheduler.prefixDebug(
                 "store tokens=\(tokens.count) layers=\(copied.count) recurrent=\(slot.hasRecurrentLayers) "
                     + "offered=\(checkpoints.map { "\($0.position)/\($0.layers.count)" })")
@@ -367,7 +385,11 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
         for old in anonymousSlots where old.leaseCount == 0 {
             let shared = commonPrefixLength(old.tokens, newSlot.tokens)
             let oldPrompt = old.promptLength ?? old.tokens.count
-            guard shared > 0, shared >= oldPrompt - Self.promptTailTolerance else { continue }
+            // A slot with recurrent or windowed layers resumes only at its end and its
+            // checkpoints, so a split inside its prompt can lose its only resume point:
+            // no tolerance there.
+            let tolerance = old.hasRecurrentLayers ? 0 : Self.promptTailTolerance
+            guard shared > 0, shared >= oldPrompt - tolerance else { continue }
             // The new slot is a prefix of the old one (a retry's first publish): the old one
             // still holds more. The retry's later publishes extend past it or diverge.
             if shared == newSlot.tokens.count, shared < old.tokens.count { continue }
