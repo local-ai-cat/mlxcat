@@ -29,11 +29,17 @@ are tags on `main`.
   cap: in Local AI Cat (Qwen3-0.6B, a 7,274-token history) two replies held
   4.2 GB against 0.9 GB with the store off, and a 10-turn chat evicted the
   slot its 10th turn needed. An anonymous slot is now dropped when a new one
-  holds its whole prompt and is at least as long (a later publish of the same
-  request, a retry, or the next turn of the same chat), as a session slot is
-  replaced by its continuation; its recurrent checkpoints move over. Two chats
-  that only share a system prompt are both kept. `stats.supersededCount`
-  counts the drops.
+  holds its prompt (all but the last 32 tokens, which the next turn re-renders
+  as history) and is not a shorter prefix of it: a later publish of the same
+  request, a retry, or the next turn of the same chat, as a session slot is
+  replaced by its continuation; its recurrent checkpoints move over. A
+  finished request now releases the slot it resumed from before its finish
+  publish, so that slot can be replaced. Two chats that only share a system
+  prompt are both kept. `stats.supersededCount` counts the drops. Bare
+  `mlxcat-http`, M4 Pro, Qwen3-0.6B, the same 7.3k-token history with no
+  session: two replies 3,719 → 1,256 MB, a 10-turn chat 3,920 → 1,296 MB,
+  every turn still a hit (0.19–0.21 s to first token); the store off is
+  413 MB.
 - **A loopback host binds the loopback address.** `--host 127.0.0.1` (and
   `localhost`, `::1`) used to bind the wildcard address and only filter
   accepted connections by interface; `lsof` showed `*:<port>`. The listener now

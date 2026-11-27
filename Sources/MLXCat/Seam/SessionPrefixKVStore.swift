@@ -76,6 +76,13 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
     private var _evictionCount = 0
     private var _supersededCount = 0
 
+    /// How many tokens at the end of an anonymous slot's prompt the next turn of the same chat may
+    /// render differently. The generation prompt (`<|im_start|>assistant\n`, an empty think block,
+    /// a channel header) is re-rendered in the next turn's history: measured with Qwen3-0.6B, a
+    /// 7,263-token prompt and its next turn share 7,261 tokens. Dropping a slot this rule matches
+    /// costs at most this many prompt tokens of prefill.
+    static let promptTailTolerance = 32
+
     public convenience init(maxBytes: Int64 = 0, maxAnonymousSlots: Int = 8) {
         self.init(maxBytes: maxBytes, maxAnonymousSlots: maxAnonymousSlots, windowedLayerDecoder: nil)
     }
@@ -347,18 +354,23 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
     /// session header): two replies held 4,169 MB against 875 MB with the store off, and a
     /// 10-turn chat filled the 4 GB cap and evicted the slot its 10th turn needed.
     ///
-    /// A slot is redundant when the new one holds its whole prompt and is at least as long:
+    /// A slot is redundant when the new one holds its prompt, all but the last
+    /// `promptTailTolerance` tokens, and is not a shorter prefix of it:
     /// - it is a prefix of the new slot (a later publish of the same request, or an exact retry);
-    /// - or the two diverge only after the old slot's prompt: the next turn of the same chat,
-    ///   which re-renders the reply and so diverges inside it.
-    /// Two chats that share a system prompt diverge inside the prompt, and both are kept.
+    /// - or the two diverge only near or after the end of the old slot's prompt: the next turn of
+    ///   the same chat, which re-renders the generation prompt and the reply (however long the
+    ///   old reply was).
+    /// Two chats that share a system prompt diverge earlier in the prompt, and both are kept.
     /// Whatever the new slot does not hold is passed on: the old slot's recurrent checkpoints up
     /// to the shared prefix, and its end state when it is a prefix of the new slot.
     private func supersedeAnonymousSlots(by newSlot: Slot) {
-        for old in anonymousSlots where old.leaseCount == 0 && old.tokens.count <= newSlot.tokens.count {
+        for old in anonymousSlots where old.leaseCount == 0 {
             let shared = commonPrefixLength(old.tokens, newSlot.tokens)
             let oldPrompt = old.promptLength ?? old.tokens.count
-            guard shared > 0, shared >= oldPrompt else { continue }
+            guard shared > 0, shared >= oldPrompt - Self.promptTailTolerance else { continue }
+            // The new slot is a prefix of the old one (a retry's first publish): the old one
+            // still holds more. The retry's later publishes extend past it or diverge.
+            if shared == newSlot.tokens.count, shared < old.tokens.count { continue }
             if shared == old.tokens.count {
                 newSlot.promptLength = newSlot.promptLength ?? oldPrompt
             }

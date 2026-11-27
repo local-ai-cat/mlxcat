@@ -146,12 +146,61 @@ final class SessionPrefixKVStoreTests: XCTestCase {
         store.release(hit)
     }
 
-    // Negative control: two chats that share a system prompt diverge inside the prompt. Neither
-    // makes the other redundant, and each still resumes its own prefix.
+    // The next turn re-renders the end of the last prompt (the generation prompt): with Qwen3 a
+    // 7,263-token prompt and its next turn share 7,261 tokens. Still the same chat.
+    func testNextTurnThatReRendersTheGenerationPromptSupersedesTheLastReply() throws {
+        let store = SessionPrefixKVStore()
+        let prompt = Array(1...40)
+        try store.store(tokens: prompt, sessionKey: nil, cache: Self.layers(tokenCount: prompt.count))
+        let finished = prompt + Array(100...109)
+        try store.store(tokens: finished, sessionKey: nil, cache: Self.layers(tokenCount: finished.count))
+        let nextTurn = Array(prompt.prefix(38)) + Array(200...221)
+        try store.store(tokens: nextTurn, sessionKey: nil, cache: Self.layers(tokenCount: nextTurn.count))
+
+        XCTAssertEqual(store.stats.slotCount, 1)
+        XCTAssertEqual(store.stats.supersededCount, 2)
+        let hit = try XCTUnwrap(store.fetch(tokens: nextTurn + [9], sessionKey: nil))
+        XCTAssertEqual(hit.matchedTokenCount, nextTurn.count)
+        store.release(hit)
+    }
+
+    // A long reply re-renders shorter in the next turn (a stripped think block), so the next
+    // turn's slot can be shorter than the last one and still makes it redundant.
+    func testShorterNextTurnSupersedesALongReply() throws {
+        let store = SessionPrefixKVStore()
+        let prompt = Array(1...40)
+        try store.store(tokens: prompt, sessionKey: nil, cache: Self.layers(tokenCount: prompt.count))
+        let finished = prompt + Array(1000...1099)
+        try store.store(tokens: finished, sessionKey: nil, cache: Self.layers(tokenCount: finished.count))
+        let nextTurn = prompt + Array(200...219)
+        try store.store(tokens: nextTurn, sessionKey: nil, cache: Self.layers(tokenCount: nextTurn.count))
+
+        XCTAssertEqual(store.stats.slotCount, 1)
+        XCTAssertEqual(store.stats.currentBytes, Self.layerBytes(tokenCount: nextTurn.count))
+    }
+
+    // A retry's first publish is a prefix of the last finished reply: the longer slot holds
+    // more and is kept until the retry's own reply extends past it.
+    func testRetryPromptKeepsTheLongerFinishedSlot() throws {
+        let store = SessionPrefixKVStore()
+        let prompt = Array(1...40)
+        let finished = prompt + Array(100...109)
+        try store.store(tokens: finished, sessionKey: nil, cache: Self.layers(tokenCount: finished.count))
+        try store.store(tokens: prompt, sessionKey: nil, cache: Self.layers(tokenCount: prompt.count))
+
+        XCTAssertEqual(store.stats.slotCount, 2)
+        XCTAssertEqual(store.stats.supersededCount, 0)
+        let hit = try XCTUnwrap(store.fetch(tokens: finished + [7], sessionKey: nil))
+        XCTAssertEqual(hit.matchedTokenCount, finished.count)
+        store.release(hit)
+    }
+
+    // Negative control: two chats that share a system prompt diverge early in the prompt.
+    // Neither makes the other redundant, and each still resumes its own prefix.
     func testAnonymousChatsSharingASystemPromptAreBothKept() throws {
         let store = SessionPrefixKVStore()
-        let chatA = [1, 2, 3, 10, 11]
-        let chatB = [1, 2, 3, 20, 21, 22]
+        let chatA = [1, 2, 3] + Array(10...49)
+        let chatB = [1, 2, 3] + Array(60...109)
         try store.store(tokens: chatA, sessionKey: nil, cache: Self.layers(tokenCount: chatA.count))
         try store.store(tokens: chatB, sessionKey: nil, cache: Self.layers(tokenCount: chatB.count))
 
@@ -160,6 +209,19 @@ final class SessionPrefixKVStoreTests: XCTestCase {
         let hit = try XCTUnwrap(store.fetch(tokens: chatA + [12], sessionKey: nil))
         XCTAssertEqual(hit.matchedTokenCount, chatA.count)
         store.release(hit)
+    }
+
+    // The tolerance is exact: a split one token earlier than it allows keeps both slots.
+    func testPromptTailToleranceBoundary() throws {
+        let tolerance = SessionPrefixKVStore.promptTailTolerance
+        let prompt = Array(1...(tolerance + 20))
+        for (sharedCount, expectedSlots) in [(prompt.count - tolerance, 1), (prompt.count - tolerance - 1, 2)] {
+            let store = SessionPrefixKVStore()
+            try store.store(tokens: prompt, sessionKey: nil, cache: Self.layers(tokenCount: prompt.count))
+            let other = Array(prompt.prefix(sharedCount)) + Array(500...(500 + tolerance + 5))
+            try store.store(tokens: other, sessionKey: nil, cache: Self.layers(tokenCount: other.count))
+            XCTAssertEqual(store.stats.slotCount, expectedSlots, "shared \(sharedCount) of \(prompt.count)")
+        }
     }
 
     func testLeasedAnonymousSlotIsNotSuperseded() throws {
@@ -171,6 +233,24 @@ final class SessionPrefixKVStoreTests: XCTestCase {
         XCTAssertEqual(store.stats.slotCount, 2)
         XCTAssertEqual(store.stats.supersededCount, 0)
         store.release(lease)
+    }
+
+    // The scheduler's finish order: the request releases the slot it resumed from, then
+    // publishes its reply, which replaces both that slot and its own earlier publish.
+    func testFinishPublishAfterReleaseReplacesTheResumedSlot() throws {
+        let store = SessionPrefixKVStore()
+        let lastTurn = Array(1...50)
+        try store.store(tokens: lastTurn, sessionKey: nil, cache: Self.layers(tokenCount: lastTurn.count))
+        let prompt = Array(lastTurn.prefix(48)) + Array(300...319)
+        let lease = try XCTUnwrap(store.fetch(tokens: prompt, sessionKey: nil))
+        try store.store(tokens: prompt, sessionKey: nil, cache: Self.layers(tokenCount: prompt.count))
+        XCTAssertEqual(store.stats.slotCount, 2)
+
+        store.release(lease)
+        let finished = prompt + Array(400...409)
+        try store.store(tokens: finished, sessionKey: nil, cache: Self.layers(tokenCount: finished.count))
+        XCTAssertEqual(store.stats.slotCount, 1)
+        XCTAssertEqual(store.stats.currentBytes, Self.layerBytes(tokenCount: finished.count))
     }
 
     // A recurrent slot is exact only at its end and its checkpoints: the superseded slot's end

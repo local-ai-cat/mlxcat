@@ -415,14 +415,19 @@ public actor Scheduler {
         if !finishedUIDs.isEmpty {
             Stream.gpu.synchronize()
             for uid in finishedUIDs {
-                if let finishedRequest = running[uid] {
-                    publishAvailablePrefixBlocks(uid: uid, runningRequest: finishedRequest)
-                }
                 let finishedRequest = running[uid]
-                generator.remove(uid: uid)
+                // Release the slot this request resumed from before the finish publish: the
+                // snapshot comes from the row's own cache, and a leased slot cannot be replaced
+                // by its continuation. Publishing first kept the previous turn of every
+                // sessionless chat alive one turn longer (two full KV copies; 2.2 GB for
+                // Qwen3-0.6B over a 7.3k-token chat on the M4 Pro).
                 if let hit = finishedRequest?.prefixHit {
                     prefixStore?.release(hit)
                 }
+                if let finishedRequest {
+                    publishAvailablePrefixBlocks(uid: uid, runningRequest: finishedRequest)
+                }
+                generator.remove(uid: uid)
                 running.removeValue(forKey: uid)
                 resumeGeneratedTokens.removeValue(forKey: uid)
             }
