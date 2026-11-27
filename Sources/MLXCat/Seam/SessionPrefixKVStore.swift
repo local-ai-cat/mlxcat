@@ -8,6 +8,8 @@ public struct SessionPrefixKVStoreStats: Equatable, Sendable {
     public let releaseCount: Int
     public let clearCount: Int
     public let evictionCount: Int
+    /// Anonymous slots dropped because a newer slot held everything they could serve.
+    public let supersededCount: Int
     public let currentBytes: Int64
     public let slotCount: Int
 }
@@ -26,6 +28,10 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
         /// Whether any layer cannot trim (a hybrid model's recurrent state). Such a
         /// slot is exact only at `tokens.count` and at its checkpoints.
         var hasRecurrentLayers = false
+        /// An anonymous slot's prompt: the length of the first slot of the chain it continues
+        /// (a request publishes its bare prompt first, then longer prefixes of the same row).
+        /// Nil until it continues one; then `tokens.count` of that first slot.
+        var promptLength: Int?
 
         init(
             id: UUID = UUID(),
@@ -68,6 +74,7 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
     private var _releaseCount = 0
     private var _clearCount = 0
     private var _evictionCount = 0
+    private var _supersededCount = 0
 
     public convenience init(maxBytes: Int64 = 0, maxAnonymousSlots: Int = 8) {
         self.init(maxBytes: maxBytes, maxAnonymousSlots: maxAnonymousSlots, windowedLayerDecoder: nil)
@@ -97,6 +104,7 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
                 releaseCount: _releaseCount,
                 clearCount: _clearCount,
                 evictionCount: _evictionCount,
+                supersededCount: _supersededCount,
                 currentBytes: currentBytes,
                 slotCount: sessionSlots.count + anonymousSlots.count
             )
@@ -261,6 +269,7 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
                 }
                 sessionSlots[sessionKey] = slot
             } else {
+                supersedeAnonymousSlots(by: slot)
                 anonymousSlots.append(slot)
             }
             slot.byteCount += slot.checkpoints.values.reduce(Int64(0)) { total, layers in
@@ -326,6 +335,44 @@ public final class SessionPrefixKVStore: PrefixKVStore, @unchecked Sendable {
         if let index = anonymousSlots.firstIndex(where: { $0.id == id }) {
             let slot = anonymousSlots.remove(at: index)
             currentBytes -= slot.byteCount
+        }
+    }
+
+    /// Drops every unleased anonymous slot `newSlot` makes redundant, as a session slot is
+    /// replaced by its own continuation.
+    ///
+    /// Without this a sessionless caller's every publish was a new full copy of its KV: the
+    /// prompt, every 256 decoded tokens and the finish of each request, then each next turn
+    /// again. Measured in the Cat (a328, M4 Pro 48 GB, Qwen3-0.6B, a 7,274-token history, no
+    /// session header): two replies held 4,169 MB against 875 MB with the store off, and a
+    /// 10-turn chat filled the 4 GB cap and evicted the slot its 10th turn needed.
+    ///
+    /// A slot is redundant when the new one holds its whole prompt and is at least as long:
+    /// - it is a prefix of the new slot (a later publish of the same request, or an exact retry);
+    /// - or the two diverge only after the old slot's prompt: the next turn of the same chat,
+    ///   which re-renders the reply and so diverges inside it.
+    /// Two chats that share a system prompt diverge inside the prompt, and both are kept.
+    /// Whatever the new slot does not hold is passed on: the old slot's recurrent checkpoints up
+    /// to the shared prefix, and its end state when it is a prefix of the new slot.
+    private func supersedeAnonymousSlots(by newSlot: Slot) {
+        for old in anonymousSlots where old.leaseCount == 0 && old.tokens.count <= newSlot.tokens.count {
+            let shared = commonPrefixLength(old.tokens, newSlot.tokens)
+            let oldPrompt = old.promptLength ?? old.tokens.count
+            guard shared > 0, shared >= oldPrompt else { continue }
+            if shared == old.tokens.count {
+                newSlot.promptLength = newSlot.promptLength ?? oldPrompt
+            }
+            for (position, layers) in old.checkpoints
+            where position <= shared && position < newSlot.tokens.count && newSlot.checkpoints[position] == nil {
+                newSlot.checkpoints[position] = layers
+            }
+            if old.hasRecurrentLayers, shared == old.tokens.count, shared < newSlot.tokens.count,
+                newSlot.checkpoints[shared] == nil
+            {
+                newSlot.checkpoints[shared] = recurrentLayers(of: old.layers)
+            }
+            removeSlot(id: old.id)
+            _supersededCount += 1
         }
     }
 

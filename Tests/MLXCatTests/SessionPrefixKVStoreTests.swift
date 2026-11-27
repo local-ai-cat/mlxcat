@@ -115,6 +115,78 @@ final class SessionPrefixKVStoreTests: XCTestCase {
         store.release(hit)
     }
 
+    // A sessionless request publishes its prompt, then longer prefixes of the same row: one
+    // slot is kept, not a full copy per publish.
+    func testAnonymousPublishesOfOneRequestKeepOneSlot() throws {
+        let store = SessionPrefixKVStore()
+        try store.store(tokens: [1, 2, 3, 4], sessionKey: nil, cache: Self.layers(tokenCount: 4))
+        try store.store(tokens: [1, 2, 3, 4, 5, 6], sessionKey: nil, cache: Self.layers(tokenCount: 6))
+
+        XCTAssertEqual(store.stats.slotCount, 1)
+        XCTAssertEqual(store.stats.supersededCount, 1)
+        XCTAssertEqual(store.stats.currentBytes, Self.layerBytes(tokenCount: 6))
+        let hit = try XCTUnwrap(store.fetch(tokens: [1, 2, 3, 4, 5, 6, 7], sessionKey: nil))
+        XCTAssertEqual(hit.matchedTokenCount, 6)
+        store.release(hit)
+    }
+
+    // The next turn of the same chat holds the last request's whole prompt and diverges inside
+    // its reply (the reply is re-rendered): the last turn's slot is redundant.
+    func testNextTurnOfAnAnonymousChatSupersedesTheLastReply() throws {
+        let store = SessionPrefixKVStore()
+        try store.store(tokens: [1, 2, 3, 4], sessionKey: nil, cache: Self.layers(tokenCount: 4))
+        try store.store(tokens: [1, 2, 3, 4, 5, 6], sessionKey: nil, cache: Self.layers(tokenCount: 6))
+        let nextTurn = [1, 2, 3, 4, 50, 60, 7, 8]
+        try store.store(tokens: nextTurn, sessionKey: nil, cache: Self.layers(tokenCount: nextTurn.count))
+
+        XCTAssertEqual(store.stats.slotCount, 1)
+        XCTAssertEqual(store.stats.supersededCount, 2)
+        let hit = try XCTUnwrap(store.fetch(tokens: nextTurn + [9], sessionKey: nil))
+        XCTAssertEqual(hit.matchedTokenCount, nextTurn.count)
+        store.release(hit)
+    }
+
+    // Negative control: two chats that share a system prompt diverge inside the prompt. Neither
+    // makes the other redundant, and each still resumes its own prefix.
+    func testAnonymousChatsSharingASystemPromptAreBothKept() throws {
+        let store = SessionPrefixKVStore()
+        let chatA = [1, 2, 3, 10, 11]
+        let chatB = [1, 2, 3, 20, 21, 22]
+        try store.store(tokens: chatA, sessionKey: nil, cache: Self.layers(tokenCount: chatA.count))
+        try store.store(tokens: chatB, sessionKey: nil, cache: Self.layers(tokenCount: chatB.count))
+
+        XCTAssertEqual(store.stats.slotCount, 2)
+        XCTAssertEqual(store.stats.supersededCount, 0)
+        let hit = try XCTUnwrap(store.fetch(tokens: chatA + [12], sessionKey: nil))
+        XCTAssertEqual(hit.matchedTokenCount, chatA.count)
+        store.release(hit)
+    }
+
+    func testLeasedAnonymousSlotIsNotSuperseded() throws {
+        let store = SessionPrefixKVStore()
+        try store.store(tokens: [1, 2, 3], sessionKey: nil, cache: Self.layers(tokenCount: 3))
+        let lease = try XCTUnwrap(store.fetch(tokens: [1, 2, 3, 4], sessionKey: nil))
+        try store.store(tokens: [1, 2, 3, 4, 5], sessionKey: nil, cache: Self.layers(tokenCount: 5))
+
+        XCTAssertEqual(store.stats.slotCount, 2)
+        XCTAssertEqual(store.stats.supersededCount, 0)
+        store.release(lease)
+    }
+
+    // A recurrent slot is exact only at its end and its checkpoints: the superseded slot's end
+    // state becomes the new slot's checkpoint, so a request that shares only the old prefix
+    // still resumes there instead of missing.
+    func testSupersededRecurrentSlotLeavesItsEndAsACheckpoint() throws {
+        let store = SessionPrefixKVStore()
+        try store.store(tokens: [1, 2, 3], sessionKey: nil, cache: Self.mambaLayers())
+        try store.store(tokens: [1, 2, 3, 4, 5], sessionKey: nil, cache: Self.mambaLayers())
+
+        XCTAssertEqual(store.stats.slotCount, 1)
+        let hit = try XCTUnwrap(store.fetch(tokens: [1, 2, 3, 9], sessionKey: nil))
+        XCTAssertEqual(hit.matchedTokenCount, 3)
+        store.release(hit)
+    }
+
     func testEvictsLeastRecentlyUsedUnleasedSlot() throws {
         let store = SessionPrefixKVStore(maxBytes: 40)
         try store.store(tokens: [1, 2], sessionKey: "old", cache: Self.layers(tokenCount: 2))
@@ -154,6 +226,18 @@ final class SessionPrefixKVStoreTests: XCTestCase {
 
         XCTAssertNil(store.fetch(tokens: [1, 2, 3, 4], sessionKey: "s"))
         XCTAssertEqual(store.stats.clearCount, 1)
+    }
+
+    /// Keys and values of `layers(tokenCount:)`: float32, 1 × 1 × tokens × 2 each.
+    private static func layerBytes(tokenCount: Int) -> Int64 {
+        Int64(2 * tokenCount * 2 * 4)
+    }
+
+    private static func mambaLayers() -> [SerializedKVLayer] {
+        let cache = MambaCache()
+        cache[0] = MLXArray.zeros([1, 2, 3])
+        cache[1] = MLXArray.zeros([1, 2, 3])
+        return [SerializedKVLayer(state: cache.state, metaState: cache.metaState, className: "MambaCache")]
     }
 
     private static func layers(tokenCount: Int) -> [SerializedKVLayer] {
